@@ -177,7 +177,16 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
                 trackRequest("GET");
             } else if (listPattern.test(request)) {
                 trackRequest("LIST");
+            } else if (isMultipartUpload(request)){
+                trackRequest("POST");
+            } else if (Regex.simpleMatch("PUT /*/*", request)) {
+                trackRequest("PUT");
             }
+        }
+
+        private boolean isMultipartUpload(String request) {
+            return Regex.simpleMatch("PUT /*/*?*comp=blocklist*", request)
+                || Regex.simpleMatch("PUT /*/*?*comp=block*", request);
         }
     }
 }

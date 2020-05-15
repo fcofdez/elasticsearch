@@ -37,6 +37,7 @@ import org.elasticsearch.common.unit.ByteSizeValue;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URL;
 import java.security.InvalidKeyException;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -131,10 +132,12 @@ public class AzureStorageService {
                 public void eventOccurred(RequestCompletedEvent eventArg) {
                     int statusCode = eventArg.getRequestResult().getStatusCode();
                     HttpURLConnection httpURLConnection = (HttpURLConnection) eventArg.getConnectionObject();
+                    URL url = httpURLConnection.getURL();
+
                     if (statusCode < 300) {
-                        metricCollector.collectMetrics(httpURLConnection.getRequestMethod());
+                        metricCollector.collectMetrics(httpURLConnection.getRequestMethod(), url);
                     } else {
-                        metricCollector.collectMetricsForFailedRequest(httpURLConnection.getRequestMethod(), statusCode);
+                        metricCollector.collectMetricsForFailedRequest(httpURLConnection.getRequestMethod(), url, statusCode);
                     }
                 }
             });

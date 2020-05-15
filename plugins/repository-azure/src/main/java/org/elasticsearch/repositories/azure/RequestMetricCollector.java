@@ -19,6 +19,8 @@
 
 package org.elasticsearch.repositories.azure;
 
+import java.net.URL;
+
 /**
  * A listener that can be hooked into any Azure Storage request allowing metric collection
  */
@@ -28,8 +30,9 @@ interface RequestMetricCollector {
      * Used to collect metrics after a successful request/response cycle
      *
      * @param requestMethod HTTP request method
+     * @param url
      */
-    void collectMetrics(String requestMethod);
+    void collectMetrics(String requestMethod, URL url);
 
     /**
      * Used to collect metrics after a failed request/response cycle
@@ -37,7 +40,7 @@ interface RequestMetricCollector {
      * @param requestMethod the HTTP request method
      * @param statusCode the response status code
      */
-    default void collectMetricsForFailedRequest(String requestMethod, int statusCode) {}
+    default void collectMetricsForFailedRequest(String requestMethod, URL url, int statusCode) {}
 
     default boolean isEnabled() {
         return true;
@@ -45,7 +48,7 @@ interface RequestMetricCollector {
 
     RequestMetricCollector NO_OP = new RequestMetricCollector() {
         @Override
-        public void collectMetrics(String requestMethod) {}
+        public void collectMetrics(String requestMethod, URL url) {}
 
         @Override
         public boolean isEnabled() {

@@ -87,6 +87,7 @@ public class AzureBlobStore implements BlobStore {
 
     private final RequestMetricCollector getMetricsCollector;
     private final RequestMetricCollector listMetricsCollector;
+    private final RequestMetricCollector putMetricsCollector;
 
     public AzureBlobStore(RepositoryMetadata metadata, AzureStorageService service, ThreadPool threadPool) {
         this.container = Repository.CONTAINER_SETTING.get(metadata.settings());
@@ -98,7 +99,7 @@ public class AzureBlobStore implements BlobStore {
         final Map<String, AzureStorageSettings> prevSettings = this.service.refreshAndClearCache(emptyMap());
         final Map<String, AzureStorageSettings> newSettings = AzureStorageSettings.overrideLocationMode(prevSettings, this.locationMode);
         this.service.refreshAndClearCache(newSettings);
-        this.getMetricsCollector = (requestMethod) -> {
+        this.getMetricsCollector = (requestMethod, url) -> {
             // BlobInputStream request information about the blob and those requests
             // are not considered GET requests.
             if (requestMethod.equalsIgnoreCase("HEAD")) {
@@ -107,7 +108,19 @@ public class AzureBlobStore implements BlobStore {
 
             stats.getOperations.incrementAndGet();
         };
-        this.listMetricsCollector = (requestMethod) -> stats.listOperations.incrementAndGet();
+        this.listMetricsCollector = (requestMethod, url) -> {
+            assert requestMethod.equals("GET");
+            stats.listOperations.incrementAndGet();
+        };
+        this.putMetricsCollector = (requestMethod, url) -> {
+            assert requestMethod.equals("PUT");
+            String queryParams = url.getQuery();
+            if (queryParams != null && (queryParams.contains("comp=block") || queryParams.contains("comp=blocklist"))) {
+                stats.postOperations.incrementAndGet();
+            } else {
+                stats.putOperations.incrementAndGet();
+            }
+        };
     }
 
     @Override
@@ -286,7 +299,7 @@ public class AzureBlobStore implements BlobStore {
         assert inputStream.markSupported()
             : "Should not be used with non-mark supporting streams as their retry handling in the SDK is broken";
         logger.trace(() -> new ParameterizedMessage("writeBlob({}, stream, {})", blobName, blobSize));
-        final Tuple<CloudBlobClient, Supplier<OperationContext>> client = client();
+        final Tuple<CloudBlobClient, Supplier<OperationContext>> client = client(putMetricsCollector);
         final CloudBlobContainer blobContainer = client.v1().getContainerReference(container);
         final CloudBlockBlob blob = blobContainer.getBlockBlobReference(blobName);
         try {
@@ -342,8 +355,17 @@ public class AzureBlobStore implements BlobStore {
 
         private final AtomicLong listOperations = new AtomicLong();
 
+        private final AtomicLong putOperations = new AtomicLong();
+
+        private final AtomicLong postOperations = new AtomicLong();
+
         private Map<String, Long> toMap() {
-            return Map.of("GET", getOperations.get(), "LIST", listOperations.get());
+            return Map.of(
+                "GET", getOperations.get(),
+                "LIST", listOperations.get(),
+                "POST", postOperations.get(),
+                "PUT", putOperations.get()
+            );
         }
     }
 }
