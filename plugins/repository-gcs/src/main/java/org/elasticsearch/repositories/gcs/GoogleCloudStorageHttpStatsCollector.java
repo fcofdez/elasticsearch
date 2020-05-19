@@ -23,6 +23,7 @@ import com.google.api.client.http.GenericUrl;
 import com.google.api.client.http.HttpRequest;
 import com.google.api.client.http.HttpResponse;
 import com.google.api.client.http.HttpResponseInterceptor;
+import org.elasticsearch.common.blobstore.BlobStoreStats;
 
 import java.util.List;
 import java.util.Locale;
@@ -40,24 +41,25 @@ final class GoogleCloudStorageHttpStatsCollector implements HttpResponseIntercep
         List.of(
             (bucket) ->
                 HttpRequestTracker.get(format(Locale.ROOT, "/download/storage/v1/b/%s/o/.+", bucket),
-                    GoogleCloudStorageOperationsStats::trackGetOperation),
+                    (stats) -> stats.track(GCSOps.GET)),
 
             (bucket) ->
                 HttpRequestTracker.get(format(Locale.ROOT, "/storage/v1/b/%s/o/.+", bucket),
-                    GoogleCloudStorageOperationsStats::trackGetOperation),
+                    (stats) -> stats.track(GCSOps.GET)),
 
             (bucket) ->
                 HttpRequestTracker.get(format(Locale.ROOT, "/storage/v1/b/%s/o", bucket),
-                    GoogleCloudStorageOperationsStats::trackListOperation)
+                    (stats) -> stats.track(GCSOps.LIST))
             );
 
-    private final GoogleCloudStorageOperationsStats gcsOperationStats;
+    private final BlobStoreStats<GCSOps> gcsOperationStats;
     private final List<HttpRequestTracker> trackers;
 
-    GoogleCloudStorageHttpStatsCollector(final GoogleCloudStorageOperationsStats gcsOperationStats) {
+    GoogleCloudStorageHttpStatsCollector(final BlobStoreStats<GCSOps> gcsOperationStats,
+                                         final String bucket) {
         this.gcsOperationStats = gcsOperationStats;
         this.trackers = trackerFactories.stream()
-            .map(trackerFactory -> trackerFactory.apply(gcsOperationStats.getTrackedBucket()))
+            .map(trackerFactory -> trackerFactory.apply(bucket))
             .collect(Collectors.toList());
     }
 
@@ -87,18 +89,18 @@ final class GoogleCloudStorageHttpStatsCollector implements HttpResponseIntercep
     private static final class HttpRequestTracker {
         private final String method;
         private final Pattern pathPattern;
-        private final Consumer<GoogleCloudStorageOperationsStats> statsTracker;
+        private final Consumer<BlobStoreStats<GCSOps>> statsTracker;
 
         private HttpRequestTracker(final String method,
                                    final String pathPattern,
-                                   final Consumer<GoogleCloudStorageOperationsStats> statsTracker) {
+                                   final Consumer<BlobStoreStats<GCSOps>> statsTracker) {
             this.method = method;
             this.pathPattern = Pattern.compile(pathPattern);
             this.statsTracker = statsTracker;
         }
 
         private static HttpRequestTracker get(final String pathPattern,
-                                              final Consumer<GoogleCloudStorageOperationsStats> statsConsumer) {
+                                              final Consumer<BlobStoreStats<GCSOps>> statsConsumer) {
             return new HttpRequestTracker("GET", pathPattern, statsConsumer);
         }
 
@@ -110,7 +112,7 @@ final class GoogleCloudStorageHttpStatsCollector implements HttpResponseIntercep
          *
          * @return {@code true} if the http request was tracked, {@code false} otherwise.
          */
-        private boolean track(final HttpRequest httpRequest, final GoogleCloudStorageOperationsStats stats) {
+        private boolean track(final HttpRequest httpRequest, final BlobStoreStats<GCSOps> stats) {
             if (matchesCriteria(httpRequest) == false)
                 return false;
 

@@ -29,6 +29,7 @@ import com.google.cloud.storage.StorageException;
 import org.elasticsearch.common.blobstore.BlobContainer;
 import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.BlobStore;
+import org.elasticsearch.common.blobstore.BlobStoreStats;
 import org.elasticsearch.test.ESTestCase;
 
 import java.io.IOException;
@@ -85,7 +86,7 @@ public class GoogleCloudStorageBlobStoreContainerTests extends ESTestCase {
         when(storage.batch()).thenReturn(batch);
 
         final GoogleCloudStorageService storageService = mock(GoogleCloudStorageService.class);
-        when(storageService.client(any(String.class), any(String.class), any(GoogleCloudStorageOperationsStats.class))).thenReturn(storage);
+        when(storageService.client(any(String.class), any(String.class), any(String.class), any(BlobStoreStats.class))).thenReturn(storage);
 
         try (BlobStore store = new GoogleCloudStorageBlobStore("bucket", "test", "repo", storageService)) {
             final BlobContainer container = store.blobContainer(new BlobPath());

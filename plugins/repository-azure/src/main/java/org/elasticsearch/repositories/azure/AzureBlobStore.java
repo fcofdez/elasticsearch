@@ -46,6 +46,7 @@ import org.elasticsearch.common.blobstore.BlobContainer;
 import org.elasticsearch.common.blobstore.BlobMetadata;
 import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.BlobStore;
+import org.elasticsearch.common.blobstore.BlobStoreStats;
 import org.elasticsearch.common.blobstore.DeleteResult;
 import org.elasticsearch.common.blobstore.support.PlainBlobMetadata;
 import org.elasticsearch.common.collect.Tuple;
@@ -86,7 +87,7 @@ public class AzureBlobStore implements BlobStore {
     private final String container;
     private final LocationMode locationMode;
 
-    private final Stats stats = new Stats();
+    private final BlobStoreStats<Ops> stats = new BlobStoreStats<>();
 
     private final Consumer<String> getMetricsCollector;
     private final Consumer<String> listMetricsCollector;
@@ -103,13 +104,13 @@ public class AzureBlobStore implements BlobStore {
         this.service.refreshAndClearCache(newSettings);
         this.getMetricsCollector = (requestMethod) -> {
             if (requestMethod.equalsIgnoreCase("HEAD")) {
-                stats.headOperations.incrementAndGet();
+                stats.track(Ops.HEAD);
                 return;
             }
 
-            stats.getOperations.incrementAndGet();
+            stats.track(Ops.GET);
         };
-        this.listMetricsCollector = (requestMethod) -> stats.listOperations.incrementAndGet();
+        this.listMetricsCollector = (requestMethod) -> stats.track(Ops.LIST);
     }
 
     @Override
@@ -349,18 +350,9 @@ public class AzureBlobStore implements BlobStore {
         return stats.toMap();
     }
 
-    private static class Stats {
-
-        private final AtomicLong getOperations = new AtomicLong();
-
-        private final AtomicLong listOperations = new AtomicLong();
-
-        private final AtomicLong headOperations = new AtomicLong();
-
-        private Map<String, Long> toMap() {
-            return Map.of("GET", getOperations.get(),
-                "LIST", listOperations.get(),
-                "HEAD", headOperations.get());
-        }
+    private enum Ops {
+        GET,
+        HEAD,
+        LIST
     }
 }

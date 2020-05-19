@@ -30,6 +30,7 @@ import org.elasticsearch.common.blobstore.BlobContainer;
 import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.BlobStore;
 import org.elasticsearch.common.blobstore.BlobStoreException;
+import org.elasticsearch.common.blobstore.BlobStoreStats;
 import org.elasticsearch.common.unit.ByteSizeValue;
 
 import java.io.IOException;
@@ -54,7 +55,7 @@ class S3BlobStore implements BlobStore {
 
     private final RepositoryMetadata repositoryMetadata;
 
-    private final Stats stats = new Stats();
+    private final BlobStoreStats<Ops> stats = new BlobStoreStats<>();
 
     final RequestMetricCollector getMetricCollector;
     final RequestMetricCollector listMetricCollector;
@@ -75,21 +76,21 @@ class S3BlobStore implements BlobStore {
             @Override
             public void collectMetrics(Request<?> request, Response<?> response) {
                 assert request.getHttpMethod().name().equals("GET");
-                stats.getCount.addAndGet(getRequestCount(request));
+                stats.track(Ops.GET, getRequestCount(request));
             }
         };
         this.listMetricCollector = new RequestMetricCollector() {
             @Override
             public void collectMetrics(Request<?> request, Response<?> response) {
                 assert request.getHttpMethod().name().equals("GET");
-                stats.listCount.addAndGet(getRequestCount(request));
+                stats.track(Ops.LIST, getRequestCount(request));
             }
         };
         this.putMetricCollector = new RequestMetricCollector() {
             @Override
             public void collectMetrics(Request<?> request, Response<?> response) {
                 assert request.getHttpMethod().name().equals("PUT");
-                stats.putCount.addAndGet(getRequestCount(request));
+                stats.track(Ops.PUT, getRequestCount(request));
             }
         };
         this.multiPartUploadMetricCollector = new RequestMetricCollector() {
@@ -97,7 +98,7 @@ class S3BlobStore implements BlobStore {
             public void collectMetrics(Request<?> request, Response<?> response) {
                 assert request.getHttpMethod().name().equals("PUT")
                     || request.getHttpMethod().name().equals("POST");
-                stats.postCount.addAndGet(getRequestCount(request));
+                stats.track(Ops.POST, getRequestCount(request));
             }
         };
     }
@@ -192,23 +193,10 @@ class S3BlobStore implements BlobStore {
         throw new BlobStoreException("cannedACL is not valid: [" + cannedACL + "]");
     }
 
-    static class Stats {
-
-        final AtomicLong listCount = new AtomicLong();
-
-        final AtomicLong getCount = new AtomicLong();
-
-        final AtomicLong putCount = new AtomicLong();
-
-        final AtomicLong postCount = new AtomicLong();
-
-        Map<String, Long> toMap() {
-            final Map<String, Long> results = new HashMap<>();
-            results.put("GET", getCount.get());
-            results.put("LIST", listCount.get());
-            results.put("PUT", putCount.get());
-            results.put("POST", postCount.get());
-            return results;
-        }
+    private enum Ops {
+        GET,
+        LIST,
+        POST,
+        PUT
     }
 }

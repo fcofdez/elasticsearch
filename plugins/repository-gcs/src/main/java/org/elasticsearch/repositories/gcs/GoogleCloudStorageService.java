@@ -32,6 +32,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.blobstore.BlobStoreStats;
 import org.elasticsearch.common.collect.MapBuilder;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.Maps;
@@ -82,7 +83,8 @@ public class GoogleCloudStorageService {
      */
     public Storage client(final String clientName,
                           final String repositoryName,
-                          final GoogleCloudStorageOperationsStats stats) throws IOException {
+                          final String bucket,
+                          final BlobStoreStats<GCSOps> stats) throws IOException {
         {
             final Storage storage = clientCache.get(repositoryName);
             if (storage != null) {
@@ -105,7 +107,7 @@ public class GoogleCloudStorageService {
 
             logger.debug(() -> new ParameterizedMessage("creating GCS client with client_name [{}], endpoint [{}]", clientName,
                 settings.getHost()));
-            final Storage storage = createClient(settings, stats);
+            final Storage storage = createClient(settings, bucket, stats);
             clientCache = Maps.copyMapWithAddedEntry(clientCache, repositoryName, storage);
             return storage;
         }
@@ -124,7 +126,8 @@ public class GoogleCloudStorageService {
      *         (blobs)
      */
     private Storage createClient(GoogleCloudStorageClientSettings clientSettings,
-                                 GoogleCloudStorageOperationsStats stats) throws IOException {
+                                 String bucket,
+                                 BlobStoreStats<GCSOps> stats) throws IOException {
         final HttpTransport httpTransport = SocketAccess.doPrivilegedIOException(() -> {
             final NetHttpTransport.Builder builder = new NetHttpTransport.Builder();
             // requires java.lang.RuntimePermission "setFactory"
@@ -133,7 +136,7 @@ public class GoogleCloudStorageService {
             return builder.build();
         });
 
-        final GoogleCloudStorageHttpStatsCollector httpStatsCollector = new GoogleCloudStorageHttpStatsCollector(stats);
+        final GoogleCloudStorageHttpStatsCollector httpStatsCollector = new GoogleCloudStorageHttpStatsCollector(stats, bucket);
 
         final HttpTransportOptions httpTransportOptions = new HttpTransportOptions(HttpTransportOptions.newBuilder()
             .setConnectTimeout(toTimeout(clientSettings.getConnectTimeout()))
