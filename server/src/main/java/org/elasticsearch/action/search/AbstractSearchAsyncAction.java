@@ -30,9 +30,12 @@ import org.elasticsearch.action.ShardOperationFailedException;
 import org.elasticsearch.action.search.TransportSearchAction.SearchTimeProvider;
 import org.elasticsearch.action.support.TransportActions;
 import org.elasticsearch.cluster.ClusterState;
+import org.elasticsearch.cluster.ClusterStateObserver;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.cluster.routing.ShardRouting;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Nullable;
+import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.AbstractRunnable;
 import org.elasticsearch.common.util.concurrent.AtomicArray;
 import org.elasticsearch.index.shard.ShardId;
@@ -42,6 +45,7 @@ import org.elasticsearch.search.internal.AliasFilter;
 import org.elasticsearch.search.internal.InternalSearchResponse;
 import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.search.internal.ShardSearchRequest;
+import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.Transport;
 
 import java.util.ArrayDeque;
@@ -91,12 +95,14 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
     private final SearchResponse.Clusters clusters;
 
     protected final GroupShardsIterator<SearchShardIterator> toSkipShardsIts;
-    protected final GroupShardsIterator<SearchShardIterator> shardsIts;
+    protected volatile GroupShardsIterator<SearchShardIterator> shardsIts;
     private final int expectedTotalOps;
     private final AtomicInteger totalOps = new AtomicInteger();
     private final int maxConcurrentRequestsPerNode;
     private final Map<String, PendingExecutions> pendingExecutionsPerNode = new ConcurrentHashMap<>();
     private final boolean throttleConcurrentRequests;
+    private final ClusterService clusterService;
+    private final ThreadPool threadPool;
 
     AbstractSearchAsyncAction(String name, Logger logger, SearchTransportService searchTransportService,
                               BiFunction<String, String, Transport.Connection> nodeIdToConnection,
@@ -107,6 +113,20 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
                               SearchTimeProvider timeProvider, ClusterState clusterState,
                               SearchTask task, SearchPhaseResults<Result> resultConsumer, int maxConcurrentRequestsPerNode,
                               SearchResponse.Clusters clusters) {
+        this(name, logger, searchTransportService, nodeIdToConnection, aliasFilter, concreteIndexBoosts, indexRoutings,
+            executor, request, listener, shardsIts, timeProvider, clusterState, task, resultConsumer, maxConcurrentRequestsPerNode,
+            clusters, null, null);
+    }
+
+    AbstractSearchAsyncAction(String name, Logger logger, SearchTransportService searchTransportService,
+                              BiFunction<String, String, Transport.Connection> nodeIdToConnection,
+                              Map<String, AliasFilter> aliasFilter, Map<String, Float> concreteIndexBoosts,
+                              Map<String, Set<String>> indexRoutings,
+                              Executor executor, SearchRequest request,
+                              ActionListener<SearchResponse> listener, GroupShardsIterator<SearchShardIterator> shardsIts,
+                              SearchTimeProvider timeProvider, ClusterState clusterState,
+                              SearchTask task, SearchPhaseResults<Result> resultConsumer, int maxConcurrentRequestsPerNode,
+                              SearchResponse.Clusters clusters, ClusterService clusterService, ThreadPool threadPool) {
         super(name);
         final List<SearchShardIterator> toSkipIterators = new ArrayList<>();
         final List<SearchShardIterator> iterators = new ArrayList<>();
@@ -141,6 +161,8 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
         this.indexRoutings = indexRoutings;
         this.results = resultConsumer;
         this.clusters = clusters;
+        this.clusterService = clusterService;
+        this.threadPool = threadPool;
     }
 
     /**
@@ -167,6 +189,70 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
             return;
         }
         executePhase(this);
+    }
+
+    private class ReroutePhase extends AbstractRunnable {
+        private final ClusterStateObserver clusterStateObserver;
+        private final int shardIndex;
+        private final SearchShardIterator initialShardSearchIt;
+
+        public ReroutePhase(int index, SearchShardIterator initialShardSearchIt) {
+            this.clusterStateObserver = new ClusterStateObserver(clusterService, logger, threadPool.getThreadContext());
+            this.shardIndex = index;
+            this.initialShardSearchIt = initialShardSearchIt;
+        }
+
+        @Override
+        public void doRun() throws Exception {
+            clusterStateObserver.waitForNextChange(new ClusterStateObserver.Listener() {
+                @Override
+                public void onNewClusterState(ClusterState state) {
+                    ShardId shardId = initialShardSearchIt.shardId();
+                    ShardRouting shardRouting = state.getRoutingTable().shardRoutingTable(shardId).primaryShard();
+                    assert shardRouting != null && shardRouting.started();
+
+                    SearchShardIterator searchShardIterator = createUpdatedShardIterator(shardId, shardRouting);
+                    searchShardIterator.nextOrNull();
+                    List<SearchShardIterator> shardIterators = new ArrayList<>(shardsIts.size());
+                    for (int i = 0; i < shardsIts.size(); i++) {
+                        if (i == shardIndex) {
+                            shardIterators.add(searchShardIterator);
+                            continue;
+                        }
+                        shardIterators.add(shardsIts.get(i));
+                    }
+                    shardsIts = new GroupShardsIterator<>(shardIterators);
+                    performPhaseOnShard(shardIndex, searchShardIterator, shardRouting);
+                }
+
+                private SearchShardIterator createUpdatedShardIterator(ShardId shardId, ShardRouting shardRouting) {
+                    return new SearchShardIterator(initialShardSearchIt.getClusterAlias(),
+                        shardId,
+                        Collections.singletonList(shardRouting),
+                        initialShardSearchIt.getOriginalIndices());
+                }
+
+                @Override
+                public void onClusterServiceClose() {
+                    // use the regular path
+                    performPhaseOnShard(shardIndex, initialShardSearchIt, null);
+                }
+
+                @Override
+                public void onTimeout(TimeValue timeout) {
+                    // use the regular path
+                    performPhaseOnShard(shardIndex, initialShardSearchIt, null);
+                }
+            }, clusterState -> {
+                ShardRouting primary = clusterState.getRoutingTable().shardRoutingTable(initialShardSearchIt.shardId()).primaryShard();
+                return primary != null && primary.started();
+            }, TimeValue.timeValueMillis(1000));
+        }
+
+        @Override
+        public void onFailure(Exception e) {
+
+        }
     }
 
     @Override
@@ -197,9 +283,14 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
                 }
             }
             for (int index = 0; index < shardsIts.size(); index++) {
-                final SearchShardIterator shardRoutings = shardsIts.get(index);
-                assert shardRoutings.skip() == false;
-                performPhaseOnShard(index, shardRoutings, shardRoutings.nextOrNull());
+                final SearchShardIterator searchShardIt = shardsIts.get(index);
+                assert searchShardIt.skip() == false;
+                ShardRouting shard = searchShardIt.nextOrNull();
+                if (shard == null) {
+                    new ReroutePhase(index, searchShardIt).run();
+                } else {
+                    performPhaseOnShard(index, searchShardIt, shard);
+                }
             }
         }
     }
