@@ -19,33 +19,33 @@
 
 package org.elasticsearch.repositories.azure;
 
-import com.microsoft.azure.storage.CloudStorageAccount;
-import com.microsoft.azure.storage.OperationContext;
-import com.microsoft.azure.storage.RetryPolicy;
-import com.microsoft.azure.storage.RetryPolicyFactory;
-import com.microsoft.azure.storage.RetryExponentialRetry;
-import com.microsoft.azure.storage.blob.BlobRequestOptions;
-import com.microsoft.azure.storage.blob.CloudBlobClient;
-import org.elasticsearch.common.collect.Tuple;
+import com.azure.core.http.HttpClient;
+import com.azure.core.http.ProxyOptions;
+import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
+import com.azure.storage.blob.BlobServiceClient;
+import com.azure.storage.blob.BlobServiceClientBuilder;
+import com.azure.storage.common.StorageSharedKeyCredential;
+import com.azure.storage.common.policy.RequestRetryOptions;
+import com.azure.storage.common.policy.RetryPolicyType;
+import io.netty.channel.nio.NioEventLoopGroup;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsException;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
 
 import java.net.URI;
-import java.net.URISyntaxException;
-import java.security.InvalidKeyException;
 import java.util.Map;
-import java.util.function.Supplier;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.util.Collections.emptyMap;
 
 public class AzureStorageService {
 
     public static final ByteSizeValue MIN_CHUNK_SIZE = new ByteSizeValue(1, ByteSizeUnit.BYTES);
-    /**
-     * {@link com.microsoft.azure.storage.blob.BlobConstants#MAX_SINGLE_UPLOAD_BLOB_SIZE_IN_BYTES}
-     */
+//    /**
+//     * {@link com.microsoft.azure.storage.blob.BlobConstants#MAX_SINGLE_UPLOAD_BLOB_SIZE_IN_BYTES}
+//     */
     public static final ByteSizeValue MAX_CHUNK_SIZE = new ByteSizeValue(256, ByteSizeUnit.MB);
 
     // 'package' for testing
@@ -64,50 +64,86 @@ public class AzureStorageService {
      * thread for logically coupled ops. The {@code OperationContext} is used to
      * specify the proxy, but a new context is *required* for each call.
      */
-    public Tuple<CloudBlobClient, Supplier<OperationContext>> client(String clientName) {
+    public BlobServiceClient client(String clientName) {
         final AzureStorageSettings azureStorageSettings = this.storageSettings.get(clientName);
         if (azureStorageSettings == null) {
             throw new SettingsException("Unable to find client with name [" + clientName + "]");
         }
         try {
-            return new Tuple<>(buildClient(azureStorageSettings), () -> buildOperationContext(azureStorageSettings));
-        } catch (InvalidKeyException | URISyntaxException | IllegalArgumentException e) {
+            return createClient(azureStorageSettings);
+        } catch (IllegalArgumentException e) {
             throw new SettingsException("Invalid azure client settings with name [" + clientName + "]", e);
         }
     }
 
-    private CloudBlobClient buildClient(AzureStorageSettings azureStorageSettings) throws InvalidKeyException, URISyntaxException {
-        final CloudBlobClient client = createClient(azureStorageSettings);
-        // Set timeout option if the user sets cloud.azure.storage.timeout or
-        // cloud.azure.storage.xxx.timeout (it's negative by default)
-        final long timeout = azureStorageSettings.getTimeout().getMillis();
-        if (timeout > 0) {
-            if (timeout > Integer.MAX_VALUE) {
-                throw new IllegalArgumentException("Timeout [" + azureStorageSettings.getTimeout() + "] exceeds 2,147,483,647ms.");
-            }
-            client.getDefaultRequestOptions().setTimeoutIntervalInMs((int) timeout);
-        }
-        // We define a default exponential retry policy
-        client.getDefaultRequestOptions().setRetryPolicyFactory(createRetryPolicy(azureStorageSettings));
-        client.getDefaultRequestOptions().setLocationMode(azureStorageSettings.getLocationMode());
-        return client;
-    }
+//    private BlobServiceClient buildClient(AzureStorageSettings azureStorageSettings) throws InvalidKeyException, URISyntaxException {
+//        final BlobServiceClient client = createClient(azureStorageSettings);
+//        // Set timeout option if the user sets cloud.azure.storage.timeout or
+//        // cloud.azure.storage.xxx.timeout (it's negative by default)
+//        final long timeout = azureStorageSettings.getTimeout().getMillis();
+//        if (timeout > 0) {
+//            if (timeout > Integer.MAX_VALUE) {
+//                throw new IllegalArgumentException("Timeout [" + azureStorageSettings.getTimeout() + "] exceeds 2,147,483,647ms.");
+//            }
+//            client.getDefaultRequestOptions().setTimeoutIntervalInMs((int) timeout);
+//        }
+//        // We define a default exponential retry policy
+//        client.getDefaultRequestOptions().setRetryPolicyFactory(createRetryPolicy(azureStorageSettings));
+//        client.getDefaultRequestOptions().setLocationMode(azureStorageSettings.getLocationMode());
+//        return client;
+//    }
 
     // non-static, package private for testing
-    RetryPolicyFactory createRetryPolicy(final AzureStorageSettings azureStorageSettings) {
-        return new RetryExponentialRetry(RetryPolicy.DEFAULT_CLIENT_BACKOFF, azureStorageSettings.getMaxRetries());
+    RequestRetryOptions createRetryPolicy(final AzureStorageSettings azureStorageSettings) {
+        return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL, azureStorageSettings.getMaxRetries(), Math.toIntExact(azureStorageSettings.getTimeout().getMillis()), null, null, null) ;
     }
 
-    private static CloudBlobClient createClient(AzureStorageSettings azureStorageSettings) throws InvalidKeyException, URISyntaxException {
+    static class EsThreadFactory implements ThreadFactory {
+
+        final ThreadGroup group;
+        final AtomicInteger threadNumber = new AtomicInteger(1);
+        final String namePrefix;
+
+        EsThreadFactory(String namePrefix) {
+            this.namePrefix = namePrefix;
+            SecurityManager s = System.getSecurityManager();
+            group = (s != null) ? s.getThreadGroup() :
+                Thread.currentThread().getThreadGroup();
+        }
+
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(group, r,
+                namePrefix + "[T#" + threadNumber.getAndIncrement() + "]",
+                0);
+            t.setDaemon(true);
+            return t;
+        }
+    }
+
+
+    private static BlobServiceClient createClient(AzureStorageSettings azureStorageSettings) {
         final String connectionString = azureStorageSettings.getConnectString();
-        return CloudStorageAccount.parse(connectionString).createCloudBlobClient();
+        final StorageSharedKeyCredential credential = StorageSharedKeyCredential.fromConnectionString(connectionString);
+        NettyAsyncHttpClientBuilder httpClientBuilder = new NettyAsyncHttpClientBuilder();
+        //TODO
+//        new ProxyOptions()
+//        httpClientBuilder.proxy()
+        NioEventLoopGroup nioEventLoopGroup = new NioEventLoopGroup(2, new EsThreadFactory("azure"));
+        HttpClient httpClient = httpClientBuilder.eventLoopGroup(nioEventLoopGroup).build();
+
+        return new BlobServiceClientBuilder()
+            .credential(credential)
+            .httpClient(httpClient)
+            .retryOptions(new RequestRetryOptions(RetryPolicyType.EXPONENTIAL, azureStorageSettings.getMaxRetries(), Math.toIntExact(azureStorageSettings.getTimeout().getMillis()), null, null, null))
+            .buildClient();
     }
 
-    private static OperationContext buildOperationContext(AzureStorageSettings azureStorageSettings) {
-        final OperationContext context = new OperationContext();
-        context.setProxy(azureStorageSettings.getProxy());
-        return context;
-    }
+//    private static OperationContext buildOperationContext(AzureStorageSettings azureStorageSettings) {
+//        final OperationContext context = new OperationContext();
+//        context.setProxy(azureStorageSettings.getProxy());
+//        return context;
+//    }
 
     /**
      * Updates settings for building clients. Any client cache is cleared. Future
@@ -142,7 +178,7 @@ public class AzureStorageService {
     }
 
     // package private for testing
-    BlobRequestOptions getBlobRequestOptionsForWriteBlob() {
-        return null;
-    }
+//    BlobRequestOptions getBlobRequestOptionsForWriteBlob() {
+//        return null;
+//    }
 }

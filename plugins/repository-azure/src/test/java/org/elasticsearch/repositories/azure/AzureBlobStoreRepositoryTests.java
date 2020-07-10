@@ -18,10 +18,6 @@
  */
 package org.elasticsearch.repositories.azure;
 
-import com.microsoft.azure.storage.Constants;
-import com.microsoft.azure.storage.RetryExponentialRetry;
-import com.microsoft.azure.storage.RetryPolicyFactory;
-import com.microsoft.azure.storage.blob.BlobRequestOptions;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -74,7 +70,7 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
 
     @Override
     protected HttpHandler createErroneousHttpHandler(final HttpHandler delegate) {
-        return new AzureErroneousHttpHandler(delegate, randomIntBetween(2, 3));
+        return new AzureBlobStoreHttpHandler("container");
     }
 
     @Override
@@ -107,22 +103,22 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
             super(settings);
         }
 
-        @Override
-        AzureStorageService createAzureStoreService(final Settings settings) {
-            return new AzureStorageService(settings) {
-                @Override
-                RetryPolicyFactory createRetryPolicy(final AzureStorageSettings azureStorageSettings) {
-                    return new RetryExponentialRetry(1, 100, 500, azureStorageSettings.getMaxRetries());
-                }
-
-                @Override
-                BlobRequestOptions getBlobRequestOptionsForWriteBlob() {
-                    BlobRequestOptions options = new BlobRequestOptions();
-                    options.setSingleBlobPutThresholdInBytes(Math.toIntExact(ByteSizeUnit.MB.toBytes(1)));
-                    return options;
-                }
-            };
-        }
+//        @Override
+//        AzureStorageService createAzureStoreService(final Settings settings) {
+//            return new AzureStorageService(settings) {
+//                @Override
+//                RetryPolicyFactory createRetryPolicy(final AzureStorageSettings azureStorageSettings) {
+//                    return new RetryExponentialRetry(1, 100, 500, azureStorageSettings.getMaxRetries());
+//                }
+//
+//                @Override
+//                BlobRequestOptions getBlobRequestOptionsForWriteBlob() {
+//                    BlobRequestOptions options = new BlobRequestOptions();
+//                    options.setSingleBlobPutThresholdInBytes(Math.toIntExact(ByteSizeUnit.MB.toBytes(1)));
+//                    return options;
+//                }
+//            };
+//        }
     }
 
     @SuppressForbidden(reason = "this test uses a HttpHandler to emulate an Azure endpoint")
@@ -133,38 +129,38 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
         }
     }
 
-    /**
-     * HTTP handler that injects random Azure service errors
-     *
-     * Note: it is not a good idea to allow this handler to simulate too many errors as it would
-     * slow down the test suite.
-     */
-    @SuppressForbidden(reason = "this test uses a HttpServer to emulate an Azure endpoint")
-    private static class AzureErroneousHttpHandler extends ErroneousHttpHandler {
-
-        AzureErroneousHttpHandler(final HttpHandler delegate, final int maxErrorsPerRequest) {
-            super(delegate, maxErrorsPerRequest);
-        }
-
-        @Override
-        protected void handleAsError(final HttpExchange exchange) throws IOException {
-            try {
-                drainInputStream(exchange.getRequestBody());
-                AzureHttpHandler.sendError(exchange, randomFrom(RestStatus.INTERNAL_SERVER_ERROR, RestStatus.SERVICE_UNAVAILABLE));
-            } finally {
-                exchange.close();
-            }
-        }
-
-        @Override
-        protected String requestUniqueId(final HttpExchange exchange) {
-            final String requestId = exchange.getRequestHeaders().getFirst(Constants.HeaderConstants.CLIENT_REQUEST_ID_HEADER);
-            final String range = exchange.getRequestHeaders().getFirst(Constants.HeaderConstants.STORAGE_RANGE_HEADER);
-            return exchange.getRequestMethod()
-                + " " + requestId
-                + (range != null ? " " + range : "");
-        }
-    }
+//    /**
+//     * HTTP handler that injects random Azure service errors
+//     *
+//     * Note: it is not a good idea to allow this handler to simulate too many errors as it would
+//     * slow down the test suite.
+//     */
+//    @SuppressForbidden(reason = "this test uses a HttpServer to emulate an Azure endpoint")
+//    private static class AzureErroneousHttpHandler extends ErroneousHttpHandler {
+//
+//        AzureErroneousHttpHandler(final HttpHandler delegate, final int maxErrorsPerRequest) {
+//            super(delegate, maxErrorsPerRequest);
+//        }
+//
+//        @Override
+//        protected void handleAsError(final HttpExchange exchange) throws IOException {
+//            try {
+//                drainInputStream(exchange.getRequestBody());
+//                AzureHttpHandler.sendError(exchange, randomFrom(RestStatus.INTERNAL_SERVER_ERROR, RestStatus.SERVICE_UNAVAILABLE));
+//            } finally {
+//                exchange.close();
+//            }
+//        }
+//
+////        @Override
+////        protected String requestUniqueId(final HttpExchange exchange) {
+//////            final String requestId = exchange.getRequestHeaders().getFirst(Constants.HeaderConstants.CLIENT_REQUEST_ID_HEADER);
+//////            final String range = exchange.getRequestHeaders().getFirst(Constants.HeaderConstants.STORAGE_RANGE_HEADER);
+////            return exchange.getRequestMethod()
+////                + " " + requestId
+////                + (range != null ? " " + range : "");
+////        }
+//    }
 
     /**
      * HTTP handler that keeps track of requests performed against Azure Storage.
