@@ -717,13 +717,115 @@ public class SearchAsyncActionTests extends ESTestCase {
         asyncAction.start();
         // The rest of requests were performed without waiting for the unassigned shard
         assertTrue("Timeout while waiting for latch", startedShardsLatch.await(10, TimeUnit.SECONDS));
-        ClusterState updated = assignUnassignedShardsToNode(indexName, initialClusterState);
+        ClusterState updated = assignUnassignedShardsToNode(indexName, initialClusterState, unassignedShardCount);
         setState(clusterService, updated);
         assertTrue("Timeout while waiting for latch", latch.await(10, TimeUnit.SECONDS));
 
         TestSearchResponse resp = response.get();
         assertNotNull("expected to be not null", resp);
         assertThat(resp.queried.size(), is(numShards));
+        executor.shutdown();
+    }
+
+    public void testFanOutAndWaitForUnallocatedShardsPartialFailures() throws InterruptedException {
+        SearchRequest request = new SearchRequest();
+        request.allowPartialSearchResults(true);
+        request.setMaxConcurrentShardRequests(randomIntBetween(1, 100));
+        request.setUnavailableShardsTimeout(TimeValue.timeValueMillis(1000));
+        CountDownLatch latch = new CountDownLatch(1);
+        int numShards = randomIntBetween(1, 20);
+        int unassignedShardCount = randomIntBetween(1, numShards);
+        String indexName = randomAlphaOfLength(10);
+
+        ClusterState initialClusterState = state(1, new String[]{indexName}, numShards, unassignedShardCount);
+        setState(clusterService, initialClusterState);
+
+        AtomicReference<TestSearchResponse> response = new AtomicReference<>();
+        ActionListener<SearchResponse> responseListener = ActionListener.wrap(
+            searchResponse -> response.set((TestSearchResponse) searchResponse),
+            (e) -> { throw new AssertionError("unexpected", e);});
+
+        List<SearchShardIterator> its = new ArrayList<>();
+        for (IndexShardRoutingTable routingTable : initialClusterState.getRoutingTable().index(indexName)) {
+            its.add(new SearchShardIterator(null, routingTable.shardId(), routingTable.activeShards(), new OriginalIndices(new String[]{indexName}, SearchRequest.DEFAULT_INDICES_OPTIONS)));
+        }
+        GroupShardsIterator<SearchShardIterator> shardsIter = new GroupShardsIterator<>(its);
+
+        CountDownLatch startedShardsLatch = new CountDownLatch(numShards - unassignedShardCount);
+        SearchTransportService transportService = new SearchTransportService(null, null);
+        Map<String, Transport.Connection> lookup = new HashMap<>();
+        for (DiscoveryNode node : initialClusterState.nodes()) {
+            lookup.put(node.getId(), new MockConnection(node));
+        }
+        DiscoveryNode primaryNode = initialClusterState.nodes().iterator().next();
+
+        Map<String, AliasFilter> aliasFilters = Collections.singletonMap("_na_", new AliasFilter(null, Strings.EMPTY_ARRAY));
+        ExecutorService executor = Executors.newFixedThreadPool(randomIntBetween(1, Runtime.getRuntime().availableProcessors()));
+        AbstractSearchAsyncAction<TestSearchPhaseResult> asyncAction =
+            new AbstractSearchAsyncAction<>(
+                "test",
+                logger,
+                transportService,
+                (cluster, node) -> {
+                    assert cluster == null : "cluster was not null: " + cluster;
+                    return lookup.get(node); },
+                aliasFilters,
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                executor,
+                request,
+                responseListener,
+                shardsIter,
+                new TransportSearchAction.SearchTimeProvider(0, 0, () -> 0),
+                ClusterState.EMPTY_STATE,
+                null,
+                new ArraySearchPhaseResults<>(shardsIter.size()),
+                request.getMaxConcurrentShardRequests(),
+                SearchResponse.Clusters.EMPTY,
+                clusterService,
+                threadPool) {
+                TestSearchResponse response = new TestSearchResponse();
+
+                @Override
+                protected void executePhaseOnShard(SearchShardIterator shardIt,
+                                                   ShardRouting shard,
+                                                   SearchActionListener<TestSearchPhaseResult> listener) {
+                    assertTrue("shard: " + shard.shardId() + " has been queried twice", response.queried.add(shard.shardId()));
+                    Transport.Connection connection = getConnection(null, shard.currentNodeId());
+                    final TestSearchPhaseResult testSearchPhaseResult = new TestSearchPhaseResult(null, connection.getNode());
+                    startedShardsLatch.countDown();
+                    if (randomBoolean()) {
+                        listener.onResponse(testSearchPhaseResult);
+                    } else {
+                        new Thread(() -> listener.onResponse(testSearchPhaseResult)).start();
+                    }
+                }
+
+                @Override
+                protected SearchPhase getNextPhase(SearchPhaseResults<TestSearchPhaseResult> results, SearchPhaseContext context) {
+                    return new SearchPhase("second phase") {
+                        @Override
+                        public void run() throws IOException {
+                            logger.info("SECOND PHASE");
+                            assertTrue(results.hasResult(0));
+                            responseListener.onResponse(response);
+                            latch.countDown();
+                        }
+                    };
+                }
+            };
+
+        asyncAction.start();
+        // The rest of requests were performed without waiting for the unassigned shard
+        assertTrue("Timeout while waiting for latch", startedShardsLatch.await(10, TimeUnit.SECONDS));
+        int numberOfAssignments = randomIntBetween(1, unassignedShardCount);
+        ClusterState updated = assignUnassignedShardsToNode(indexName, initialClusterState, numberOfAssignments);
+        setState(clusterService, updated);
+        assertTrue("Timeout while waiting for latch", latch.await(10, TimeUnit.SECONDS));
+
+        TestSearchResponse resp = response.get();
+        assertNotNull("expected to be not null", resp);
+        assertThat(resp.queried.size(), is(numShards - unassignedShardCount + numberOfAssignments));
         executor.shutdown();
     }
 
@@ -826,7 +928,7 @@ public class SearchAsyncActionTests extends ESTestCase {
         executor.shutdown();
     }
 
-    private ClusterState assignUnassignedShardsToNode(String indexName, ClusterState initialClusterState) {
+    private ClusterState assignUnassignedShardsToNode(String indexName, ClusterState initialClusterState, int numberOfAssignments) {
         ClusterState.Builder builder = ClusterState.builder(initialClusterState);
         IndexRoutingTable indexRoutingTable = initialClusterState.getRoutingTable().index(indexName);
         RoutingTable.Builder rtB = RoutingTable.builder(initialClusterState.routingTable());
@@ -839,12 +941,13 @@ public class SearchAsyncActionTests extends ESTestCase {
         // TODO one by one
         for (IndexShardRoutingTable routingTable : initialClusterState.getRoutingTable().index(indexName)) {
             for (ShardRouting shard : routingTable.shards()) {
-                if (shard.started()) {
+                if (shard.started() || numberOfAssignments <= 0) {
                     continue;
                 }
                 shard = shard.initialize(node.getId(), null, 0L);
                 shard = shard.moveToStarted();
                 irtb.addShard(shard);
+                numberOfAssignments--;
             }
         }
 
