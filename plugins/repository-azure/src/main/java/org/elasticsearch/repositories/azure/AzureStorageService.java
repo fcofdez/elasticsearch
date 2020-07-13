@@ -132,6 +132,7 @@ public class AzureStorageService {
         NioEventLoopGroup nioEventLoopGroup = new NioEventLoopGroup(2, new EsThreadFactory("azure"));
         HttpClient httpClient = httpClientBuilder.eventLoopGroup(nioEventLoopGroup).build();
 
+        // TODO add ref counting to shutdown the EventLoopGroup once the refcount == 0
         BlobServiceClientBuilder builder = new BlobServiceClientBuilder()
             .credential(credential)
             .connectionString(connectionString)
