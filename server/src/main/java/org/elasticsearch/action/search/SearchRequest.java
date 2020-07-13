@@ -98,6 +98,8 @@ public class SearchRequest extends ActionRequest implements IndicesRequest.Repla
 
     private IndicesOptions indicesOptions = DEFAULT_INDICES_OPTIONS;
 
+    private TimeValue unavailableShardsTimeout = TimeValue.ZERO;
+
     public SearchRequest() {
         this.localClusterAlias = null;
         this.absoluteStartMillis = DEFAULT_ABSOLUTE_START_MILLIS;
@@ -506,6 +508,15 @@ public class SearchRequest extends ActionRequest implements IndicesRequest.Repla
 
     public Boolean allowPartialSearchResults() {
         return this.allowPartialSearchResults;
+    }
+
+    public SearchRequest setUnavailableShardsTimeout(TimeValue unavailableShardsTimeout) {
+        this.unavailableShardsTimeout = unavailableShardsTimeout;
+        return this;
+    }
+
+    public TimeValue unavailableShardsTimeout() {
+        return this.unavailableShardsTimeout;
     }
 
     /**

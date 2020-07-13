@@ -32,6 +32,8 @@ import org.elasticsearch.action.support.TransportActions;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ClusterStateObserver;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
+import org.elasticsearch.cluster.routing.IndexRoutingTable;
+import org.elasticsearch.cluster.routing.IndexShardRoutingTable;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Nullable;
@@ -96,6 +98,7 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
 
     protected final GroupShardsIterator<SearchShardIterator> toSkipShardsIts;
     protected volatile GroupShardsIterator<SearchShardIterator> shardsIts;
+    private final Object shardItsMutex = new Object();
     private final int expectedTotalOps;
     private final AtomicInteger totalOps = new AtomicInteger();
     private final int maxConcurrentRequestsPerNode;
@@ -195,11 +198,13 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
         private final ClusterStateObserver clusterStateObserver;
         private final int shardIndex;
         private final SearchShardIterator initialShardSearchIt;
+        private final ShardId shardId;
 
         public ReroutePhase(int index, SearchShardIterator initialShardSearchIt) {
             this.clusterStateObserver = new ClusterStateObserver(clusterService, logger, threadPool.getThreadContext());
             this.shardIndex = index;
             this.initialShardSearchIt = initialShardSearchIt;
+            this.shardId = initialShardSearchIt.shardId();
         }
 
         @Override
@@ -207,21 +212,22 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
             clusterStateObserver.waitForNextChange(new ClusterStateObserver.Listener() {
                 @Override
                 public void onNewClusterState(ClusterState state) {
-                    ShardId shardId = initialShardSearchIt.shardId();
                     ShardRouting shardRouting = state.getRoutingTable().shardRoutingTable(shardId).primaryShard();
                     assert shardRouting != null && shardRouting.started();
 
                     SearchShardIterator searchShardIterator = createUpdatedShardIterator(shardId, shardRouting);
                     searchShardIterator.nextOrNull();
-                    List<SearchShardIterator> shardIterators = new ArrayList<>(shardsIts.size());
-                    for (int i = 0; i < shardsIts.size(); i++) {
-                        if (i == shardIndex) {
-                            shardIterators.add(searchShardIterator);
-                            continue;
+                    synchronized (shardItsMutex) {
+                        List<SearchShardIterator> shardIterators = new ArrayList<>(shardsIts.size());
+                        for (int i = 0; i < shardsIts.size(); i++) {
+                            if (i == shardIndex) {
+                                shardIterators.add(searchShardIterator);
+                                continue;
+                            }
+                            shardIterators.add(shardsIts.get(i));
                         }
-                        shardIterators.add(shardsIts.get(i));
+                        shardsIts = new GroupShardsIterator<>(shardIterators);
                     }
-                    shardsIts = new GroupShardsIterator<>(shardIterators);
                     performPhaseOnShard(shardIndex, searchShardIterator, shardRouting);
                 }
 
@@ -244,9 +250,13 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
                     performPhaseOnShard(shardIndex, initialShardSearchIt, null);
                 }
             }, clusterState -> {
-                ShardRouting primary = clusterState.getRoutingTable().shardRoutingTable(initialShardSearchIt.shardId()).primaryShard();
-                return primary != null && primary.started();
-            }, TimeValue.timeValueMillis(1000));
+                IndexRoutingTable indexRouting = clusterState.getRoutingTable().index(shardId.getIndex());
+                if (indexRouting == null) {
+                    return false;
+                }
+                IndexShardRoutingTable shardRoutingTable = indexRouting.shard(shardId.getId());
+                return shardRoutingTable != null && shardRoutingTable.primaryShard() != null && shardRoutingTable.primaryShard().started();
+            }, request.unavailableShardsTimeout());
         }
 
         @Override
@@ -263,7 +273,7 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
         }
         if (shardsIts.size() > 0) {
             assert request.allowPartialSearchResults() != null : "SearchRequest missing setting for allowPartialSearchResults";
-            if (request.allowPartialSearchResults() == false) {
+            if (request.allowPartialSearchResults() == false && request.unavailableShardsTimeout().equals(TimeValue.ZERO)) {
                 final StringBuilder missingShards = new StringBuilder();
                 // Fail-fast verification of all shards being available
                 for (int index = 0; index < shardsIts.size(); index++) {
@@ -286,7 +296,7 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
                 final SearchShardIterator searchShardIt = shardsIts.get(index);
                 assert searchShardIt.skip() == false;
                 ShardRouting shard = searchShardIt.nextOrNull();
-                if (shard == null) {
+                if (shard == null && request.unavailableShardsTimeout().equals(TimeValue.ZERO) == false) {
                     new ReroutePhase(index, searchShardIt).run();
                 } else {
                     performPhaseOnShard(index, searchShardIt, shard);
