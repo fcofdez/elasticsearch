@@ -19,6 +19,7 @@
 
 package org.elasticsearch.repositories.azure;
 
+import com.azure.storage.blob.models.BlobStorageException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
@@ -36,6 +37,7 @@ import org.elasticsearch.threadpool.ThreadPool;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URISyntaxException;
+import java.nio.file.NoSuchFileException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -78,17 +80,14 @@ public class AzureBlobContainer extends AbstractBlobContainer {
 //            // stream to it.
 //            throw new NoSuchFileException("Blob [" + blobName + "] does not exist");
 //        }
-        return blobStore.getInputStream(buildKey(blobName), position, length);
-//        try {
-//            return blobStore.getInputStream(buildKey(blobName), position, length);
-////        } catch (StorageException e) {
-////            if (e.getHttpStatusCode() == HttpURLConnection.HTTP_NOT_FOUND) {
-////                throw new NoSuchFileException(e.getMessage());
-////            }
-////            throw new IOException(e);
-//        } catch (URISyntaxException e) {
-//            throw new IOException(e);
-//        }
+        try {
+            return blobStore.getInputStream(buildKey(blobName), position, length);
+        } catch (BlobStorageException e) {
+            if (e.getStatusCode() == 404) {
+                throw new NoSuchFileException(e.getMessage());
+            }
+            throw new IOException(e);
+        }
     }
 
     @Override

@@ -132,11 +132,17 @@ public class AzureStorageService {
         NioEventLoopGroup nioEventLoopGroup = new NioEventLoopGroup(2, new EsThreadFactory("azure"));
         HttpClient httpClient = httpClientBuilder.eventLoopGroup(nioEventLoopGroup).build();
 
-        return new BlobServiceClientBuilder()
+        BlobServiceClientBuilder builder = new BlobServiceClientBuilder()
             .credential(credential)
+            .connectionString(connectionString)
             .httpClient(httpClient)
-            .retryOptions(new RequestRetryOptions(RetryPolicyType.EXPONENTIAL, azureStorageSettings.getMaxRetries(), Math.toIntExact(azureStorageSettings.getTimeout().getMillis()), null, null, null))
-            .buildClient();
+            .retryOptions(getRetryOptions(azureStorageSettings));
+        return SocketAccess.doPrivilegedException(builder::buildClient);
+    }
+
+    private static RequestRetryOptions getRetryOptions(AzureStorageSettings azureStorageSettings) {
+        int timeout = Math.toIntExact(azureStorageSettings.getTimeout().getMillis());
+        return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL, azureStorageSettings.getMaxRetries(), timeout == -1 ? null : timeout, null, null, null);
     }
 
 //    private static OperationContext buildOperationContext(AzureStorageSettings azureStorageSettings) {

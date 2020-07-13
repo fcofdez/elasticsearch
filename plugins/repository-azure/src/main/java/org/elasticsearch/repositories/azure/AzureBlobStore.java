@@ -78,8 +78,8 @@ public class AzureBlobStore implements BlobStore {
         // locationMode is set per repository, not per client
         //this.locationMode = Repository.LOCATION_MODE_SETTING.get(metadata.settings());
         final Map<String, AzureStorageSettings> prevSettings = this.service.refreshAndClearCache(emptyMap());
-        //final Map<String, AzureStorageSettings> newSettings = AzureStorageSettings.overrideLocationMode(prevSettings, this.locationMode);
-        //this.service.refreshAndClearCache(newSettings);
+        final Map<String, AzureStorageSettings> newSettings = AzureStorageSettings.overrideLocationMode(prevSettings);
+        this.service.refreshAndClearCache(newSettings);
         this.getMetricsCollector = (httpURLConnection) -> {
             if (httpURLConnection.getRequestMethod().equals("HEAD")) {
                 stats.headOperations.incrementAndGet();
@@ -225,8 +225,9 @@ public class AzureBlobStore implements BlobStore {
     }
 
     public InputStream getInputStream(String blob, long position, @Nullable Long length) {
-        final BlobContainerClient blobContainer = client().getBlobContainerClient(container);
-        BlobClient blobClient = blobContainer.getBlobClient(blob);
+        BlobServiceClient client = client();
+        final BlobContainerClient blobContainer = SocketAccess.doPrivilegedException(() -> client.getBlobContainerClient(container));
+        BlobClient blobClient = SocketAccess.doPrivilegedException(() -> blobContainer.getBlobClient(blob));
 
         logger.trace(() -> new ParameterizedMessage("reading container [{}], blob [{}]", container, blob));
         final BlobInputStream is = SocketAccess.doPrivilegedException(() ->
@@ -283,7 +284,7 @@ public class AzureBlobStore implements BlobStore {
         throws URISyntaxException {
         assert inputStream.markSupported()
             : "Should not be used with non-mark supporting streams as their retry handling in the SDK is broken";
-        logger.trace(() -> new ParameterizedMessage("writeBlob({}, stream, {})", blobName, blobSize));
+        logger.info(() -> new ParameterizedMessage("writeBlob({}, stream, {})", blobName, blobSize));
         final BlobContainerClient blobContainer = client().getBlobContainerClient(container);
         final BlobClient blob = blobContainer.getBlobClient(blobName);
 //        try {
