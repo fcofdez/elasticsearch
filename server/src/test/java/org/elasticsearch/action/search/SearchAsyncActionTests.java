@@ -73,23 +73,6 @@ import static org.hamcrest.Matchers.*;
 import static org.mockito.Mockito.mock;
 
 public class SearchAsyncActionTests extends ESTestCase {
-    private ThreadPool threadPool;
-    private ClusterService clusterService;
-
-    @Before
-    public void setUp() throws Exception {
-        super.setUp();
-        threadPool = new TestThreadPool(getClass().getName());
-        clusterService = createClusterService(threadPool);
-    }
-
-    @After
-    public void tearDown() throws Exception {
-        clusterService.stop();
-        terminate(threadPool);
-        super.tearDown();
-    }
-
     public void testSkipSearchShards() throws InterruptedException {
         SearchRequest request = new SearchRequest();
         request.allowPartialSearchResults(true);
@@ -629,12 +612,15 @@ public class SearchAsyncActionTests extends ESTestCase {
 
         final FakeStartedPrimaryShardObserver startedShardObserver = new FakeStartedPrimaryShardObserver();
         PlainListenableActionFuture<SearchResponse> responseListener = PlainListenableActionFuture.newListenableFuture();
+        ExecutorService executor = Executors.newFixedThreadPool(randomIntBetween(1, Runtime.getRuntime().availableProcessors()));
+
         AbstractSearchAsyncAction<TestSearchPhaseResult> asyncAction =
             new AbstractSearchPrimaryShardWaiterAction(request,
                 primaryNode,
                 shardsIter,
                 responseListener,
-                startedShardObserver) {
+                startedShardObserver,
+                executor) {
                 final TestSearchResponse response = new TestSearchResponse();
 
                 @Override
@@ -683,6 +669,8 @@ public class SearchAsyncActionTests extends ESTestCase {
             ShardId shardId = shardsIter.get(i).shardId();
             assertThat(response.queried.contains(shardId), is(true));
         }
+
+        executor.shutdown();
     }
 
     public void testFanOutAndWaitForUnallocatedAndSomeShardsAreNotAllocatedAfterTimeout() throws Exception {
@@ -699,21 +687,24 @@ public class SearchAsyncActionTests extends ESTestCase {
             null,
             unassignedShardCount);
 
-        final FakeStartedPrimaryShardObserver startedShardObserver = new FakeStartedPrimaryShardObserver();
-        PlainListenableActionFuture<SearchResponse> responseListener = PlainListenableActionFuture.newListenableFuture();
-        CountDownLatch startedShardsLatch = new CountDownLatch(numShards - unassignedShardCount);
 
         SearchRequest request = new SearchRequest();
         request.allowPartialSearchResults(true);
         request.setMaxConcurrentShardRequests(randomIntBetween(1, 100));
         request.setUnavailableShardsTimeout(TimeValue.timeValueMillis(1000));
 
+        final FakeStartedPrimaryShardObserver startedShardObserver = new FakeStartedPrimaryShardObserver();
+        PlainListenableActionFuture<SearchResponse> responseListener = PlainListenableActionFuture.newListenableFuture();
+        CountDownLatch startedShardsLatch = new CountDownLatch(numShards - unassignedShardCount);
+        ExecutorService executor = Executors.newFixedThreadPool(randomIntBetween(1, Runtime.getRuntime().availableProcessors()));
+
         AbstractSearchAsyncAction<TestSearchPhaseResult> asyncAction =
             new AbstractSearchPrimaryShardWaiterAction(request,
                 primaryNode,
                 shardsIter,
                 responseListener,
-                startedShardObserver) {
+                startedShardObserver,
+                executor) {
                 final TestSearchResponse response = new TestSearchResponse();
 
                 @Override
@@ -757,6 +748,8 @@ public class SearchAsyncActionTests extends ESTestCase {
             assertThat(shardId.toString(),
                 response.queried.contains(shardId), timedOutShards.contains(shardId) ? is(false) : is(true));
         }
+
+        executor.shutdown();
     }
 
     public void testPartialResultsErrorOutWhenASubsetOfUnassignedShardsTimeout() throws Exception {
@@ -778,16 +771,18 @@ public class SearchAsyncActionTests extends ESTestCase {
         request.setMaxConcurrentShardRequests(randomIntBetween(1, 100));
         request.setUnavailableShardsTimeout(TimeValue.timeValueMillis(1000));
 
-        final FakeStartedPrimaryShardObserver startedShardObserver = new FakeStartedPrimaryShardObserver();
+        FakeStartedPrimaryShardObserver startedShardObserver = new FakeStartedPrimaryShardObserver();
         PlainListenableActionFuture<SearchResponse> responseListener = PlainListenableActionFuture.newListenableFuture();
         CountDownLatch startedShardsLatch = new CountDownLatch(numShards - unassignedShardCount);
+        ExecutorService executor = Executors.newFixedThreadPool(randomIntBetween(1, Runtime.getRuntime().availableProcessors()));
 
         AbstractSearchAsyncAction<TestSearchPhaseResult> asyncAction =
             new AbstractSearchPrimaryShardWaiterAction(request,
                 primaryNode,
                 shardsIter,
                 responseListener,
-                startedShardObserver) {
+                startedShardObserver,
+                executor) {
                 final TestSearchResponse response = new TestSearchResponse();
 
                 @Override
@@ -828,6 +823,8 @@ public class SearchAsyncActionTests extends ESTestCase {
         }
 
         expectThrows(ExecutionException.class, SearchPhaseExecutionException.class, () -> responseListener.get(100, TimeUnit.MILLISECONDS));
+
+        executor.shutdown();
     }
 
     public void testFailFastWhenPartialSearchIsNotAllowedAndUnavailableShardsTimeoutIsZero() {
@@ -850,12 +847,15 @@ public class SearchAsyncActionTests extends ESTestCase {
         request.setUnavailableShardsTimeout(TimeValue.ZERO);
 
         PlainListenableActionFuture<SearchResponse> responseListener = PlainListenableActionFuture.newListenableFuture();
+        ExecutorService executor = Executors.newFixedThreadPool(randomIntBetween(1, Runtime.getRuntime().availableProcessors()));
+
         AbstractSearchAsyncAction<TestSearchPhaseResult> asyncAction =
             new AbstractSearchPrimaryShardWaiterAction(request,
                 primaryNode,
                 shardsIter,
                 responseListener,
-                new FakeStartedPrimaryShardObserver()) {
+                new FakeStartedPrimaryShardObserver(),
+                executor) {
                 @Override
                 protected void executePhaseOnShard(SearchShardIterator shardIt,
                                                    ShardRouting shard,
@@ -871,7 +871,10 @@ public class SearchAsyncActionTests extends ESTestCase {
             };
 
         asyncAction.start();
+
         expectThrows(ExecutionException.class, SearchPhaseExecutionException.class, () -> responseListener.get(100, TimeUnit.MILLISECONDS));
+
+        executor.shutdown();
     }
 
     public void testAllUnallocatedShardsAreNotAllocatedAfterTimeoutAndRequestFails() {
@@ -895,12 +898,15 @@ public class SearchAsyncActionTests extends ESTestCase {
 
         PlainListenableActionFuture<SearchResponse> responseListener = PlainListenableActionFuture.newListenableFuture();
         FakeStartedPrimaryShardObserver startedShardObserver = new FakeStartedPrimaryShardObserver();
+        ExecutorService executor = Executors.newFixedThreadPool(randomIntBetween(1, Runtime.getRuntime().availableProcessors()));
+
         AbstractSearchAsyncAction<TestSearchPhaseResult> asyncAction =
             new AbstractSearchPrimaryShardWaiterAction(request,
                 primaryNode,
                 shardsIter,
                 responseListener,
-                startedShardObserver) {
+                startedShardObserver,
+                executor) {
                 @Override
                 protected void executePhaseOnShard(SearchShardIterator shardIt,
                                                    ShardRouting shard,
@@ -927,6 +933,8 @@ public class SearchAsyncActionTests extends ESTestCase {
         }
 
         expectThrows(ExecutionException.class, SearchPhaseExecutionException.class, () -> responseListener.get(100, TimeUnit.MILLISECONDS));
+
+        executor.shutdown();
     }
 
     abstract class AbstractSearchPrimaryShardWaiterAction extends AbstractSearchAsyncAction<TestSearchPhaseResult> {
@@ -934,7 +942,8 @@ public class SearchAsyncActionTests extends ESTestCase {
                                                DiscoveryNode primaryNode,
                                                GroupShardsIterator<SearchShardIterator> shardsIter,
                                                ActionListener<SearchResponse> responseListener,
-                                               StartedPrimaryShardObserver startedPrimaryShardObserver) {
+                                               StartedPrimaryShardObserver startedPrimaryShardObserver,
+                                               ExecutorService executor) {
             super("test",
                 logger,
                 mock(SearchTransportService.class),
@@ -945,7 +954,7 @@ public class SearchAsyncActionTests extends ESTestCase {
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
-                threadPool.generic(),
+                executor,
                 request,
                 responseListener,
                 shardsIter,
