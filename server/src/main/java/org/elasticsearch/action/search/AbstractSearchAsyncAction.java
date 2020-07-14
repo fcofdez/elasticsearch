@@ -97,7 +97,7 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
     private final int expectedTotalOps;
     private final AtomicInteger totalOps = new AtomicInteger();
     private final int maxConcurrentRequestsPerNode;
-    private final Map<String, PendingExecutions> pendingExecutionsPerNode = new ConcurrentHashMap<>();
+    protected final Map<String, PendingExecutions> pendingExecutionsPerNode = new ConcurrentHashMap<>();
     private final boolean throttleConcurrentRequests;
     private final StartedPrimaryShardObserver startedPrimaryShardObserver;
 
@@ -204,29 +204,31 @@ abstract class AbstractSearchAsyncAction<Result extends SearchPhaseResult> exten
                 final SearchShardIterator searchShardIt = shardsIts.get(index);
                 assert searchShardIt.skip() == false;
                 ShardRouting shard = searchShardIt.nextOrNull();
-                if (shard == null) {
+                TimeValue unavailableShardsTimeout = request.unavailableShardsTimeout();
+                if (shard == null && unavailableShardsTimeout.equals(TimeValue.ZERO) == false) {
                     final int shardIndex = index;
-                    startedPrimaryShardObserver.waitUntilPrimaryShardIsStarted(searchShardIt, request.unavailableShardsTimeout(), new ActionListener<>() {
+                    startedPrimaryShardObserver.waitUntilPrimaryShardIsStarted(searchShardIt,
+                        request.unavailableShardsTimeout(),
+                        new ActionListener<>() {
                         @Override
                         public void onResponse(SearchShardIterator updatedSearchIter) {
                             // Avoid blocking master thread
-                            executor.execute(() -> {
+                            fork(() -> {
                                 synchronized (shardItsMutex) {
                                     List<SearchShardIterator> updatedIters = new ArrayList<>(shardsIts.size());
                                     for (int i = 0; i < shardsIts.size(); i++) {
                                         updatedIters.add(shardIndex == i ? updatedSearchIter : shardsIts.get(i));
                                     }
                                     shardsIts = new GroupShardsIterator<>(updatedIters);
-                                ShardRouting primaryShard = updatedSearchIter.nextOrNull();
-                                performPhaseOnShard(shardIndex, updatedSearchIter, primaryShard);
+                                    ShardRouting primaryShard = updatedSearchIter.nextOrNull();
+                                    performPhaseOnShard(shardIndex, updatedSearchIter, primaryShard);
                                 }
-
                             });
                         }
 
                         @Override
                         public void onFailure(Exception e) {
-                            performPhaseOnShard(shardIndex, searchShardIt, shard);
+                            fork(() -> performPhaseOnShard(shardIndex, searchShardIt, shard));
                         }
                     });
                 } else {

@@ -24,8 +24,12 @@ import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.support.PlainListenableActionFuture;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.node.DiscoveryNode;
-import org.elasticsearch.cluster.routing.*;
-import org.elasticsearch.cluster.service.ClusterService;
+import org.elasticsearch.cluster.routing.GroupShardsIterator;
+import org.elasticsearch.cluster.routing.RecoverySource;
+import org.elasticsearch.cluster.routing.ShardRouting;
+import org.elasticsearch.cluster.routing.ShardRoutingState;
+import org.elasticsearch.cluster.routing.TestShardRouting;
+import org.elasticsearch.cluster.routing.UnassignedInfo;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -37,14 +41,10 @@ import org.elasticsearch.search.internal.AliasFilter;
 import org.elasticsearch.search.internal.InternalSearchResponse;
 import org.elasticsearch.search.internal.SearchContextId;
 import org.elasticsearch.test.ESTestCase;
-import org.elasticsearch.threadpool.TestThreadPool;
-import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.Transport;
 import org.elasticsearch.transport.TransportException;
 import org.elasticsearch.transport.TransportRequest;
 import org.elasticsearch.transport.TransportRequestOptions;
-import org.junit.After;
-import org.junit.Before;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -64,12 +64,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.elasticsearch.action.support.replication.ClusterStateCreationUtils.state;
 import static org.elasticsearch.common.util.concurrent.ConcurrentCollections.newConcurrentMap;
 import static org.elasticsearch.common.util.concurrent.ConcurrentCollections.newConcurrentSet;
-import static org.elasticsearch.test.ClusterServiceUtils.createClusterService;
-import static org.elasticsearch.test.ClusterServiceUtils.setState;
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.mockito.Mockito.mock;
 
 public class SearchAsyncActionTests extends ESTestCase {
@@ -661,7 +661,7 @@ public class SearchAsyncActionTests extends ESTestCase {
         // The rest of requests were performed without waiting for the unassigned shard
         assertTrue("Timeout while waiting for latch", startedShardsLatch.await(100, TimeUnit.MILLISECONDS));
 
-        assertThat(startedShardObserver.waitingForAllocationShards().size(), is(unassignedShardCount));
+        assertThat(startedShardObserver.shardsWaitingForAllocation().size(), is(unassignedShardCount));
         startedShardObserver.moveAllWaitingShardsToStarted(primaryNode);
 
         TestSearchResponse response = (TestSearchResponse) responseListener.get();
@@ -676,6 +676,7 @@ public class SearchAsyncActionTests extends ESTestCase {
     public void testFanOutAndWaitForUnallocatedAndSomeShardsAreNotAllocatedAfterTimeout() throws Exception {
         int numShards = randomIntBetween(1, 20);
         int unassignedShardCount = randomIntBetween(1, numShards);
+        int timedOutShardsWhileWaiting = randomIntBetween(0, unassignedShardCount - 1);
         String indexName = randomAlphaOfLength(10);
 
         DiscoveryNode primaryNode = new DiscoveryNode("node_1", buildNewFakeTransportAddress(), Version.CURRENT);
@@ -722,6 +723,9 @@ public class SearchAsyncActionTests extends ESTestCase {
                     return new SearchPhase("second phase") {
                         @Override
                         public void run() {
+                            long count = results.getSuccessfulResults().count();
+                            long expected = numShards - timedOutShardsWhileWaiting;
+                            assertThat(count, is(expected));
                             responseListener.onResponse(response);
                         }
                     };
@@ -729,16 +733,16 @@ public class SearchAsyncActionTests extends ESTestCase {
             };
 
         asyncAction.start();
-        assertTrue("Timeout while waiting for latch", startedShardsLatch.await(100, TimeUnit.MILLISECONDS));
+        startedShardsLatch.await();
 
-        Set<ShardId> waitingShards = startedShardObserver.waitingForAllocationShards();
-        List<ShardId> timedOutShards = randomSubsetOf(randomIntBetween(0, waitingShards.size() - 1), waitingShards);
+        Set<ShardId> shardsWaitingForAllocation = startedShardObserver.shardsWaitingForAllocation();
+        List<ShardId> timedOutShards = randomSubsetOf(timedOutShardsWhileWaiting, shardsWaitingForAllocation);
         for (ShardId shardId : timedOutShards) {
             startedShardObserver.timeoutShardWait(shardId);
         }
 
-        waitingShards.removeAll(timedOutShards);
-        for (ShardId waitingShard : waitingShards) {
+        shardsWaitingForAllocation.removeAll(timedOutShards);
+        for (ShardId waitingShard : shardsWaitingForAllocation) {
             startedShardObserver.moveShardToStarted(waitingShard, primaryNode);
         }
 
@@ -815,10 +819,10 @@ public class SearchAsyncActionTests extends ESTestCase {
         // The rest of requests were performed without waiting for the unassigned shard
         assertTrue("Timeout while waiting for latch", startedShardsLatch.await(100, TimeUnit.MILLISECONDS));
 
-        Set<ShardId> waitingShards = new HashSet<>(startedShardObserver.waitingForAllocationShards());
+        Set<ShardId> waitingShards = new HashSet<>(startedShardObserver.shardsWaitingForAllocation());
         assertThat(waitingShards.size(), is(unassignedShardCount));
 
-        for (ShardId waitingShard : startedShardObserver.waitingForAllocationShards()) {
+        for (ShardId waitingShard : startedShardObserver.shardsWaitingForAllocation()) {
             startedShardObserver.timeoutShardWait(waitingShard);
         }
 
@@ -894,7 +898,7 @@ public class SearchAsyncActionTests extends ESTestCase {
         SearchRequest request = new SearchRequest();
         request.allowPartialSearchResults(true);
         request.setMaxConcurrentShardRequests(randomIntBetween(1, 100));
-        request.setUnavailableShardsTimeout(TimeValue.ZERO);
+        request.setUnavailableShardsTimeout(TimeValue.timeValueMillis(1000));
 
         PlainListenableActionFuture<SearchResponse> responseListener = PlainListenableActionFuture.newListenableFuture();
         FakeStartedPrimaryShardObserver startedShardObserver = new FakeStartedPrimaryShardObserver();
@@ -971,17 +975,19 @@ public class SearchAsyncActionTests extends ESTestCase {
     static class FakeStartedPrimaryShardObserver extends StartedPrimaryShardObserver {
         private final Map<ShardId, ActionListener<SearchShardIterator>> waitingForStartShards = new HashMap<>();
 
-        public FakeStartedPrimaryShardObserver() {
+        FakeStartedPrimaryShardObserver() {
             super(null, null);
         }
 
         @Override
-        void waitUntilPrimaryShardIsStarted(SearchShardIterator searchShardIterator, TimeValue timeout, ActionListener<SearchShardIterator> listener) {
+        void waitUntilPrimaryShardIsStarted(SearchShardIterator searchShardIterator,
+                                            TimeValue timeout,
+                                            ActionListener<SearchShardIterator> listener) {
             waitingForStartShards.put(searchShardIterator.shardId(), listener);
         }
 
         void moveAllWaitingShardsToStarted(DiscoveryNode primary) {
-            for (ShardId shardId : waitingForAllocationShards()) {
+            for (ShardId shardId : shardsWaitingForAllocation()) {
                 moveShardToStarted(shardId, primary);
             }
         }
@@ -990,9 +996,16 @@ public class SearchAsyncActionTests extends ESTestCase {
             ActionListener<SearchShardIterator> listener = waitingForStartShards.remove(shardId);
             assert listener != null;
 
-            ShardRouting shardRouting = TestShardRouting.newShardRouting(shardId, primary.getId(), true, ShardRoutingState.STARTED);
-            OriginalIndices originalIndices = new OriginalIndices(new String[]{shardId.getIndexName()}, SearchRequest.DEFAULT_INDICES_OPTIONS);
-            listener.onResponse(new SearchShardIterator(null, shardId, Collections.singletonList(shardRouting), originalIndices));
+            ShardRouting shardRouting =
+                TestShardRouting.newShardRouting(shardId, primary.getId(), true, ShardRoutingState.STARTED);
+
+            OriginalIndices originalIndices =
+                new OriginalIndices(new String[]{shardId.getIndexName()}, SearchRequest.DEFAULT_INDICES_OPTIONS);
+
+            listener.onResponse(new SearchShardIterator(null,
+                shardId,
+                Collections.singletonList(shardRouting),
+                originalIndices));
         }
 
         void timeoutShardWait(ShardId shardId) {
@@ -1002,7 +1015,7 @@ public class SearchAsyncActionTests extends ESTestCase {
             listener.onFailure(new RuntimeException("Timeout while waiting"));
         }
 
-        Set<ShardId> waitingForAllocationShards() {
+        Set<ShardId> shardsWaitingForAllocation() {
             return new HashSet<>(waitingForStartShards.keySet());
         }
     }

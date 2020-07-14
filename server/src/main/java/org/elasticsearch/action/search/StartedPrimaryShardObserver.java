@@ -36,7 +36,7 @@ import org.elasticsearch.threadpool.ThreadPool;
 import java.util.Collections;
 
 class StartedPrimaryShardObserver {
-    private final static Logger logger = LogManager.getLogger(StartedPrimaryShardObserver.class);
+    private final Logger logger = LogManager.getLogger(StartedPrimaryShardObserver.class);
 
     private final ClusterService clusterService;
     private final ThreadPool threadPool;
@@ -46,12 +46,9 @@ class StartedPrimaryShardObserver {
         this.threadPool = threadPool;
     }
 
-    void waitUntilPrimaryShardIsStarted(SearchShardIterator searchShardIterator, TimeValue timeout, ActionListener<SearchShardIterator> listener) {
-        // Fail fast for the default case
-        if (timeout.equals(TimeValue.ZERO)) {
-            listener.onFailure(new RuntimeException(""));
-        }
-
+    void waitUntilPrimaryShardIsStarted(SearchShardIterator searchShardIterator,
+                                        TimeValue timeout,
+                                        ActionListener<SearchShardIterator> listener) {
         final ShardId shardId = searchShardIterator.shardId();
         ClusterState state = clusterService.state();
 
