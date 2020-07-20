@@ -60,46 +60,46 @@ public class AzureRepositorySettingsTests extends ESTestCase {
             .build()).isReadOnly(), is(true));
     }
 
-//    public void testReadonlyWithPrimaryOnly() {
-//        assertThat(azureRepository(Settings.builder()
-//            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.PRIMARY_ONLY.name())
-//            .build()).isReadOnly(), is(false));
-//    }
-//
-//    public void testReadonlyWithPrimaryOnlyAndReadonlyOn() {
-//        assertThat(azureRepository(Settings.builder()
-//            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.PRIMARY_ONLY.name())
-//            .put("readonly", true)
-//            .build()).isReadOnly(), is(true));
-//    }
-//
-//    public void testReadonlyWithSecondaryOnlyAndReadonlyOn() {
-//        assertThat(azureRepository(Settings.builder()
-//            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.SECONDARY_ONLY.name())
-//            .put("readonly", true)
-//            .build()).isReadOnly(), is(true));
-//    }
-//
-//    public void testReadonlyWithSecondaryOnlyAndReadonlyOff() {
-//        assertThat(azureRepository(Settings.builder()
-//            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.SECONDARY_ONLY.name())
-//            .put("readonly", false)
-//            .build()).isReadOnly(), is(false));
-//    }
-//
-//    public void testReadonlyWithPrimaryAndSecondaryOnlyAndReadonlyOn() {
-//        assertThat(azureRepository(Settings.builder()
-//            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.PRIMARY_THEN_SECONDARY.name())
-//            .put("readonly", true)
-//            .build()).isReadOnly(), is(true));
-//    }
-//
-//    public void testReadonlyWithPrimaryAndSecondaryOnlyAndReadonlyOff() {
-//        assertThat(azureRepository(Settings.builder()
-//            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.PRIMARY_THEN_SECONDARY.name())
-//            .put("readonly", false)
-//            .build()).isReadOnly(), is(false));
-//    }
+    public void testReadonlyWithPrimaryOnly() {
+        assertThat(azureRepository(Settings.builder()
+            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.PRIMARY_ONLY.name())
+            .build()).isReadOnly(), is(false));
+    }
+
+    public void testReadonlyWithPrimaryOnlyAndReadonlyOn() {
+        assertThat(azureRepository(Settings.builder()
+            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.PRIMARY_ONLY.name())
+            .put("readonly", true)
+            .build()).isReadOnly(), is(true));
+    }
+
+    public void testReadonlyWithSecondaryOnlyAndReadonlyOn() {
+        assertThat(azureRepository(Settings.builder()
+            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.SECONDARY_ONLY.name())
+            .put("readonly", true)
+            .build()).isReadOnly(), is(true));
+    }
+
+    public void testReadonlyWithSecondaryOnlyAndReadonlyOff() {
+        assertThat(azureRepository(Settings.builder()
+            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.SECONDARY_ONLY.name())
+            .put("readonly", false)
+            .build()).isReadOnly(), is(false));
+    }
+
+    public void testReadonlyWithPrimaryAndSecondaryOnlyAndReadonlyOn() {
+        assertThat(azureRepository(Settings.builder()
+            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.PRIMARY_THEN_SECONDARY.name())
+            .put("readonly", true)
+            .build()).isReadOnly(), is(true));
+    }
+
+    public void testReadonlyWithPrimaryAndSecondaryOnlyAndReadonlyOff() {
+        assertThat(azureRepository(Settings.builder()
+            .put(AzureRepository.Repository.LOCATION_MODE_SETTING.getKey(), LocationMode.PRIMARY_THEN_SECONDARY.name())
+            .put("readonly", false)
+            .build()).isReadOnly(), is(false));
+    }
 
     public void testChunkSize() {
         // default chunk size

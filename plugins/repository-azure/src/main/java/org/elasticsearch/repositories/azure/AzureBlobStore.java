@@ -30,6 +30,7 @@ import com.azure.storage.blob.specialized.BlobInputStream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.cluster.metadata.RepositoryMetadata;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.blobstore.BlobContainer;
@@ -45,6 +46,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URISyntaxException;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -63,6 +65,7 @@ public class AzureBlobStore implements BlobStore {
 
     private final String clientName;
     private final String container;
+    private final LocationMode locationMode;
 
     private final Stats stats = new Stats();
 
@@ -76,7 +79,7 @@ public class AzureBlobStore implements BlobStore {
         this.service = service;
         this.threadPool = threadPool;
         // locationMode is set per repository, not per client
-        //this.locationMode = Repository.LOCATION_MODE_SETTING.get(metadata.settings());
+        this.locationMode = Repository.LOCATION_MODE_SETTING.get(metadata.settings());
         final Map<String, AzureStorageSettings> prevSettings = this.service.refreshAndClearCache(emptyMap());
         final Map<String, AzureStorageSettings> newSettings = AzureStorageSettings.overrideLocationMode(prevSettings);
         this.service.refreshAndClearCache(newSettings);
@@ -120,12 +123,12 @@ public class AzureBlobStore implements BlobStore {
         return service;
     }
 
-//    /**
-//     * Gets the configured {@link LocationMode} for the Azure storage requests.
-//     */
-//    public LocationMode getLocationMode() {
-//        return locationMode;
-//    }
+    /**
+     * Gets the configured {@link LocationMode} for the Azure storage requests.
+     */
+    public LocationMode getLocationMode() {
+        return locationMode;
+    }
 
     @Override
     public BlobContainer blobContainer(BlobPath path) {
@@ -165,15 +168,14 @@ public class AzureBlobStore implements BlobStore {
 //        final BlobServiceClient client = client();
 //        //final OperationContext context = hookMetricCollector(client.v2().get(), getMetricsCollector);
 //        final BlobContainerClient blobContainer = client.getBlobContainerClient(container);
-//        blobContainer.list
 //
-//        final Tuple<CloudBlobClient, Supplier<OperationContext>> client = client();
-//        final OperationContext context = hookMetricCollector(client.v2().get(), listMetricsCollector);
-//        final CloudBlobContainer blobContainer = client.v1().getContainerReference(container);
+//        ListBlobsOptions listBlobsOptions = new ListBlobsOptions();
+//        listBlobsOptions.setDetails(new BlobListDetails());
+//
 //        final Collection<Exception> exceptions = Collections.synchronizedList(new ArrayList<>());
 //        final AtomicLong outstanding = new AtomicLong(1L);
 //        final PlainActionFuture<Void> result = PlainActionFuture.newFuture();
-//        final AtomicLong blobsDeleted = new AtomicLong();
+//        final Collection blobsDeleted = new AtomicLong();
 //        final AtomicLong bytesDeleted = new AtomicLong();
 //        SocketAccess.doPrivilegedVoidException(() -> {
 //            for (final ListBlobItem blobItem : blobContainer.listBlobs(path, true,

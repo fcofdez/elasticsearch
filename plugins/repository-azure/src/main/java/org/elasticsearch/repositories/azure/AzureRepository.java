@@ -34,6 +34,7 @@ import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.indices.recovery.RecoverySettings;
 import org.elasticsearch.repositories.blobstore.BlobStoreRepository;
 
+import java.util.Locale;
 import java.util.function.Function;
 
 import static org.elasticsearch.repositories.azure.AzureStorageService.MAX_CHUNK_SIZE;
@@ -63,8 +64,8 @@ public class AzureRepository extends BlobStoreRepository {
         public static final Setting<String> CONTAINER_SETTING =
             new Setting<>("container", "elasticsearch-snapshots", Function.identity(), Property.NodeScope);
         public static final Setting<String> BASE_PATH_SETTING = Setting.simpleString("base_path", Property.NodeScope);
-//        public static final Setting<LocationMode> LOCATION_MODE_SETTING = new Setting<>("location_mode",
-//                s -> LocationMode.PRIMARY_ONLY.toString(), s -> LocationMode.valueOf(s.toUpperCase(Locale.ROOT)), Property.NodeScope);
+        public static final Setting<LocationMode> LOCATION_MODE_SETTING = new Setting<>("location_mode",
+                s -> LocationMode.PRIMARY_ONLY.toString(), s -> LocationMode.valueOf(s.toUpperCase(Locale.ROOT)), Property.NodeScope);
         public static final Setting<ByteSizeValue> CHUNK_SIZE_SETTING =
             Setting.byteSizeSetting("chunk_size", MAX_CHUNK_SIZE, MIN_CHUNK_SIZE, MAX_CHUNK_SIZE, Property.NodeScope);
         public static final Setting<Boolean> READONLY_SETTING = Setting.boolSetting("readonly", false, Property.NodeScope);
@@ -86,7 +87,7 @@ public class AzureRepository extends BlobStoreRepository {
 
         // If the user explicitly did not define a readonly value, we set it by ourselves depending on the location mode setting.
         // For secondary_only setting, the repository should be read only
-//        final LocationMode locationMode = Repository.LOCATION_MODE_SETTING.get(metadata.settings());
+        final LocationMode locationMode = Repository.LOCATION_MODE_SETTING.get(metadata.settings());
         if (Repository.READONLY_SETTING.exists(metadata.settings())) {
             this.readonly = Repository.READONLY_SETTING.get(metadata.settings());
         } else {
