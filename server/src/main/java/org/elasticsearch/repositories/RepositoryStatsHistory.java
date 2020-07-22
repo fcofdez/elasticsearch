@@ -19,87 +19,88 @@
 
 package org.elasticsearch.repositories;
 
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
+import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.common.io.stream.Writeable;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
+import java.util.Iterator;
 import java.util.List;
-import java.util.UUID;
 
-public class RepositoryStatsHistory {
-    private final String repositoryName;
-    private final CircularBuffer reposHistory;
+public final class RepositoryStatsHistory implements Writeable {
+    private final String repositoryId;
+    private final int maxElements;
+    private final Deque<RepositoryStats> reposHistory;
 
-    public RepositoryStatsHistory(String repositoryName, int maxElements) {
-        this.repositoryName = repositoryName;
-        this.reposHistory = new CircularBuffer(maxElements);
+    public static RepositoryStatsHistory singleton(RepositoryStats repositoryStats, int maxElements) {
+        RepositoryStatsHistory repoHistory = new RepositoryStatsHistory(repositoryStats.id(), maxElements);
+        repoHistory.addRepositoryStats(repositoryStats);
+        return repoHistory;
+    }
+
+    RepositoryStatsHistory(String repositoryId, int maxElements) {
+        this.repositoryId = repositoryId;
+        this.reposHistory = new ArrayDeque<>(maxElements);
+        this.maxElements = maxElements;
+    }
+
+    RepositoryStatsHistory(StreamInput in) throws IOException {
+        this.repositoryId = in.readString();
+        this.maxElements = in.readInt();
+        this.reposHistory = new ArrayDeque<>();
+        int size = in.readInt();
+        for (int i = 0; i < size; i++) {
+            reposHistory.offer(new RepositoryStats(in));
+        }
+    }
+
+    public List<RepositoryStats> asList() {
+        List<RepositoryStats> repoHists = new ArrayList<>(reposHistory.size());
+        Iterator<RepositoryStats> it = reposHistory.descendingIterator();
+
+        while (it.hasNext()) {
+            repoHists.add(it.next());
+        }
+        return Collections.unmodifiableList(repoHists);
+    }
+
+    boolean isEmpty() {
+        return reposHistory.isEmpty();
     }
 
     void addRepositoryStats(RepositoryStats repositoryStats) {
-        closeCurrentRepoIfPresent();
-        reposHistory.add(new RepoHist(repositoryStats));
+        assert repositoryStats.id().equals(repositoryId);
+
+        if (reposHistory.size() == maxElements) {
+            reposHistory.poll();
+        }
+        reposHistory.offer(repositoryStats);
     }
 
-    void closeCurrentRepoIfPresent() {
-        RepoHist activeRepo = reposHistory.getCurrent();
-        if (activeRepo != null) {
-            activeRepo.stop();
-        }
-    }
-
-    private static class CircularBuffer {
-        private final int maxElements;
-        private final RepoHist[] reposHistory;
-        private int head;
-        private int activeRepoIndex;
-        private int size;
-
-        private CircularBuffer(int maxElements) {
-            this.maxElements = maxElements;
-            this.reposHistory = new RepoHist[maxElements];
-            this.head = 0;
-            this.activeRepoIndex = 0;
-            this.size = 0;
-        }
-
-        private void add(RepoHist repoHist) {
-            activeRepoIndex = head;
-            reposHistory[activeRepoIndex] = repoHist;
-            head = (head + 1) % maxElements;
-
-            size = Math.min(maxElements, size + 1);
-        }
-
-        List<RepoHist> lifoList() {
-            List<RepoHist> repos = new ArrayList<>(size);
-            for (int dstIdx = 0, srcIdx = activeRepoIndex; dstIdx < size; dstIdx++) {
-                repos.add(reposHistory[srcIdx--]);
-                if (srcIdx < 0) {
-                    srcIdx = size;
-                }
-            }
-            return repos;
-        }
-
-        RepoHist getCurrent() {
-            return reposHistory[activeRepoIndex];
+    void evictStatsOlderThan(Duration duration) {
+        RepositoryStats stats;
+        while ((stats = reposHistory.peek()) != null && stats.olderThan(duration)) {
+            reposHistory.poll();
         }
     }
 
-    static class RepoHist {
-        private final UUID id;
-        private final ZonedDateTime startedAt;
-        private final RepositoryStats repositoryStats;
-        private ZonedDateTime stoppedAt;
+    static RepositoryStatsHistory merge(RepositoryStatsHistory repositoryStatsHistory,
+                                        RepositoryStatsHistory repositoryStatsHistory1) {
+        return repositoryStatsHistory;
+    }
 
-        public RepoHist(RepositoryStats repositoryStats) {
-            this.id = UUID.randomUUID();
-            this.startedAt = ZonedDateTime.now(ZoneOffset.UTC);
-            this.repositoryStats = repositoryStats;
-        }
-
-        void stop() {
-            assert stoppedAt == null;
-            stoppedAt = ZonedDateTime.now(ZoneOffset.UTC);
+    @Override
+    public void writeTo(StreamOutput out) throws IOException {
+        out.writeString(repositoryId);
+        out.writeInt(maxElements);
+        out.writeInt(reposHistory.size());
+        for (RepositoryStats stats : reposHistory) {
+            stats.writeTo(out);
         }
     }
 }

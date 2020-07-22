@@ -122,6 +122,7 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.NoSuchFileException;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -273,6 +274,8 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
      * </ul>
      */
     private volatile boolean bestEffortConsistency;
+
+    private final ZonedDateTime startedAt = ZonedDateTime.now();
 
     /**
      * Constructs new BlobStoreRepository
@@ -523,13 +526,8 @@ public abstract class BlobStoreRepository extends AbstractLifecycleComponent imp
         return metadata;
     }
 
-    @Override
-    public RepositoryStats stats() {
-        final BlobStore store = blobStore.get();
-        if (store == null) {
-            return RepositoryStats.EMPTY_STATS;
-        }
-        return new RepositoryStats(store.stats());
+    public ZonedDateTime getStartedAt() {
+        return startedAt;
     }
 
     @Override

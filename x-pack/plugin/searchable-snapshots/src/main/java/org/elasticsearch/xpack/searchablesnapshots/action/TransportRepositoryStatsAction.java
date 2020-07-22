@@ -84,6 +84,6 @@ public class TransportRepositoryStatsAction extends TransportNodesAction<
             return new RepositoryStatsNodeResponse(clusterService.localNode(), RepositoryStats.EMPTY_STATS);
         }
         final Repository repository = repositoriesService.repository(request.getRepository());
-        return new RepositoryStatsNodeResponse(clusterService.localNode(), repository.stats());
+        return new RepositoryStatsNodeResponse(clusterService.localNode(), repository.stats().get());
     }
 }

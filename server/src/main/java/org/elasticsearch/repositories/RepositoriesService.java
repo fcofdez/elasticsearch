@@ -56,6 +56,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Service responsible for maintaining and providing access to snapshot repositories on nodes.
@@ -75,7 +78,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
 
     private final Map<String, Repository> internalRepositories = ConcurrentCollections.newConcurrentMap();
     private volatile Map<String, Repository> repositories = Collections.emptyMap();
-    private final Map<String, RepositoryStatsHistory> reposHistory = ConcurrentCollections.newConcurrentMap();
+    private final RepositoriesStatsHistory repositoriesStatsHistory;
 
     public RepositoriesService(Settings settings, ClusterService clusterService, TransportService transportService,
                                Map<String, Repository.Factory> typesRegistry, Map<String, Repository.Factory> internalTypesRegistry,
@@ -90,6 +93,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
             clusterService.addHighPriorityApplier(this);
         }
         this.verifyAction = new VerifyNodeRepositoryAction(transportService, clusterService, this);
+        this.repositoriesStatsHistory = new RepositoriesStatsHistory(threadPool);
     }
 
     /**
@@ -398,6 +402,20 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
         throw new RepositoryMissingException(repositoryName);
     }
 
+    public Map<String, RepositoryStatsHistory> repositoriesStats() {
+        // TODO ensure started
+        Map<String, Repository> currentRepositories = repositories;
+
+        Map<String, RepositoryStatsHistory> activeRepositoriesStats =
+            Stream.concat(currentRepositories.values().stream(), internalRepositories.values().stream())
+                .map(Repository::stats)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.toMap(RepositoryStats::id, r -> RepositoryStatsHistory.singleton(r, 5)));
+
+        return repositoriesStatsHistory.merge(activeRepositoriesStats);
+    }
+
     public void registerInternalRepository(String name, String type) {
         RepositoryMetadata metadata = new RepositoryMetadata(name, type, Settings.EMPTY);
         Repository repository = internalRepositories.computeIfAbsent(name, (n) -> {
@@ -426,6 +444,8 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
     private void closeRepository(Repository repository) {
         logger.debug("closing repository [{}][{}]", repository.getMetadata().type(), repository.getMetadata().name());
         repository.close();
+        Optional<RepositoryStats> stats = repository.stats();
+        stats.ifPresent(repositoriesStatsHistory::addRepositoryStats);
     }
 
     /**
@@ -507,7 +527,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
 
     @Override
     protected void doStart() {
-
+        repositoriesStatsHistory.start();
     }
 
     @Override
@@ -522,5 +542,6 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
         repos.addAll(internalRepositories.values());
         repos.addAll(repositories.values());
         IOUtils.close(repos);
+        repositoriesStatsHistory.close();
     }
 }
