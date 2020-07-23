@@ -44,12 +44,15 @@ import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
 import org.elasticsearch.common.regex.Regex;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.core.internal.io.IOUtils;
+import org.elasticsearch.threadpool.Scheduler;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -80,6 +83,8 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
     private volatile Map<String, Repository> repositories = Collections.emptyMap();
     private final RepositoriesStatsHistory repositoriesStatsHistory;
 
+    private Scheduler.Cancellable repoHistoryCleanerTask;
+
     public RepositoriesService(Settings settings, ClusterService clusterService, TransportService transportService,
                                Map<String, Repository.Factory> typesRegistry, Map<String, Repository.Factory> internalTypesRegistry,
                                ThreadPool threadPool) {
@@ -93,7 +98,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
             clusterService.addHighPriorityApplier(this);
         }
         this.verifyAction = new VerifyNodeRepositoryAction(transportService, clusterService, this);
-        this.repositoriesStatsHistory = new RepositoriesStatsHistory(threadPool);
+        this.repositoriesStatsHistory = new RepositoriesStatsHistory(5);
     }
 
     /**
@@ -402,16 +407,16 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
         throw new RepositoryMissingException(repositoryName);
     }
 
-    public Map<String, RepositoryStatsHistory> repositoriesStats() {
+    public RepositoriesStatsHistory repositoriesStats() {
         // TODO ensure started
         Map<String, Repository> currentRepositories = repositories;
 
-        Map<String, RepositoryStatsHistory> activeRepositoriesStats =
-            Stream.concat(currentRepositories.values().stream(), internalRepositories.values().stream())
-                .map(Repository::stats)
-                .filter(Optional::isPresent)
-                .map(Optional::get)
-                .collect(Collectors.toMap(RepositoryStats::id, r -> RepositoryStatsHistory.singleton(r, 5)));
+        RepositoriesStatsHistory activeRepositoriesStats = new RepositoriesStatsHistory(5);
+        Stream.concat(currentRepositories.values().stream(), internalRepositories.values().stream())
+            .map(Repository::stats)
+            .filter(Optional::isPresent)
+            .map(Optional::get)
+            .forEach(activeRepositoriesStats::addRepositoryStats);
 
         return repositoriesStatsHistory.merge(activeRepositoriesStats);
     }
@@ -527,12 +532,15 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
 
     @Override
     protected void doStart() {
-        repositoriesStatsHistory.start();
+        this.repoHistoryCleanerTask =
+            threadPool.scheduleWithFixedDelay(() -> repositoriesStatsHistory.cleanOldRepoStats(Duration.ZERO),
+                TimeValue.timeValueMillis(1000),
+                ThreadPool.Names.GENERIC);
     }
 
     @Override
     protected void doStop() {
-
+        repoHistoryCleanerTask.cancel();
     }
 
     @Override
@@ -542,6 +550,5 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
         repos.addAll(internalRepositories.values());
         repos.addAll(repositories.values());
         IOUtils.close(repos);
-        repositoriesStatsHistory.close();
     }
 }

@@ -19,13 +19,9 @@
 
 package org.elasticsearch.repositories;
 
-import org.elasticsearch.common.component.AbstractLifecycleComponent;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.threadpool.Scheduler;
-import org.elasticsearch.threadpool.ThreadPool;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -33,31 +29,30 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 
-public class RepositoriesStatsHistory extends AbstractLifecycleComponent implements Writeable {
+public class RepositoriesStatsHistory implements Writeable {
+    private final int maxElements;
     private final Map<String, RepositoryStatsHistory> reposHistory;
 
-    private final ThreadPool threadPool;
-    private Scheduler.Cancellable cleaningTask;
-    // TODO Cleaning interval
-    // TODO max age
-    // TODO max element count per repository
+    RepositoriesStatsHistory(int maxElements) {
+        this(maxElements, new HashMap<>());
+    }
 
-    public RepositoriesStatsHistory(ThreadPool threadPool) {
-        this.threadPool = threadPool;
-        this.reposHistory = new HashMap<>();
+    RepositoriesStatsHistory(int maxElements, Map<String, RepositoryStatsHistory> reposHistory) {
+        this.maxElements = maxElements;
+        this.reposHistory = reposHistory;
     }
 
     public RepositoriesStatsHistory(StreamInput in) throws IOException {
-        this.threadPool = null;
+        this.maxElements = in.readInt();
         this.reposHistory = in.readMap(StreamInput::readString, RepositoryStatsHistory::new);
     }
 
-    private synchronized void cleanOldRepoStats() {
+    synchronized void cleanOldRepoStats(Duration age) {
         Iterator<Map.Entry<String, RepositoryStatsHistory>> it = reposHistory.entrySet().iterator();
         while (it.hasNext()) {
             RepositoryStatsHistory repositoryStatsHistory = it.next().getValue();
 
-            repositoryStatsHistory.evictStatsOlderThan(Duration.ZERO);
+            repositoryStatsHistory.evictStatsOlderThan(age);
             if (repositoryStatsHistory.isEmpty()) {
                 it.remove();
             }
@@ -70,34 +65,22 @@ public class RepositoriesStatsHistory extends AbstractLifecycleComponent impleme
         repositoryStatsHistory.addRepositoryStats(repositoryStats);
     }
 
-    synchronized Map<String, RepositoryStatsHistory> merge(Map<String, RepositoryStatsHistory> currentRepos) {
-        // TODO convert that argument as a RepositoriesStatsHistory? and schedule outside?
+    synchronized RepositoriesStatsHistory merge(RepositoriesStatsHistory other) {
+        if (maxElements != other.maxElements) {
+            throw new IllegalArgumentException();
+        }
+
         Map<String, RepositoryStatsHistory> histories = new HashMap<>(reposHistory);
-        for (Map.Entry<String, RepositoryStatsHistory> currentRepoEntry : currentRepos.entrySet()) {
+        for (Map.Entry<String, RepositoryStatsHistory> currentRepoEntry : other.reposHistory.entrySet()) {
             histories.merge(currentRepoEntry.getKey(), currentRepoEntry.getValue(), RepositoryStatsHistory::merge);
         }
-        return histories;
-    }
 
-    @Override
-    protected synchronized void doStart() {
-        cleaningTask = threadPool.scheduleWithFixedDelay(this::cleanOldRepoStats, TimeValue.ZERO, ThreadPool.Names.GENERIC);
-    }
-
-    @Override
-    protected synchronized void doStop() {
-        if (cleaningTask != null) {
-            cleaningTask.cancel();
-        }
-    }
-
-    @Override
-    protected void doClose() throws IOException {
-
+        return new RepositoriesStatsHistory(maxElements, histories);
     }
 
     @Override
     public synchronized void writeTo(StreamOutput out) throws IOException {
+        out.writeInt(maxElements);
         out.writeMap(reposHistory, StreamOutput::writeString, (o, stats) -> stats.writeTo(o));
     }
 }

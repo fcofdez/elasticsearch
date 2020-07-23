@@ -65,10 +65,10 @@ public class RepositoryStats implements Writeable {
     }
 
     public RepositoryStats(StreamInput in) throws IOException {
-        this.requestCounts = in.readMap(StreamInput::readString, StreamInput::readLong);
         this.name = in.readString();
         this.type = in.readString();
         this.location = in.readString();
+        this.requestCounts = in.readMap(StreamInput::readString, StreamInput::readLong);
         this.startedAt = in.readInstant();
         this.stoppedAt = in.readOptionalInstant();
     }
@@ -95,10 +95,10 @@ public class RepositoryStats implements Writeable {
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        out.writeMap(requestCounts, StreamOutput::writeString, StreamOutput::writeLong);
         out.writeString(name);
         out.writeString(type);
         out.writeString(location);
+        out.writeMap(requestCounts, StreamOutput::writeString, StreamOutput::writeLong);
         out.writeInstant(startedAt);
         out.writeOptionalInstant(stoppedAt);
     }

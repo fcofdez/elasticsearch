@@ -91,6 +91,9 @@ public final class RepositoryStatsHistory implements Writeable {
 
     static RepositoryStatsHistory merge(RepositoryStatsHistory repositoryStatsHistory,
                                         RepositoryStatsHistory repositoryStatsHistory1) {
+        assert repositoryStatsHistory.repositoryId.equals(repositoryStatsHistory1.repositoryId);
+        assert repositoryStatsHistory.maxElements == repositoryStatsHistory1.maxElements;
+
         return repositoryStatsHistory;
     }
 
