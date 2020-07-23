@@ -17,25 +17,22 @@
  * under the License.
  */
 
-package org.elasticsearch.action.admin.cluster.node.metering;
+package org.elasticsearch.repositories;
 
-import org.elasticsearch.action.support.nodes.BaseNodesRequest;
-import org.elasticsearch.cluster.node.DiscoveryNode;
-import org.elasticsearch.common.io.stream.StreamInput;
 
-import java.io.IOException;
+import org.elasticsearch.test.ESTestCase;
 
-public class NodesRepositoriesCountersRequest extends BaseNodesRequest<NodesRepositoriesCountersRequest> {
-    public NodesRepositoriesCountersRequest(StreamInput in) throws IOException {
-        super(in);
-    }
+import java.time.Instant;
+import java.util.Collections;
 
-    public NodesRepositoriesCountersRequest(String... nodesIds) {
-        super(nodesIds);
-    }
-
-    public NodesRepositoriesCountersRequest(DiscoveryNode... concreteNodes) {
-        super(concreteNodes);
+public class RepositoriesStatsArchiveTests extends ESTestCase {
+    public void testMaxSizeIsEnforced() throws Exception {
+        int maxElements = randomIntBetween(0, 5);
+        RepositoriesStatsArchive repositoriesStatsArchive = new RepositoriesStatsArchive(5);
+        for (int i = 0; i < maxElements + 1; i++) {
+            RepositoryStats stats = new RepositoryStats("name", "type", "location", Collections.emptyMap(), Instant.now());
+            repositoriesStatsArchive.addRepositoryStats(stats);
+        }
     }
 
 }

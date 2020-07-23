@@ -81,9 +81,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
 
     private final Map<String, Repository> internalRepositories = ConcurrentCollections.newConcurrentMap();
     private volatile Map<String, Repository> repositories = Collections.emptyMap();
-    private final RepositoriesStatsHistory repositoriesStatsHistory;
-
-    private Scheduler.Cancellable repoHistoryCleanerTask;
+    private final RepositoriesStatsArchive repositoriesStatsArchive;
 
     public RepositoriesService(Settings settings, ClusterService clusterService, TransportService transportService,
                                Map<String, Repository.Factory> typesRegistry, Map<String, Repository.Factory> internalTypesRegistry,
@@ -98,7 +96,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
             clusterService.addHighPriorityApplier(this);
         }
         this.verifyAction = new VerifyNodeRepositoryAction(transportService, clusterService, this);
-        this.repositoriesStatsHistory = new RepositoriesStatsHistory(5);
+        this.repositoriesStatsArchive = new RepositoriesStatsArchive(5, TimeValue.ZERO);
     }
 
     /**
@@ -407,18 +405,18 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
         throw new RepositoryMissingException(repositoryName);
     }
 
-    public RepositoriesStatsHistory repositoriesStats() {
+    public List<RepositoryStats> repositoriesStats() {
         // TODO ensure started
         Map<String, Repository> currentRepositories = repositories;
 
-        RepositoriesStatsHistory activeRepositoriesStats = new RepositoriesStatsHistory(5);
-        Stream.concat(currentRepositories.values().stream(), internalRepositories.values().stream())
-            .map(Repository::stats)
-            .filter(Optional::isPresent)
-            .map(Optional::get)
-            .forEach(activeRepositoriesStats::addRepositoryStats);
+        List<RepositoryStats> activeRepositoriesStats =
+            Stream.concat(currentRepositories.values().stream(), internalRepositories.values().stream())
+                .map(Repository::stats)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.toList());
 
-        return repositoriesStatsHistory.merge(activeRepositoriesStats);
+        return repositoriesStatsArchive.merge(activeRepositoriesStats);
     }
 
     public void registerInternalRepository(String name, String type) {
@@ -450,7 +448,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
         logger.debug("closing repository [{}][{}]", repository.getMetadata().type(), repository.getMetadata().name());
         repository.close();
         Optional<RepositoryStats> stats = repository.stats();
-        stats.ifPresent(repositoriesStatsHistory::addRepositoryStats);
+        stats.ifPresent(repositoriesStatsArchive::addRepositoryStats);
     }
 
     /**
@@ -532,15 +530,10 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
 
     @Override
     protected void doStart() {
-        this.repoHistoryCleanerTask =
-            threadPool.scheduleWithFixedDelay(() -> repositoriesStatsHistory.cleanOldRepoStats(Duration.ZERO),
-                TimeValue.timeValueMillis(1000),
-                ThreadPool.Names.GENERIC);
     }
 
     @Override
     protected void doStop() {
-        repoHistoryCleanerTask.cancel();
     }
 
     @Override

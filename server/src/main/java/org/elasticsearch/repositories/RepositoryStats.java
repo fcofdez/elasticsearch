@@ -23,20 +23,23 @@ import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.xcontent.ToXContent;
+import org.elasticsearch.common.xcontent.XContentBuilder;
 
 import java.io.IOException;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
 
-public class RepositoryStats implements Writeable {
+public class RepositoryStats implements Writeable, ToXContent {
 
     public static final RepositoryStats EMPTY_STATS = new RepositoryStats("", "", "", Collections.emptyMap(), null, null);
 
-    private final String name;
-    private final String type;
-    private final String location;
+    public final String name;
+    public final String type;
+    public final String location;
     public final Map<String, Long> requestCounts;
     public final Instant startedAt;
     @Nullable
@@ -73,20 +76,23 @@ public class RepositoryStats implements Writeable {
         this.stoppedAt = in.readOptionalInstant();
     }
 
-    public String id() {
-        return name + type + location;
+    public String getId() {
+        return String.format("%s-%s-%s", name, type, location);
+    }
+
+    public Instant getStartedAt() {
+        return startedAt;
+    }
+
+    public boolean stoppedBefore(Instant instant) {
+        if (stoppedAt == null) {
+            return false;
+        }
+        return stoppedAt.isBefore(instant);
     }
 
     public RepositoryStats stop() {
         return new RepositoryStats(name, type, location, requestCounts, startedAt, Instant.now());
-    }
-
-    public boolean olderThan(Duration age) {
-        if (stoppedAt == null) {
-            return false;
-        }
-
-        return Duration.between(startedAt, stoppedAt).compareTo(age) >= 0;
     }
 
     public RepositoryStats merge(RepositoryStats otherStats) {
@@ -101,5 +107,39 @@ public class RepositoryStats implements Writeable {
         out.writeMap(requestCounts, StreamOutput::writeString, StreamOutput::writeLong);
         out.writeInstant(startedAt);
         out.writeOptionalInstant(stoppedAt);
+    }
+
+    @Override
+    public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+        builder.startObject();
+        builder.field("id", UUID.randomUUID().toString());
+        builder.field("repository_name", name);
+        builder.field("repository_type", type);
+        builder.field("repository_location", location);
+        builder.field("counter_started_at", startedAt.toString());
+        if (stoppedAt != null) {
+            builder.field("counter_stopped_at", startedAt.toString());
+        }
+        builder.field("request_counts", requestCounts);
+        builder.endObject();
+        return builder;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        RepositoryStats stats = (RepositoryStats) o;
+        return Objects.equals(name, stats.name) &&
+            Objects.equals(type, stats.type) &&
+            Objects.equals(location, stats.location) &&
+            Objects.equals(requestCounts, stats.requestCounts) &&
+            Objects.equals(startedAt, stats.startedAt) &&
+            Objects.equals(stoppedAt, stats.stoppedAt);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(name, type, location, requestCounts, startedAt, stoppedAt);
     }
 }

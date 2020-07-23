@@ -17,9 +17,18 @@
  * under the License.
  */
 
-package org.elasticsearch.action.admin.cluster.node.metering;
+package org.elasticsearch.repositories;
 
-import org.elasticsearch.transport.TransportRequest;
+import org.elasticsearch.test.ESTestCase;
 
-public class NodeRepositoriesCountersRequest extends TransportRequest {
+public class RepositoryStatsArchiveTests extends ESTestCase {
+
+    public void testMaxElementIsEnforced() {
+    }
+
+    public void testNLatestAreRetained() {
+    }
+
+    public void oldestElementIsEvictedWhenTheCacheIsFull() {
+    }
 }
