@@ -155,7 +155,7 @@ public interface Repository extends LifecycleComponent {
     /**
      * Returns stats on the repository usage
      */
-    default Optional<RepositoryStats> stats() {
+    default Optional<RepositoryStatsSnapshot> stats() {
         return Optional.empty();
     }
 

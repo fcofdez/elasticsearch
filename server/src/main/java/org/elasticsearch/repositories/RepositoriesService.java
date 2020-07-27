@@ -47,12 +47,10 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.core.internal.io.IOUtils;
-import org.elasticsearch.threadpool.Scheduler;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
 import java.io.IOException;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -131,7 +129,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
 
         // Trying to create the new repository on master to make sure it works
         try {
-            closeRepository(createRepository(newRepositoryMetadata, typesRegistry));
+            closeRepository(createRepository(newRepositoryMetadata, typesRegistry), false);
         } catch (Exception e) {
             registrationListener.onFailure(e);
             return;
@@ -405,18 +403,25 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
         throw new RepositoryMissingException(repositoryName);
     }
 
-    public List<RepositoryStats> repositoriesStats() {
-        // TODO ensure started
-        Map<String, Repository> currentRepositories = repositories;
+    public Map<RepositoryId, List<RepositoryStatsSnapshot>> repositoriesStats() {
+        Map<RepositoryId, List<RepositoryStatsSnapshot>> archivedRepoStatsById = repositoriesStatsArchive.asMap();
+        List<RepositoryStatsSnapshot> activeRepoStats = getActiveRepositoryStatsById();
 
-        List<RepositoryStats> activeRepositoriesStats =
-            Stream.concat(currentRepositories.values().stream(), internalRepositories.values().stream())
-                .map(Repository::stats)
-                .filter(Optional::isPresent)
-                .map(Optional::get)
-                .collect(Collectors.toList());
+        Map<RepositoryId, List<RepositoryStatsSnapshot>> repoStatsById = new HashMap<>(archivedRepoStatsById);
+        for (RepositoryStatsSnapshot activeRepo : activeRepoStats) {
+            List<RepositoryStatsSnapshot> repositoryStats = repoStatsById.computeIfAbsent(activeRepo.getId(), k -> new ArrayList<>());
+            repositoryStats.add(activeRepo);
+        }
 
-        return repositoriesStatsArchive.merge(activeRepositoriesStats);
+        return repoStatsById;
+    }
+
+    private List<RepositoryStatsSnapshot> getActiveRepositoryStatsById() {
+        return Stream.concat(repositories.values().stream(), internalRepositories.values().stream())
+            .map(Repository::stats)
+            .filter(Optional::isPresent)
+            .map(Optional::get)
+            .collect(Collectors.toList());
     }
 
     public void registerInternalRepository(String name, String type) {
@@ -445,10 +450,16 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
 
     /** Closes the given repository. */
     private void closeRepository(Repository repository) {
+        closeRepository(repository, true);
+    }
+
+    private void closeRepository(Repository repository, boolean archiveStats) {
         logger.debug("closing repository [{}][{}]", repository.getMetadata().type(), repository.getMetadata().name());
         repository.close();
-        Optional<RepositoryStats> stats = repository.stats();
-        stats.ifPresent(repositoriesStatsArchive::addRepositoryStats);
+        if (archiveStats) {
+            Optional<RepositoryStatsSnapshot> stats = repository.stats();
+            stats.ifPresent(repositoriesStatsArchive::addRepositoryStats);
+        }
     }
 
     /**

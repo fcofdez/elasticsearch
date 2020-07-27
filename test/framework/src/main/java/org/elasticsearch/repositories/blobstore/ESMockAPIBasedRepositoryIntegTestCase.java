@@ -38,7 +38,7 @@ import org.elasticsearch.mocksocket.MockHttpServer;
 import org.elasticsearch.repositories.RepositoriesService;
 import org.elasticsearch.repositories.Repository;
 import org.elasticsearch.repositories.RepositoryMissingException;
-import org.elasticsearch.repositories.RepositoryStats;
+import org.elasticsearch.repositories.RepositoryStatsSnapshot;
 import org.elasticsearch.test.BackgroundIndexer;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -202,7 +202,7 @@ public abstract class ESMockAPIBasedRepositoryIntegTestCase extends ESBlobStoreR
 
         assertAcked(client().admin().cluster().prepareDeleteSnapshot(repository, snapshot).get());
 
-        final RepositoryStats repositoryStats = StreamSupport.stream(
+        final RepositoryStatsSnapshot repositoryStats = StreamSupport.stream(
             internalCluster().getInstances(RepositoriesService.class).spliterator(), false)
             .map(repositoriesService -> {
                 try {
@@ -214,7 +214,7 @@ public abstract class ESMockAPIBasedRepositoryIntegTestCase extends ESBlobStoreR
             .filter(Objects::nonNull)
             .map(Repository::stats)
             .map(Optional::get)
-            .reduce(RepositoryStats::merge)
+            .reduce(RepositoryStatsSnapshot::merge)
             .get();
 
         Map<String, Long> sdkRequestCounts = repositoryStats.requestCounts;

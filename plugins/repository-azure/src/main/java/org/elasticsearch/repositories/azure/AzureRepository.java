@@ -33,14 +33,10 @@ import org.elasticsearch.common.settings.Setting.Property;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.indices.recovery.RecoverySettings;
-import org.elasticsearch.repositories.RepositoryStats;
-import org.elasticsearch.repositories.blobstore.BlobStoreRepository;
+import org.elasticsearch.repositories.RepositoryId;
 import org.elasticsearch.repositories.blobstore.MeteredBlobStoreRepository;
 
-import java.util.Collections;
 import java.util.Locale;
-import java.util.Map;
-import java.util.Optional;
 import java.util.function.Function;
 
 import static org.elasticsearch.repositories.azure.AzureStorageService.MAX_CHUNK_SIZE;
@@ -143,11 +139,16 @@ public class AzureRepository extends MeteredBlobStoreRepository {
     }
 
     @Override
-    protected String location() {
-        BlobPath location = new BlobPath();
-        location.add(container);
+    protected RepositoryId getRepositoryId() {
+        return new RepositoryId(metadata.name(), metadata.type(), location());
+    }
+
+    private String location() {
+        BlobPath location = BlobPath.cleanPath();
+
+        location = location.add(container);
         for (String path : basePath()) {
-            location.add(path);
+            location = location.add(path);
         }
 
         return location.buildAsString();

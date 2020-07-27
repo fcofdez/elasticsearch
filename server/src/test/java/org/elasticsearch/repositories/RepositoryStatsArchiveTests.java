@@ -19,16 +19,50 @@
 
 package org.elasticsearch.repositories;
 
+import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.test.ESTestCase;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Collections;
+
+import static org.hamcrest.Matchers.equalTo;
 
 public class RepositoryStatsArchiveTests extends ESTestCase {
 
-    public void testMaxElementIsEnforced() {
+    public void testStatsAreStoredUntilTheyAreOlderThanTheRetentionPeriod() {
+        RepositoryId repositoryId =
+            new RepositoryId(randomAlphaOfLength(10), randomAlphaOfLength(10), randomAlphaOfLength(10));
+
+        int retentionTimeInHours = randomIntBetween(1, 4);
+        RepositoryStatsArchive repositoryStatsArchive =
+            new RepositoryStatsArchive(repositoryId, 0, TimeValue.timeValueHours(retentionTimeInHours));
+
+        int statsCount = randomInt(10);
+        for (int i = 0; i < statsCount; i++) {
+            RepositoryStatsSnapshot repoStats = new RepositoryStatsSnapshot(repositoryId, Collections.emptyMap(), Instant.now());
+            repositoryStatsArchive.addRepositoryStats(repoStats);
+        }
+
+        assertThat(repositoryStatsArchive.getArchivedStats().size(), equalTo(statsCount));
     }
 
-    public void testNLatestAreRetained() {
-    }
+    public void testOldStatsAreRemovedOnceThereAreMoreThanMaxElementsInTheArchiveAndTheRetentionPeriodIsOver() {
+        RepositoryId repositoryId =
+            new RepositoryId(randomAlphaOfLength(10), randomAlphaOfLength(10), randomAlphaOfLength(10));
 
-    public void oldestElementIsEvictedWhenTheCacheIsFull() {
+        int retentionTimeInMinutes = randomIntBetween(1, 4);
+        int maxElements = randomInt(15);
+        RepositoryStatsArchive repositoryStatsArchive =
+            new RepositoryStatsArchive(repositoryId, maxElements, TimeValue.timeValueMinutes(retentionTimeInMinutes));
+
+        for (int i = 0; i < maxElements + 1; i++) {
+            RepositoryStatsSnapshot repoStats = new RepositoryStatsSnapshot(repositoryId,
+                Collections.emptyMap(),
+                Instant.now().minus(Duration.ofMinutes(retentionTimeInMinutes + 1)));
+            repositoryStatsArchive.addRepositoryStats(repoStats);
+        }
+
+        assertThat(repositoryStatsArchive.getArchivedStats().size(), equalTo(maxElements));
     }
 }

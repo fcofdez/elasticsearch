@@ -31,6 +31,7 @@ import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.indices.recovery.RecoverySettings;
 import org.elasticsearch.repositories.RepositoryException;
+import org.elasticsearch.repositories.RepositoryId;
 import org.elasticsearch.repositories.blobstore.MeteredBlobStoreRepository;
 
 import java.util.function.Function;
@@ -120,11 +121,16 @@ class GoogleCloudStorageRepository extends MeteredBlobStoreRepository {
     }
 
     @Override
-    protected String location() {
-        BlobPath location = new BlobPath();
-        location.add(bucket);
+    protected RepositoryId getRepositoryId() {
+        return new RepositoryId(metadata.name(), metadata.type(), location());
+    }
+
+    private String location() {
+        BlobPath location = BlobPath.cleanPath();
+
+        location = location.add(bucket);
         for (String path : basePath()) {
-            location.add(path);
+            location = location.add(path);
         }
 
         return location.buildAsString();

@@ -20,19 +20,36 @@
 package org.elasticsearch.repositories;
 
 
+import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.test.ESTestCase;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
+import static org.hamcrest.Matchers.equalTo;
 
 public class RepositoriesStatsArchiveTests extends ESTestCase {
-    public void testMaxSizeIsEnforced() throws Exception {
-        int maxElements = randomIntBetween(0, 5);
-        RepositoriesStatsArchive repositoriesStatsArchive = new RepositoriesStatsArchive(5);
-        for (int i = 0; i < maxElements + 1; i++) {
-            RepositoryStats stats = new RepositoryStats("name", "type", "location", Collections.emptyMap(), Instant.now());
-            repositoriesStatsArchive.addRepositoryStats(stats);
-        }
+    public void testEmptyRepositoryArchivesAreCleanedAfterInsertions() {
+        RepositoryId repositoryId = createRepositoryId();
+
+        int retentionTimeInHours = randomIntBetween(1, 4);
+        RepositoriesStatsArchive repositoriesStatsArchive =
+            new RepositoriesStatsArchive(0, TimeValue.timeValueHours(1));
+
+        RepositoryStatsSnapshot olderThanRetentionRepositoryStats =
+            new RepositoryStatsSnapshot(repositoryId, Collections.emptyMap(), Instant.now().minus(Duration.ofHours(retentionTimeInHours + 3)));
+
+        repositoriesStatsArchive.addRepositoryStats(olderThanRetentionRepositoryStats);
+
+        Map<RepositoryId, List<RepositoryStatsSnapshot>> repositoriesStats = repositoriesStatsArchive.asMap();
+        assertThat(repositoriesStats.size(), equalTo(0));
+    }
+
+    private RepositoryId createRepositoryId() {
+        return new RepositoryId(randomAlphaOfLength(10), randomAlphaOfLength(10), randomAlphaOfLength(10));
     }
 
 }

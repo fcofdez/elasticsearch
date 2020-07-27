@@ -15,7 +15,7 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.license.XPackLicenseState;
 import org.elasticsearch.repositories.RepositoriesService;
 import org.elasticsearch.repositories.Repository;
-import org.elasticsearch.repositories.RepositoryStats;
+import org.elasticsearch.repositories.RepositoryStatsSnapshot;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
@@ -81,7 +81,7 @@ public class TransportRepositoryStatsAction extends TransportNodesAction<
     protected RepositoryStatsNodeResponse nodeOperation(RepositoryStatsNodeRequest request, Task task) {
         SearchableSnapshots.ensureValidLicense(licenseState);
         if (clusterService.localNode().isMasterNode() == false && clusterService.localNode().isDataNode() == false) {
-            return new RepositoryStatsNodeResponse(clusterService.localNode(), RepositoryStats.EMPTY_STATS);
+            return new RepositoryStatsNodeResponse(clusterService.localNode(), RepositoryStatsSnapshot.EMPTY_STATS);
         }
         final Repository repository = repositoriesService.repository(request.getRepository());
         return new RepositoryStatsNodeResponse(clusterService.localNode(), repository.stats().get());

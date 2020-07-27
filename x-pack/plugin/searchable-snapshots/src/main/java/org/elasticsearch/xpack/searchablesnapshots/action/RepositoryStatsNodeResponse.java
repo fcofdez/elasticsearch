@@ -12,20 +12,20 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.repositories.RepositoryStats;
+import org.elasticsearch.repositories.RepositoryStatsSnapshot;
 
 import java.io.IOException;
 
 public class RepositoryStatsNodeResponse extends BaseNodeResponse implements ToXContentObject {
 
-    private final RepositoryStats repositoryStats;
+    private final RepositoryStatsSnapshot repositoryStats;
 
     public RepositoryStatsNodeResponse(StreamInput in) throws IOException {
         super(in);
-        repositoryStats = new RepositoryStats(in);
+        repositoryStats = new RepositoryStatsSnapshot(in);
     }
 
-    public RepositoryStatsNodeResponse(DiscoveryNode node, RepositoryStats repositoryStats) {
+    public RepositoryStatsNodeResponse(DiscoveryNode node, RepositoryStatsSnapshot repositoryStats) {
         super(node);
         this.repositoryStats = repositoryStats;
     }
@@ -46,7 +46,7 @@ public class RepositoryStatsNodeResponse extends BaseNodeResponse implements ToX
         return builder;
     }
 
-    public RepositoryStats getRepositoryStats() {
+    public RepositoryStatsSnapshot getRepositoryStats() {
         return repositoryStats;
     }
 

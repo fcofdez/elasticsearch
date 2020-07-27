@@ -21,51 +21,44 @@ package org.elasticsearch.repositories;
 
 import org.elasticsearch.common.unit.TimeValue;
 
-import java.util.ArrayList;
-import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 public final class RepositoriesStatsArchive {
-    private final int maxElements;
-    private final TimeValue retention;
-    private final Map<String, RepositoryStatsArchive> archives;
+    private final int maxStatsPerRepository;
+    private final TimeValue retentionPeriod;
+    private final Map<RepositoryId, RepositoryStatsArchive> archives;
 
-    RepositoriesStatsArchive(int maxElements, TimeValue retention) {
-        if (maxElements < 0) {
-            throw new IllegalArgumentException("maxElements must be greater than or equal to 0");
+    RepositoriesStatsArchive(int maxStatsPerRepository, TimeValue retentionPeriod) {
+        if (maxStatsPerRepository < 0) {
+            throw new IllegalArgumentException("minElements must be greater than or equal to 0");
         }
-        this.maxElements = maxElements;
-        this.retention = retention;
+        this.maxStatsPerRepository = maxStatsPerRepository;
+        this.retentionPeriod = retentionPeriod;
         this.archives = new HashMap<>();
     }
 
-    synchronized void addRepositoryStats(RepositoryStats repositoryStats) {
+    synchronized void addRepositoryStats(RepositoryStatsSnapshot repositoryStats) {
         RepositoryStatsArchive repositoryStatsArchive = archives.computeIfAbsent(repositoryStats.getId(),
-            repoId -> new RepositoryStatsArchive(repoId, maxElements, retention));
+            repoId -> new RepositoryStatsArchive(repoId, maxStatsPerRepository, retentionPeriod));
         repositoryStatsArchive.addRepositoryStats(repositoryStats);
         cleanEmptyRepositoryArchives();
     }
 
-    synchronized void cleanEmptyRepositoryArchives() {
-        archives.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-    }
-
-    synchronized List<RepositoryStats> merge(List<RepositoryStats> activeRepositoryStats) {
+    synchronized Map<RepositoryId, List<RepositoryStatsSnapshot>> asMap() {
         cleanEmptyRepositoryArchives();
 
-        Map<String, List<RepositoryStats>> repositoryStatsById = new HashMap<>();
+        Map<RepositoryId, List<RepositoryStatsSnapshot>> repositoryStatsById = new HashMap<>();
         for (RepositoryStatsArchive archive : archives.values()) {
             repositoryStatsById.put(archive.getRepositoryId(), archive.getArchivedStats());
         }
 
-        for (RepositoryStats activeRepositoryStat : activeRepositoryStats) {
-            List<RepositoryStats> repositoryStats = repositoryStatsById.computeIfAbsent(activeRepositoryStat.getId(), k -> new ArrayList<>());
-            repositoryStats.addAll(activeRepositoryStats);
-        }
+        return Collections.unmodifiableMap(repositoryStatsById);
+    }
 
-        return repositoryStatsById.values().stream().flatMap(Collection::stream).collect(Collectors.toUnmodifiableList());
+    synchronized void cleanEmptyRepositoryArchives() {
+        archives.entrySet().removeIf(entry -> entry.getValue().isEmpty());
     }
 }

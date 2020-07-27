@@ -13,14 +13,14 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.repositories.RepositoryStats;
+import org.elasticsearch.repositories.RepositoryStatsSnapshot;
 
 import java.io.IOException;
 import java.util.List;
 
 public class RepositoryStatsResponse extends BaseNodesResponse<RepositoryStatsNodeResponse> implements ToXContentObject {
 
-    private final RepositoryStats globalStats;
+    private final RepositoryStatsSnapshot globalStats;
 
     public RepositoryStatsResponse(ClusterName clusterName, List<RepositoryStatsNodeResponse> nodes, List<FailedNodeException> failures) {
         super(clusterName, nodes, failures);
@@ -32,11 +32,11 @@ public class RepositoryStatsResponse extends BaseNodesResponse<RepositoryStatsNo
         globalStats = computeGlobalStats(getNodes());
     }
 
-    private static RepositoryStats computeGlobalStats(List<RepositoryStatsNodeResponse> nodes) {
+    private static RepositoryStatsSnapshot computeGlobalStats(List<RepositoryStatsNodeResponse> nodes) {
         if (nodes.isEmpty()) {
-            return RepositoryStats.EMPTY_STATS;
+            return RepositoryStatsSnapshot.EMPTY_STATS;
         } else {
-            return nodes.stream().map(RepositoryStatsNodeResponse::getRepositoryStats).reduce(RepositoryStats::merge).get();
+            return nodes.stream().map(RepositoryStatsNodeResponse::getRepositoryStats).reduce(RepositoryStatsSnapshot::merge).get();
         }
     }
 

@@ -25,7 +25,8 @@ import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.BlobStore;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.indices.recovery.RecoverySettings;
-import org.elasticsearch.repositories.RepositoryStats;
+import org.elasticsearch.repositories.RepositoryId;
+import org.elasticsearch.repositories.RepositoryStatsSnapshot;
 
 import java.util.Collections;
 import java.util.Map;
@@ -42,12 +43,12 @@ public abstract class MeteredBlobStoreRepository extends BlobStoreRepository {
     }
 
     @Override
-    public Optional<RepositoryStats> stats() {
+    public Optional<RepositoryStatsSnapshot> stats() {
         BlobStore store = getBlobStore();
         Map<String, Long> requestCount = store == null ? Collections.emptyMap() : store.stats();
-        return Optional.of(new RepositoryStats(metadata.name(), metadata.type(), location(), requestCount, getStartedAt()));
+        return Optional.of(new RepositoryStatsSnapshot(getRepositoryId(), requestCount, getStartedAt()));
     }
 
-    protected abstract String location();
+    protected abstract RepositoryId getRepositoryId();
 }
 

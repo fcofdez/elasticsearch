@@ -29,40 +29,34 @@ import java.util.Deque;
 import java.util.List;
 
 public final class RepositoryStatsArchive {
-    private final String repositoryId;
-    private final int minElements;
+    private final RepositoryId repositoryId;
+    private final int maxElements;
     private final TimeValue retention;
 
-    private final Deque<RepositoryStats> archive = new ArrayDeque<>();
+    private final Deque<RepositoryStatsSnapshot> archive = new ArrayDeque<>();
 
-    RepositoryStatsArchive(String repositoryId, int minElements, TimeValue retention) {
-        if (minElements < 0) {
+    RepositoryStatsArchive(RepositoryId repositoryId, int maxElements, TimeValue retentionPeriod) {
+        if (maxElements < 0) {
             throw new IllegalArgumentException("Invalid");
         }
 
         this.repositoryId = repositoryId;
-        this.minElements = minElements;
-        this.retention = retention;
+        this.maxElements = maxElements;
+        this.retention = retentionPeriod;
     }
 
-    void addRepositoryStats(RepositoryStats repositoryStats) {
+    void addRepositoryStats(RepositoryStatsSnapshot repositoryStats) {
         assert repositoryStats.getId().equals(repositoryId);
 
         archive.add(repositoryStats);
         evict();
-
-        assert archive.size() <= minElements;
     }
 
     boolean isEmpty() {
         return archive.isEmpty();
     }
 
-    int size() {
-        return archive.size();
-    }
-
-    String getRepositoryId() {
+    RepositoryId getRepositoryId() {
         return repositoryId;
     }
 
@@ -70,21 +64,20 @@ public final class RepositoryStatsArchive {
      * Returns a list of RepositoryStats in FIFO order
      * @return a list of RepositoryStats in FIFO order.
      */
-    List<RepositoryStats> getArchivedStats() {
+    List<RepositoryStatsSnapshot> getArchivedStats() {
         return new ArrayList<>(archive);
     }
 
     private void evict() {
         Instant retentionDeadline = getRetentionDeadline();
-        RepositoryStats stats;
-        // TODO Keep at least N within the time range
+        RepositoryStatsSnapshot stats;
         while ((stats = archive.peek()) != null && shouldEvict(stats, retentionDeadline)) {
             archive.pollFirst();
         }
     }
 
-    private boolean shouldEvict(RepositoryStats stats, Instant deadline) {
-        return archive.size() > minElements || stats.stoppedBefore(deadline);
+    private boolean shouldEvict(RepositoryStatsSnapshot stats, Instant deadline) {
+        return archive.size() > maxElements && stats.createdBefore(deadline);
     }
 
     private Instant getRetentionDeadline() {

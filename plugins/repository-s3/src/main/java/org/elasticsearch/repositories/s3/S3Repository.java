@@ -40,9 +40,8 @@ import org.elasticsearch.indices.recovery.RecoverySettings;
 import org.elasticsearch.monitor.jvm.JvmInfo;
 import org.elasticsearch.repositories.RepositoryData;
 import org.elasticsearch.repositories.RepositoryException;
-import org.elasticsearch.repositories.RepositoryStats;
+import org.elasticsearch.repositories.RepositoryId;
 import org.elasticsearch.repositories.ShardGenerations;
-import org.elasticsearch.repositories.blobstore.BlobStoreRepository;
 import org.elasticsearch.repositories.blobstore.MeteredBlobStoreRepository;
 import org.elasticsearch.snapshots.SnapshotId;
 import org.elasticsearch.snapshots.SnapshotInfo;
@@ -50,10 +49,7 @@ import org.elasticsearch.snapshots.SnapshotsService;
 import org.elasticsearch.threadpool.Scheduler;
 import org.elasticsearch.threadpool.ThreadPool;
 
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -335,11 +331,16 @@ class S3Repository extends MeteredBlobStoreRepository {
     }
 
     @Override
-    protected String location() {
-        BlobPath location = new BlobPath();
-        location.add(bucket);
+    protected RepositoryId getRepositoryId() {
+        return new RepositoryId(metadata.name(), metadata.type(), location());
+    }
+
+    private String location() {
+        BlobPath location = BlobPath.cleanPath();
+
+        location = location.add(bucket);
         for (String path : basePath()) {
-            location.add(path);
+            location = location.add(path);
         }
 
         return location.buildAsString();
