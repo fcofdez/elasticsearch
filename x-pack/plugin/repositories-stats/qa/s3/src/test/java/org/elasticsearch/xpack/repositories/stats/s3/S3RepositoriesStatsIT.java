@@ -43,13 +43,13 @@ public class S3RepositoriesStatsIT extends AbstractRepositoriesStatsAPIRestTestC
     }
 
     @Override
-    protected void assertRequestCountersAccountedForReadValues(Map<String, Integer> requestCounters) {
-        assertThat(requestCounters.get("GET"), is(greaterThan(0)));
-        assertThat(requestCounters.get("LIST"), is(greaterThan(0)));
+    protected void assertRequestCountersAccountedForReadValues(Map<String, Long> requestCounters) {
+        assertThat(requestCounters.get("GET"), is(greaterThan(0L)));
+        assertThat(requestCounters.get("LIST"), is(greaterThan(0L)));
     }
 
     @Override
-    protected void assertRequestCountersAccountedForWriteValues(Map<String, Integer> requestCounters) {
-        assertThat(requestCounters.get("PUT"), is(greaterThan(0)));
+    protected void assertRequestCountersAccountedForWriteValues(Map<String, Long> requestCounters) {
+        assertThat(requestCounters.get("PUT"), is(greaterThan(0L)));
     }
 }

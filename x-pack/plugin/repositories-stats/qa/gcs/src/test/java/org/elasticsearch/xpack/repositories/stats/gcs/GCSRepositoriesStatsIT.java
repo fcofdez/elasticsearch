@@ -44,13 +44,13 @@ public class GCSRepositoriesStatsIT extends AbstractRepositoriesStatsAPIRestTest
     }
 
     @Override
-    protected void assertRequestCountersAccountedForReadValues(Map<String, Integer> repoCounters) {
-        assertThat(repoCounters.get("GET"), is(greaterThan(0)));
-        assertThat(repoCounters.get("LIST"), is(greaterThan(0)));
+    protected void assertRequestCountersAccountedForReadValues(Map<String, Long> repoCounters) {
+        assertThat(repoCounters.get("GET"), is(greaterThan(0L)));
+        assertThat(repoCounters.get("LIST"), is(greaterThan(0L)));
     }
 
     @Override
-    protected void assertRequestCountersAccountedForWriteValues(Map<String, Integer> repoCounters) {
-        assertThat(repoCounters.get("POST"), is(greaterThan(0)));
+    protected void assertRequestCountersAccountedForWriteValues(Map<String, Long> repoCounters) {
+        assertThat(repoCounters.get("POST"), is(greaterThan(0L)));
     }
 }
