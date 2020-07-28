@@ -30,13 +30,12 @@ import java.time.Instant;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.UUID;
 
 public class RepositoryStatsSnapshot implements Writeable, ToXContent {
 
     public static final RepositoryStatsSnapshot EMPTY_STATS = new RepositoryStatsSnapshot(null, Collections.emptyMap(), Instant.now());
 
-    private final RepositoryId repositoryId;
+    public final RepositoryId repositoryId;
     public final Map<String, Long> requestCounts;
     public final Instant createdAt;
 
@@ -81,7 +80,7 @@ public class RepositoryStatsSnapshot implements Writeable, ToXContent {
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         builder.startObject();
-        builder.field("id", UUID.randomUUID().toString());
+        //builder.field("id", UUID.randomUUID().toString());
         repositoryId.toXContent(builder, params);
         builder.field("created_at", createdAt.toString());
         builder.field("request_counts", requestCounts);

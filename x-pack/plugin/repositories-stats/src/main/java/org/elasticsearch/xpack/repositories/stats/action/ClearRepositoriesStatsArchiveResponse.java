@@ -7,56 +7,39 @@
 package org.elasticsearch.xpack.repositories.stats.action;
 
 import org.elasticsearch.action.FailedNodeException;
-import org.elasticsearch.action.admin.cluster.node.stats.NodeStats;
 import org.elasticsearch.action.support.nodes.BaseNodesResponse;
 import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.rest.RestStatus;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 
-class RepositoriesStatsResponse extends BaseNodesResponse<RepositoriesNodeStatsResponse> implements ToXContentObject {
-
-    public RepositoriesStatsResponse(StreamInput in) {
-        super(null, null, null);
+public class ClearRepositoriesStatsArchiveResponse extends BaseNodesResponse<ClearRepositoriesStatsArchiveNodeResponse>
+                                                   implements ToXContentObject {
+    public ClearRepositoriesStatsArchiveResponse(StreamInput in) throws IOException {
+        super(in);
     }
 
-    public RepositoriesStatsResponse(ClusterName clusterName, List<RepositoriesNodeStatsResponse> nodes, List<FailedNodeException> failures) {
+    public ClearRepositoriesStatsArchiveResponse(ClusterName clusterName, List<ClearRepositoriesStatsArchiveNodeResponse> nodes, List<FailedNodeException> failures) {
         super(clusterName, nodes, failures);
     }
 
     @Override
-    protected List<RepositoriesNodeStatsResponse> readNodesFrom(StreamInput in) throws IOException {
-        int size = in.readInt();
-        List<RepositoriesNodeStatsResponse> nodes = new ArrayList<>(size);
-        for (int i = 0; i < size; i++) {
-            nodes.add(new RepositoriesNodeStatsResponse(in));
-        }
-        return nodes;
+    protected List<ClearRepositoriesStatsArchiveNodeResponse> readNodesFrom(StreamInput in) throws IOException {
+        return in.readList(ClearRepositoriesStatsArchiveNodeResponse::new);
     }
 
     @Override
-    protected void writeNodesTo(StreamOutput out, List<RepositoriesNodeStatsResponse> nodes) throws IOException {
-        out.writeInt(nodes.size());
-        for (RepositoriesNodeStatsResponse node : nodes) {
-            node.writeTo(out);
-        }
+    protected void writeNodesTo(StreamOutput out, List<ClearRepositoriesStatsArchiveNodeResponse> nodes) throws IOException {
+        out.writeList(nodes);
     }
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        builder.startObject();
-
-        builder.startObject("nodes");
-        for (RepositoriesNodeStatsResponse nodeStats : getNodes()) {
-            nodeStats.toXContent(builder, params);
-        }
-        builder.endObject();
-
         if (failures().isEmpty() == false) {
             builder.startArray("failures");
             for (FailedNodeException failure : failures()) {
@@ -66,8 +49,6 @@ class RepositoriesStatsResponse extends BaseNodesResponse<RepositoriesNodeStatsR
             }
             builder.endArray();
         }
-
-        builder.endObject();
         return builder;
     }
 }

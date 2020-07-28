@@ -11,7 +11,7 @@ import org.elasticsearch.action.ActionType;
 public class RepositoriesStatsAction extends ActionType<RepositoriesStatsResponse> {
     public static final RepositoriesStatsAction INSTANCE = new RepositoriesStatsAction();
 
-    static final String NAME = "cluster:monitor/xpack/repositories_metering/request_counters";
+    static final String NAME = "cluster:monitor/xpack/repositories_stats/get_repo_stats";
 
     public RepositoriesStatsAction() {
         super(NAME, RepositoriesStatsResponse::new);

@@ -43,6 +43,7 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
 import org.elasticsearch.common.regex.Regex;
+import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
@@ -67,6 +68,11 @@ import java.util.stream.Stream;
 public class RepositoriesService extends AbstractLifecycleComponent implements ClusterStateApplier {
 
     private static final Logger logger = LogManager.getLogger(RepositoriesService.class);
+
+    public static final Setting<TimeValue> REPOSITORIES_STATS_ARCHIVE_RETENTION_PERIOD =
+        Setting.positiveTimeSetting("repositories.stats.archive.retention_period", TimeValue.timeValueHours(2), Setting.Property.NodeScope);
+    public static final Setting<Integer> REPOSITORIES_STATS_MAX_ARCHIVE_SIZE =
+        Setting.intSetting("repositories.stats.archive.max_size", 5, Setting.Property.NodeScope);
 
     private final Map<String, Repository.Factory> typesRegistry;
     private final Map<String, Repository.Factory> internalTypesRegistry;
@@ -94,7 +100,8 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
             clusterService.addHighPriorityApplier(this);
         }
         this.verifyAction = new VerifyNodeRepositoryAction(transportService, clusterService, this);
-        this.repositoriesStatsArchive = new RepositoriesStatsArchive(5, TimeValue.ZERO);
+        this.repositoriesStatsArchive = new RepositoriesStatsArchive(REPOSITORIES_STATS_MAX_ARCHIVE_SIZE.get(settings),
+                                                                     REPOSITORIES_STATS_ARCHIVE_RETENTION_PERIOD.get(settings));
     }
 
     /**
@@ -254,6 +261,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
                 final String verificationToken = repository.startVerification();
                 if (verificationToken != null) {
                     try {
+                        logger.info("RUNNING VERIFY {}", repositoryName);
                         verifyAction.verify(repositoryName, verificationToken, ActionListener.delegateFailure(listener,
                             (delegatedListener, verifyResponse) -> threadPool.executor(ThreadPool.Names.SNAPSHOT).execute(() -> {
                                 try {
@@ -331,7 +339,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
                         if (previousMetadata.type().equals(repositoryMetadata.type()) == false
                             || previousMetadata.settings().equals(repositoryMetadata.settings()) == false) {
                             // Previous version is different from the version in settings
-                            logger.debug("updating repository [{}]", repositoryMetadata.name());
+                            logger.info("updating repository [{}]", repositoryMetadata.name());
                             closeRepository(repository);
                             repository = null;
                             try {
@@ -416,6 +424,10 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
         return repoStatsById;
     }
 
+    public void clearRepositoriesStatsArchive() {
+        repositoriesStatsArchive.clear();
+    }
+
     private List<RepositoryStatsSnapshot> getActiveRepositoryStatsById() {
         return Stream.concat(repositories.values().stream(), internalRepositories.values().stream())
             .map(Repository::stats)
@@ -466,7 +478,7 @@ public class RepositoriesService extends AbstractLifecycleComponent implements C
      * Creates repository holder. This method starts the repository
      */
     private Repository createRepository(RepositoryMetadata repositoryMetadata, Map<String, Repository.Factory> factories) {
-        logger.debug("creating repository [{}][{}]", repositoryMetadata.type(), repositoryMetadata.name());
+        logger.info("creating repository [{}][{}]", repositoryMetadata.type(), repositoryMetadata.name());
         Repository.Factory factory = factories.get(repositoryMetadata.type());
         if (factory == null) {
             throw new RepositoryException(repositoryMetadata.name(),

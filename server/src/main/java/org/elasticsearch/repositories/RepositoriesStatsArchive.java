@@ -59,6 +59,11 @@ public final class RepositoriesStatsArchive {
     }
 
     synchronized void cleanEmptyRepositoryArchives() {
+        archives.values().forEach(RepositoryStatsArchive::evict);
         archives.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+    }
+
+    synchronized void clear() {
+        archives.clear();
     }
 }

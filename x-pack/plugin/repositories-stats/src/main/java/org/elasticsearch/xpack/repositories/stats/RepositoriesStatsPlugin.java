@@ -18,19 +18,23 @@ import org.elasticsearch.plugins.ActionPlugin;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.rest.RestController;
 import org.elasticsearch.rest.RestHandler;
+import org.elasticsearch.xpack.repositories.stats.action.ClearRepositoriesStatsArchiveAction;
 import org.elasticsearch.xpack.repositories.stats.action.RepositoriesStatsAction;
+import org.elasticsearch.xpack.repositories.stats.action.TransportClearRepositoriesStatsArchiveAction;
 import org.elasticsearch.xpack.repositories.stats.action.TransportRepositoriesStatsAction;
-import org.elasticsearch.xpack.repositories.stats.rest.RestRepositoriesStatsAction;
+import org.elasticsearch.xpack.repositories.stats.rest.RestClearRepositoriesStatsArchiveAction;
+import org.elasticsearch.xpack.repositories.stats.rest.RestGetRepositoriesStatsAction;
 
 import java.util.List;
 import java.util.function.Supplier;
 
-public class RepositoriesStatsPlugin extends Plugin implements ActionPlugin {
+public final class RepositoriesStatsPlugin extends Plugin implements ActionPlugin {
 
     @Override
     public List<ActionHandler<? extends ActionRequest, ? extends ActionResponse>> getActions() {
         return List.of(
-            new ActionHandler<>(RepositoriesStatsAction.INSTANCE, TransportRepositoriesStatsAction.class)
+            new ActionHandler<>(RepositoriesStatsAction.INSTANCE, TransportRepositoriesStatsAction.class),
+            new ActionHandler<>(ClearRepositoriesStatsArchiveAction.INSTANCE, TransportClearRepositoriesStatsArchiveAction.class)
         );
     }
 
@@ -43,6 +47,7 @@ public class RepositoriesStatsPlugin extends Plugin implements ActionPlugin {
                                              IndexNameExpressionResolver indexNameExpressionResolver,
                                              Supplier<DiscoveryNodes> nodesInCluster) {
 
-        return List.of(new RestRepositoriesStatsAction());
+        return List.of(new RestGetRepositoriesStatsAction(),
+                       new RestClearRepositoriesStatsArchiveAction());
     }
 }

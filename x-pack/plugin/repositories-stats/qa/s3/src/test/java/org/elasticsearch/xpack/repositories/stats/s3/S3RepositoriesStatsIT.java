@@ -8,14 +8,21 @@ package org.elasticsearch.xpack.repositories.stats.s3;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.xpack.repositories.stats.AbstractRepositoriesStatsAPIRestTestCase;
 
-import static org.hamcrest.Matchers.blankOrNullString;
-import static org.hamcrest.Matchers.not;
+import java.util.Map;
+
+import static org.hamcrest.Matchers.*;
 
 public class S3RepositoriesStatsIT extends AbstractRepositoriesStatsAPIRestTestCase {
 
     @Override
     protected String repositoryType() {
         return "s3";
+    }
+
+    @Override
+    protected String repositoryLocation() {
+        // TODO fix this
+        return System.getProperty("test.s3.bucket") + "/" + System.getProperty("test.s3.base_path");
     }
 
     @Override
@@ -31,6 +38,18 @@ public class S3RepositoriesStatsIT extends AbstractRepositoriesStatsAPIRestTestC
 
     @Override
     protected Settings updatedRepositorySettings() {
-        return Settings.EMPTY;
+        Settings settings = repositorySettings();
+        return Settings.builder().put(settings).put("s3.client.max_retries",4).build();
+    }
+
+    @Override
+    protected void assertRequestCountersAccountedForReadValues(Map<String, Integer> requestCounters) {
+        assertThat(requestCounters.get("GET"), is(greaterThan(0)));
+        assertThat(requestCounters.get("LIST"), is(greaterThan(0)));
+    }
+
+    @Override
+    protected void assertRequestCountersAccountedForWriteValues(Map<String, Integer> requestCounters) {
+        assertThat(requestCounters.get("PUT"), is(greaterThan(0)));
     }
 }

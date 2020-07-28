@@ -22,16 +22,16 @@ package org.elasticsearch.repositories;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.common.xcontent.ToXContent;
+import org.elasticsearch.common.xcontent.ToXContentFragment;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 
 import java.io.IOException;
 import java.util.Objects;
 
-public class RepositoryId implements Writeable, ToXContent {
-    private final String name;
-    private final String type;
-    private final String location;
+public class RepositoryId implements Writeable, ToXContentFragment {
+    public final String name;
+    public final String type;
+    public final String location;
 
     public RepositoryId(String name, String type, String location) {
         this.name = name;

@@ -10,6 +10,8 @@ import org.elasticsearch.action.support.nodes.BaseNodeResponse;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.xcontent.ToXContent;
+import org.elasticsearch.common.xcontent.ToXContentFragment;
+import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.repositories.RepositoryId;
 import org.elasticsearch.repositories.RepositoryStatsSnapshot;
@@ -18,7 +20,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
-public class RepositoriesNodeStatsResponse extends BaseNodeResponse implements ToXContent {
+public class RepositoriesNodeStatsResponse extends BaseNodeResponse implements ToXContentObject {
 
     private final Map<RepositoryId, List<RepositoryStatsSnapshot>> repositoriesStatsById;
 
@@ -34,8 +36,7 @@ public class RepositoriesNodeStatsResponse extends BaseNodeResponse implements T
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, ToXContent.Params params) throws IOException {
-        DiscoveryNode node = getNode();
-        builder.startArray(node.getId());
+        builder.startArray(getNode().getId());
         for (List<RepositoryStatsSnapshot> repositoryStats : repositoriesStatsById.values()) {
             for (RepositoryStatsSnapshot repositoryStat : repositoryStats) {
                 repositoryStat.toXContent(builder, params);

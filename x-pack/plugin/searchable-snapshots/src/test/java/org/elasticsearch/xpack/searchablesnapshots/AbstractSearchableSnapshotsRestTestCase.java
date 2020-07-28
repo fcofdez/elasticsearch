@@ -250,26 +250,6 @@ public abstract class AbstractSearchableSnapshotsRestTestCase extends ESRestTest
         }
     }
 
-    protected static void registerRepository(String repository, String type, boolean verify, Settings settings) throws IOException {
-        final Request request = new Request(HttpPut.METHOD_NAME, "_snapshot/" + repository);
-        request.setJsonEntity(Strings.toString(new PutRepositoryRequest(repository).type(type).verify(verify).settings(settings)));
-
-        final Response response = client().performRequest(request);
-        assertAcked("Failed to create repository [" + repository + "] of type [" + type + "]: " + response, response);
-    }
-
-    protected static void createSnapshot(String repository, String snapshot, boolean waitForCompletion) throws IOException {
-        final Request request = new Request(HttpPut.METHOD_NAME, "_snapshot/" + repository + '/' + snapshot);
-        request.addParameter("wait_for_completion", Boolean.toString(waitForCompletion));
-
-        final Response response = client().performRequest(request);
-        assertThat(
-            "Failed to create snapshot [" + snapshot + "] in repository [" + repository + "]: " + response,
-            response.getStatusLine().getStatusCode(),
-            equalTo(RestStatus.OK.getStatus())
-        );
-    }
-
     protected static void deleteSnapshot(String repository, String snapshot, boolean ignoreMissing) throws IOException {
         final Request request = new Request(HttpDelete.METHOD_NAME, "_snapshot/" + repository + '/' + snapshot);
         try {
@@ -404,19 +384,6 @@ public abstract class AbstractSearchableSnapshotsRestTestCase extends ESRestTest
             equalTo(RestStatus.OK.getStatus())
         );
         return extractValue(responseAsMap(response), index + ".settings");
-    }
-
-    protected static Map<String, Object> responseAsMap(Response response) throws IOException {
-        final XContentType xContentType = XContentType.fromMediaTypeOrFormat(response.getEntity().getContentType().getValue());
-        assertThat("Unknown XContentType", xContentType, notNullValue());
-
-        BytesReference bytesReference = Streams.readFully(response.getEntity().getContent());
-
-        try (InputStream responseBody = bytesReference.streamInput()) {
-            return XContentHelper.convertToMap(xContentType.xContent(), responseBody, true);
-        } catch (Exception e) {
-            throw new IOException(bytesReference.utf8ToString(), e);
-        }
     }
 
     @SuppressWarnings("unchecked")

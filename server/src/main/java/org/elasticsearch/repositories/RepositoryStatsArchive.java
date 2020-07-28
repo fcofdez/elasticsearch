@@ -68,7 +68,7 @@ public final class RepositoryStatsArchive {
         return new ArrayList<>(archive);
     }
 
-    private void evict() {
+    void evict() {
         Instant retentionDeadline = getRetentionDeadline();
         RepositoryStatsSnapshot stats;
         while ((stats = archive.peek()) != null && shouldEvict(stats, retentionDeadline)) {

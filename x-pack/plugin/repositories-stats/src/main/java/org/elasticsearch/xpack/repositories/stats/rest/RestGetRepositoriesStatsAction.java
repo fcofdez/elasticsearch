@@ -16,11 +16,11 @@ import org.elasticsearch.xpack.repositories.stats.action.RepositoriesStatsAction
 
 import java.util.List;
 
-public class RestRepositoriesStatsAction extends BaseRestHandler {
+public final class RestGetRepositoriesStatsAction extends BaseRestHandler {
 
     @Override
     public String getName() {
-        return "repositories_stats_action";
+        return "get_repositories_stats_action";
     }
 
     @Override
