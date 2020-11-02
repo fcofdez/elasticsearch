@@ -146,7 +146,7 @@ public class AzureHttpHandler implements HttpHandler {
                 blobs.entrySet().removeIf(blob -> blob.getKey().startsWith(exchange.getRequestURI().getPath()));
                 exchange.sendResponseHeaders(RestStatus.ACCEPTED.getStatus(), -1);
 
-            } else if (Regex.simpleMatch("GET /container?restype=container&comp=list*", request)) {
+            } else if (Regex.simpleMatch("GET /container?*restype=container&comp=list*", request)) {
                 // List Blobs (https://docs.microsoft.com/en-us/rest/api/storageservices/list-blobs)
                 final Map<String, String> params = new HashMap<>();
                 RestUtils.decodeQueryString(exchange.getRequestURI().getQuery(), 0, params);

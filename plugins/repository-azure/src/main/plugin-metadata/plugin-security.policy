@@ -22,4 +22,7 @@ grant {
   permission java.net.SocketPermission "*", "connect";
   permission java.lang.RuntimePermission "setFactory";
   permission java.lang.reflect.ReflectPermission "newProxyInPackage.com.azure.storage.blob.implementation";
+  permission java.lang.reflect.ReflectPermission "suppressAccessChecks";
+  // Used by jackson
+  permission java.lang.RuntimePermission "accessDeclaredMembers";
 };
