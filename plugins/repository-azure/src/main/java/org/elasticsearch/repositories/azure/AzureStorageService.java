@@ -20,7 +20,6 @@
 package org.elasticsearch.repositories.azure;
 
 import com.azure.core.http.HttpClient;
-import com.azure.core.http.ProxyOptions;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
@@ -95,7 +94,9 @@ public class AzureStorageService {
 
     // non-static, package private for testing
     RequestRetryOptions createRetryPolicy(final AzureStorageSettings azureStorageSettings) {
-        return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL, azureStorageSettings.getMaxRetries(), Math.toIntExact(azureStorageSettings.getTimeout().getMillis()), null, null, null) ;
+        return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
+            azureStorageSettings.getMaxRetries(),
+            Math.toIntExact(azureStorageSettings.getTimeout().getMillis()), null, null, null);
     }
 
     static class EsThreadFactory implements ThreadFactory {
@@ -142,8 +143,11 @@ public class AzureStorageService {
     }
 
     private static RequestRetryOptions getRetryOptions(AzureStorageSettings azureStorageSettings) {
+        // TODO add a secondary host if the retry policy requires to
         int timeout = Math.toIntExact(azureStorageSettings.getTimeout().getMillis());
-        return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL, azureStorageSettings.getMaxRetries(), timeout == -1 ? null : timeout, null, null, null);
+        return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
+            azureStorageSettings.getMaxRetries(), timeout == -1 ? null : timeout,
+            null, null, null);
     }
 
 //    private static OperationContext buildOperationContext(AzureStorageSettings azureStorageSettings) {

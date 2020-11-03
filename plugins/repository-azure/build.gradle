@@ -30,10 +30,12 @@ esplugin {
 }
 
 dependencies {
-  api "com.azure:azure-core-http-netty:1.5.1"
-  api "com.azure:azure-core:1.5.0"
-  api "com.azure:azure-storage-blob:12.6.1"
-  api "com.azure:azure-storage-common:12.6.1"
+  api "com.azure:azure-core-http-netty:1.5.4"
+  api "com.azure:azure-core:1.7.0"
+  api "com.azure:azure-storage-blob:12.8.0"
+  api "com.azure:azure-storage-common:12.8.0"
+
+  // Jackson
   api "com.fasterxml.jackson.core:jackson-core:${versions.jackson}"
   api "com.fasterxml.jackson.core:jackson-databind:${versions.jackson}"
   api "com.fasterxml.jackson.core:jackson-annotations:${versions.jackson}"
@@ -42,9 +44,14 @@ dependencies {
   api "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:${versions.jackson}"
   api "com.fasterxml.jackson.module:jackson-module-jaxb-annotations:${versions.jackson}"
   api "com.fasterxml.woodstox:woodstox-core:6.0.2"
+  api "jakarta.activation:jakarta.activation-api:1.2.1"
+  api "jakarta.xml.bind:jakarta.xml.bind-api:2.3.2"
+  api "org.codehaus.woodstox:stax2-api:4.2"
+
+  // Netty
   api "io.netty:netty-buffer:${versions.netty}"
-  api "io.netty:netty-codec-http2:${versions.netty}"
   api "io.netty:netty-codec-http:${versions.netty}"
+  api "io.netty:netty-codec-http2:${versions.netty}"
   api "io.netty:netty-codec-socks:${versions.netty}"
   api "io.netty:netty-codec:${versions.netty}"
   api "io.netty:netty-common:${versions.netty}"
@@ -54,17 +61,13 @@ dependencies {
   api "io.netty:netty-transport-native-epoll:${versions.netty}"
   api "io.netty:netty-transport-native-unix-common:${versions.netty}"
   api "io.netty:netty-transport:${versions.netty}"
-  api "io.projectreactor.netty:reactor-netty:0.9.7.RELEASE"
-  api "io.projectreactor:reactor-core:3.3.5.RELEASE"
-  api "jakarta.activation:jakarta.activation-api:1.2.1"
-  api "jakarta.xml.bind:jakarta.xml.bind-api:2.3.2"
-  api "org.codehaus.woodstox:stax2-api:4.2"
-  api "org.reactivestreams:reactive-streams:1.0.3"
-  api "org.slf4j:slf4j-api:${versions.slf4j}"
 
-//  // HACK: javax.xml.bind was removed from default modules in java 9, so we pull the api in here,
-//  // and whitelist this hack in JarHell
-//  api 'javax.xml.bind:jaxb-api:2.2.2'
+  // Reactor
+  api "io.projectreactor.netty:reactor-netty:0.9.10.RELEASE"
+  api "io.projectreactor:reactor-core:3.3.8.RELEASE"
+  api "org.reactivestreams:reactive-streams:1.0.3"
+
+  api "org.slf4j:slf4j-api:${versions.slf4j}"
 
   testImplementation project(':test:fixtures:azure-fixture')
 }
@@ -86,7 +89,7 @@ tasks.named("dependencyLicenses").configure {
 
 thirdPartyAudit {
   ignoreMissingClasses(
-    // Optional and not enabled by Elasticsearch
+    // from reactory-netty metric collection
     'io.micrometer.core.instrument.Clock',
     'io.micrometer.core.instrument.Counter',
     'io.micrometer.core.instrument.Counter$Builder',
@@ -103,6 +106,10 @@ thirdPartyAudit {
     'io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics',
     'io.micrometer.core.instrument.composite.CompositeMeterRegistry',
     'io.micrometer.core.instrument.search.Search',
+    'io.micrometer.core.instrument.Gauge',
+    'io.micrometer.core.instrument.Gauge$Builder',
+
+    // from reactor-core kotlin extensions (to be deprecated from the library at some point on 3.3.x release)
     'kotlin.TypeCastException',
     'kotlin.collections.ArraysKt',
     'kotlin.jvm.JvmClassMappingKt',
@@ -116,19 +123,65 @@ thirdPartyAudit {
     'kotlin.reflect.KDeclarationContainer',
     'kotlin.sequences.Sequence',
 
+    // from com.azure.storage.blob.changefeed
+    'com.azure.storage.internal.avro.implementation.AvroObject',
+    'com.azure.storage.internal.avro.implementation.AvroReader',
+    'com.azure.storage.internal.avro.implementation.AvroReaderFactory',
+    'com.azure.storage.internal.avro.implementation.schema.AvroSchema',
+
     // from io.netty.handler.codec.protobuf.ProtobufDecoder (netty)
     'com.google.protobuf.ExtensionRegistry',
-    'com.google.protobuf.ExtensionRegistryLite',
-    'com.google.protobuf.MessageLite',
     'com.google.protobuf.MessageLite$Builder',
-    'com.google.protobuf.MessageLiteOrBuilder',
+    'com.google.protobuf.MessageLite',
     'com.google.protobuf.Parser',
+    'com.google.protobuf.ExtensionRegistryLite',
+    'com.google.protobuf.MessageLiteOrBuilder',
     'com.google.protobuf.nano.CodedOutputByteBufferNano',
     'com.google.protobuf.nano.MessageNano',
+
+    // from io.netty.logging.CommonsLoggerFactory (netty)
+    'org.apache.commons.logging.Log',
+    'org.apache.commons.logging.LogFactory',
+
+    // from Log4j (deliberate, Netty will fallback to Log4j 2)
+    'org.apache.log4j.Level',
+    'org.apache.log4j.Logger',
+
+    // from io.netty.handler.ssl.util.BouncyCastleSelfSignedCertGenerator (netty)
+    'org.bouncycastle.cert.X509v3CertificateBuilder',
+    'org.bouncycastle.cert.jcajce.JcaX509CertificateConverter',
+    'org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder',
+    'org.bouncycastle.jce.provider.BouncyCastleProvider',
+    'org.bouncycastle.operator.jcajce.JcaContentSignerBuilder',
+    'org.bouncycastle.asn1.x500.X500Name',
+
+    // from io.netty.handler.ssl.JettyNpnSslEngine (netty)
+    'org.eclipse.jetty.npn.NextProtoNego$ClientProvider',
+    'org.eclipse.jetty.npn.NextProtoNego$ServerProvider',
+    'org.eclipse.jetty.npn.NextProtoNego',
+
+    // from io.netty.handler.codec.marshalling.ChannelBufferByteInput (netty)
+    'org.jboss.marshalling.ByteInput',
+
+    // from io.netty.handler.codec.marshalling.ChannelBufferByteOutput (netty)
+    'org.jboss.marshalling.ByteOutput',
+
+    // from io.netty.handler.codec.marshalling.CompatibleMarshallingEncoder (netty)
+    'org.jboss.marshalling.Marshaller',
+
+    // from io.netty.handler.codec.marshalling.ContextBoundUnmarshallerProvider (netty)
+    'org.jboss.marshalling.MarshallerFactory',
+    'org.jboss.marshalling.MarshallingConfiguration',
+    'org.jboss.marshalling.Unmarshaller',
+
+    // from io.netty.handler.codec.spdy.SpdyHeaderBlockJZlibEncoder (netty-codec-http)
     'com.jcraft.jzlib.Deflater',
     'com.jcraft.jzlib.Inflater',
-    'com.jcraft.jzlib.JZlib',
     'com.jcraft.jzlib.JZlib$WrapperType',
+    'com.jcraft.jzlib.JZlib',
+
+    // from io.netty.handler.codec.compression.LzfDecoder
+    // from io.netty.handler.codec.compression.LzfEncoder (netty-codec)
     'com.ning.compress.BufferRecycler',
     'com.ning.compress.lzf.ChunkDecoder',
     'com.ning.compress.lzf.ChunkEncoder',
@@ -136,54 +189,29 @@ thirdPartyAudit {
     'com.ning.compress.lzf.LZFEncoder',
     'com.ning.compress.lzf.util.ChunkDecoderFactory',
     'com.ning.compress.lzf.util.ChunkEncoderFactory',
-    'com.sun.org.apache.xml.internal.resolver.Catalog',
-    'com.sun.org.apache.xml.internal.resolver.tools.CatalogResolver',
-    'io.micrometer.core.instrument.Gauge',
-    'io.micrometer.core.instrument.Gauge$Builder',
-    'io.netty.channel.kqueue.KQueue',
-    'io.netty.channel.kqueue.KQueueDatagramChannel',
-    'io.netty.channel.kqueue.KQueueEventLoopGroup',
-    'io.netty.channel.kqueue.KQueueServerSocketChannel',
-    'io.netty.channel.kqueue.KQueueSocketChannel',
-    'io.netty.handler.codec.haproxy.HAProxyMessage',
-    'io.netty.handler.codec.haproxy.HAProxyMessageDecoder',
+
+    // from io.netty.handler.codec.compression.LzmaFrameEncoder (netty-codec)
     'lzma.sdk.lzma.Encoder',
+
+    // from io.netty.handler.codec.compression.Lz4FrameDecoder (netty-codec)
     'net.jpountz.lz4.LZ4Compressor',
     'net.jpountz.lz4.LZ4Factory',
     'net.jpountz.lz4.LZ4FastDecompressor',
+
+    // from io.netty.handler.codec.compression.Lz4XXHash32 (netty-codec)
     'net.jpountz.xxhash.XXHash32',
     'net.jpountz.xxhash.XXHashFactory',
-    'org.apache.commons.logging.Log',
-    'org.apache.commons.logging.LogFactory',
-    'org.apache.log4j.Level',
-    'org.apache.log4j.Logger',
-    'org.bouncycastle.asn1.x500.X500Name',
-    'org.bouncycastle.cert.X509v3CertificateBuilder',
-    'org.bouncycastle.cert.jcajce.JcaX509CertificateConverter',
-    'org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder',
-    'org.bouncycastle.jce.provider.BouncyCastleProvider',
-    'org.bouncycastle.operator.jcajce.JcaContentSignerBuilder',
+
+    // from io.netty.handler.ssl.JettyAlpnSslEngin (netty-handler optional dependency)
+    'org.eclipse.jetty.alpn.ALPN$ClientProvider',
+    'org.eclipse.jetty.alpn.ALPN$ServerProvider',
+    'org.eclipse.jetty.alpn.ALPN',
+
+    // from io.netty.handler.ssl.ConscryptAlpnSslEngine (netty-handler optional dependency)
     'org.conscrypt.AllocatedBuffer',
     'org.conscrypt.BufferAllocator',
     'org.conscrypt.Conscrypt',
     'org.conscrypt.HandshakeListener',
-    'org.eclipse.jetty.alpn.ALPN',
-    'org.eclipse.jetty.alpn.ALPN$ClientProvider',
-    'org.eclipse.jetty.alpn.ALPN$ServerProvider',
-    'org.eclipse.jetty.npn.NextProtoNego',
-    'org.eclipse.jetty.npn.NextProtoNego$ClientProvider',
-    'org.eclipse.jetty.npn.NextProtoNego$ServerProvider',
-    'org.jboss.marshalling.ByteInput',
-    'org.jboss.marshalling.ByteOutput',
-    'org.jboss.marshalling.Marshaller',
-    'org.jboss.marshalling.MarshallerFactory',
-    'org.jboss.marshalling.MarshallingConfiguration',
-    'org.jboss.marshalling.Unmarshaller',
-    'org.osgi.framework.BundleActivator',
-    'org.osgi.framework.BundleContext',
-    'org.slf4j.impl.StaticLoggerBinder',
-    'org.slf4j.impl.StaticMDCBinder',
-    'org.slf4j.impl.StaticMarkerBinder',
 
     // from io.netty.handler.ssl.OpenSslEngine (netty)
     'io.netty.internal.tcnative.Buffer',
@@ -196,12 +224,37 @@ thirdPartyAudit {
     'io.netty.internal.tcnative.SessionTicketKey',
     'io.netty.internal.tcnative.SniHostNameMatcher',
 
+    // from io.netty.util.internal.Hidden (netty-common optional dependency)
     'reactor.blockhound.BlockHound$Builder',
-    'reactor.blockhound.integration.BlockHoundIntegration'
+    'reactor.blockhound.integration.BlockHoundIntegration',
+
+    // We don't want to run on OSx
+    'io.netty.channel.kqueue.KQueue',
+    'io.netty.channel.kqueue.KQueueDatagramChannel',
+    'io.netty.channel.kqueue.KQueueEventLoopGroup',
+    'io.netty.channel.kqueue.KQueueServerSocketChannel',
+    'io.netty.channel.kqueue.KQueueSocketChannel',
+
+    // from reactor.netty.http.server.HttpServer (reactor-netty)
+    'io.netty.handler.codec.haproxy.HAProxyMessage',
+    'io.netty.handler.codec.haproxy.HAProxyMessageDecoder',
+
+    // from com.ctc.wstx.osgi.WstxBundleActivator (woodstox-core)
+    'org.osgi.framework.BundleActivator',
+    'org.osgi.framework.BundleContext',
+
+    // from com.ctc.wstx.shaded.msv_core.driver.textui.Driver (woodstox-core)
+    'com.sun.org.apache.xml.internal.resolver.Catalog',
+    'com.sun.org.apache.xml.internal.resolver.tools.CatalogResolver',
+
+    'org.slf4j.impl.StaticLoggerBinder',
+    'org.slf4j.impl.StaticMDCBinder',
+    'org.slf4j.impl.StaticMarkerBinder',
   )
 
   ignoreViolations(
     'io.netty.handler.ssl.util.OpenJdkSelfSignedCertGenerator',
+
     'io.netty.util.internal.PlatformDependent0',
     'io.netty.util.internal.PlatformDependent0$1',
     'io.netty.util.internal.PlatformDependent0$2',
@@ -218,8 +271,10 @@ thirdPartyAudit {
     'io.netty.util.internal.shaded.org.jctools.queues.MpscArrayQueueProducerLimitField',
     'io.netty.util.internal.shaded.org.jctools.util.UnsafeAccess',
     'io.netty.util.internal.shaded.org.jctools.util.UnsafeRefArrayAccess',
+
     'javax.activation.MailcapCommandMap',
     'javax.activation.MimetypesFileTypeMap',
+
     'reactor.core.publisher.MultiProducerRingBuffer',
     'reactor.core.publisher.RingBufferFields',
     'reactor.core.publisher.Traces$SharedSecretsCallSiteSupplierFactory$TracingException',

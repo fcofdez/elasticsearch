@@ -30,7 +30,6 @@ import com.azure.storage.blob.specialized.BlobInputStream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
-import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.cluster.metadata.RepositoryMetadata;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.blobstore.BlobContainer;
@@ -46,7 +45,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URISyntaxException;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -256,12 +254,15 @@ public class AzureBlobStore implements BlobStore {
         // then does a prefix match on the result; it should just call listBlobsByPrefix with the prefix!
         final var blobsBuilder = new HashMap<String, BlobMetadata>();
         final BlobContainerClient blobContainer = getBlobContainer();
-        logger.trace(() -> new ParameterizedMessage("listing container [{}], keyPath [{}], prefix [{}]", container, keyPath, prefix));
+        logger.trace(() ->
+            new ParameterizedMessage("listing container [{}], keyPath [{}], prefix [{}]", container, keyPath, prefix));
         SocketAccess.doPrivilegedVoidException(() -> {
             final ListBlobsOptions listBlobsOptions = new ListBlobsOptions();
-            listBlobsOptions.setPrefix(keyPath + (prefix == null ? "" : prefix)).setDetails(new BlobListDetails().setRetrieveMetadata(true));
+            listBlobsOptions.setPrefix(keyPath + (prefix == null ? "" : prefix)).setDetails(
+                new BlobListDetails().setRetrieveMetadata(true));
             for (final BlobItem blobItem : blobContainer.listBlobs(listBlobsOptions, null)) {
-                blobsBuilder.put(blobItem.getName(), new PlainBlobMetadata(blobItem.getName(), blobItem.getProperties().getContentLength()));
+                blobsBuilder.put(blobItem.getName(),
+                    new PlainBlobMetadata(blobItem.getName(), blobItem.getProperties().getContentLength()));
             }
         });
         return Map.copyOf(blobsBuilder);
