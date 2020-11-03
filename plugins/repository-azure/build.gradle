@@ -29,26 +29,43 @@ esplugin {
   classname 'org.elasticsearch.repositories.azure.AzureRepositoryPlugin'
 }
 
-dependencies {
-  api "com.azure:azure-core-http-netty:1.5.4"
-  api "com.azure:azure-core:1.7.0"
-  api "com.azure:azure-storage-blob:12.8.0"
-  api "com.azure:azure-storage-common:12.8.0"
+versions << [
+  'azure': '12.8.0',
+  'azureCore': '1.7.0',
+  'azureCoreHttpNetty': '1.5.4',
 
-  // Jackson
+  'jakartaActivation': '1.2.1',
+  'jakartaXMLBind': '2.3.2',
+  'stax2API': '4.2',
+  'woodstox': '6.0.2',
+
+  'reactorNetty': '0.9.10.RELEASE',
+  'reactorCore': '3.3.8.RELEASE',
+  'reactiveStreams': '1.0.3',
+]
+
+dependencies {
+  api "com.azure:azure-storage-blob:${versions.azure}"
+  api "com.azure:azure-storage-common:${versions.azure}"
+  api "com.azure:azure-core-http-netty:${versions.azureCoreHttpNetty}"
+  api "com.azure:azure-core:${versions.azureCore}"
+
+  // jackson
   api "com.fasterxml.jackson.core:jackson-core:${versions.jackson}"
   api "com.fasterxml.jackson.core:jackson-databind:${versions.jackson}"
   api "com.fasterxml.jackson.core:jackson-annotations:${versions.jackson}"
   api "com.fasterxml.jackson.core:jackson-databind:${versions.jackson}"
+
+  // jackson xml
   api "com.fasterxml.jackson.dataformat:jackson-dataformat-xml:${versions.jackson}"
   api "com.fasterxml.jackson.datatype:jackson-datatype-jsr310:${versions.jackson}"
   api "com.fasterxml.jackson.module:jackson-module-jaxb-annotations:${versions.jackson}"
-  api "com.fasterxml.woodstox:woodstox-core:6.0.2"
-  api "jakarta.activation:jakarta.activation-api:1.2.1"
-  api "jakarta.xml.bind:jakarta.xml.bind-api:2.3.2"
-  api "org.codehaus.woodstox:stax2-api:4.2"
+  api "jakarta.activation:jakarta.activation-api:${versions.jakartaActivation}"
+  api "jakarta.xml.bind:jakarta.xml.bind-api:${versions.jakartaXMLBind}"
+  api "org.codehaus.woodstox:stax2-api:${versions.stax2API}"
+  api "com.fasterxml.woodstox:woodstox-core:${versions.woodstox}"
 
-  // Netty
+  // netty
   api "io.netty:netty-buffer:${versions.netty}"
   api "io.netty:netty-codec-http:${versions.netty}"
   api "io.netty:netty-codec-http2:${versions.netty}"
@@ -62,10 +79,10 @@ dependencies {
   api "io.netty:netty-transport-native-unix-common:${versions.netty}"
   api "io.netty:netty-transport:${versions.netty}"
 
-  // Reactor
-  api "io.projectreactor.netty:reactor-netty:0.9.10.RELEASE"
-  api "io.projectreactor:reactor-core:3.3.8.RELEASE"
-  api "org.reactivestreams:reactive-streams:1.0.3"
+  // reactor
+  api "io.projectreactor.netty:reactor-netty:${versions.reactorNetty}"
+  api "io.projectreactor:reactor-core:${versions.reactorCore}"
+  api "org.reactivestreams:reactive-streams:${versions.reactiveStreams}"
 
   api "org.slf4j:slf4j-api:${versions.slf4j}"
 
