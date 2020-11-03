@@ -1,116 +1,44 @@
+# Notices for Eclipse Project for JAXB
 
-                            The Netty Project
-                            =================
+This content is produced and maintained by the Eclipse Project for JAXB project.
 
-Please visit the Netty web site for more information:
+* Project home: https://projects.eclipse.org/projects/ee4j.jaxb
 
-  * http://netty.io/
+## Trademarks
 
-Copyright 2011 The Netty Project
+Eclipse Project for JAXB is a trademark of the Eclipse Foundation.
 
-The Netty Project licenses this file to you under the Apache License,
-version 2.0 (the "License"); you may not use this file except in compliance
-with the License. You may obtain a copy of the License at:
+## Copyright
 
-http://www.apache.org/licenses/LICENSE-2.0
+All content is the property of the respective authors or their employers. For
+more information regarding authorship of content, please consult the listed
+source code repository logs.
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-License for the specific language governing permissions and limitations
-under the License.
+## Declared Project Licenses
 
-Also, please refer to each LICENSE.<component>.txt file, which is located in
-the 'license' directory of the distribution file, for the license terms of the
-components that this product depends on.
+This program and the accompanying materials are made available under the terms
+of the Eclipse Distribution License v. 1.0 which is available
+at http://www.eclipse.org/org/documents/edl-v10.php.
 
--------------------------------------------------------------------------------
-This product contains the extensions to Java Collections Framework which has
-been derived from the works by JSR-166 EG, Doug Lea, and Jason T. Greene:
+SPDX-License-Identifier: BSD-3-Clause
 
-  * LICENSE:
-    * license/LICENSE.jsr166y.txt (Public Domain)
-  * HOMEPAGE:
-    * http://gee.cs.oswego.edu/cgi-bin/viewcvs.cgi/jsr166/
-    * http://viewvc.jboss.org/cgi-bin/viewvc.cgi/jbosscache/experimental/jsr166/
+## Source Code
 
-This product contains a modified version of Robert Harder's Public Domain
-Base64 Encoder and Decoder, which can be obtained at:
+The project maintains the following source code repositories:
 
-  * LICENSE:
-    * license/LICENSE.base64.txt (Public Domain)
-  * HOMEPAGE:
-    * http://iharder.sourceforge.net/current/java/base64/
+* https://github.com/eclipse-ee4j/jaxb-api
 
-This product contains a modified version of 'JZlib', a re-implementation of
-zlib in pure Java, which can be obtained at:
+## Third-party Content
 
-  * LICENSE:
-    * license/LICENSE.jzlib.txt (BSD Style License)
-  * HOMEPAGE:
-    * http://www.jcraft.com/jzlib/
+This project leverages the following third party content.
 
-This product contains a modified version of 'Webbit', a Java event based
-WebSocket and HTTP server:
+None
 
-  * LICENSE:
-    * license/LICENSE.webbit.txt (BSD License)
-  * HOMEPAGE:
-    * https://github.com/joewalnes/webbit
+## Cryptography
 
-This product optionally depends on 'Protocol Buffers', Google's data
-interchange format, which can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.protobuf.txt (New BSD License)
-  * HOMEPAGE:
-    * http://code.google.com/p/protobuf/
-
-This product optionally depends on 'Bouncy Castle Crypto APIs' to generate
-a temporary self-signed X.509 certificate when the JVM does not provide the
-equivalent functionality.  It can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.bouncycastle.txt (MIT License)
-  * HOMEPAGE:
-    * http://www.bouncycastle.org/
-
-This product optionally depends on 'SLF4J', a simple logging facade for Java,
-which can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.slf4j.txt (MIT License)
-  * HOMEPAGE:
-    * http://www.slf4j.org/
-
-This product optionally depends on 'Apache Commons Logging', a logging
-framework, which can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.commons-logging.txt (Apache License 2.0)
-  * HOMEPAGE:
-    * http://commons.apache.org/logging/
-
-This product optionally depends on 'Apache Log4J', a logging framework,
-which can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.log4j.txt (Apache License 2.0)
-  * HOMEPAGE:
-    * http://logging.apache.org/log4j/
-
-This product optionally depends on 'JBoss Logging', a logging framework,
-which can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.jboss-logging.txt (GNU LGPL 2.1)
-  * HOMEPAGE:
-    * http://anonsvn.jboss.org/repos/common/common-logging-spi/
-
-This product optionally depends on 'Apache Felix', an open source OSGi
-framework implementation, which can be obtained at:
-
-  * LICENSE:
-    * license/LICENSE.felix.txt (Apache License 2.0)
-  * HOMEPAGE:
-    * http://felix.apache.org/
+Content may contain encryption software. The country in which you are currently
+may have restrictions on the import, possession, and use, and/or re-export to
+another country, of encryption software. BEFORE using any encryption software,
+please check the country's laws, regulations and policies concerning the import,
+possession, or use, and re-export of encryption software, to see if this is
+permitted.
