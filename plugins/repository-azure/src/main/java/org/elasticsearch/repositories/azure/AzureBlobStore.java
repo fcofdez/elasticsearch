@@ -25,6 +25,7 @@ import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.models.BlobItem;
 import com.azure.storage.blob.models.BlobListDetails;
 import com.azure.storage.blob.models.BlobRange;
+import com.azure.storage.blob.models.BlobRequestConditions;
 import com.azure.storage.blob.models.ListBlobsOptions;
 import com.azure.storage.blob.specialized.BlobInputStream;
 import org.apache.logging.log4j.LogManager;
@@ -164,6 +165,14 @@ public class AzureBlobStore implements BlobStore {
     }
 
     public DeleteResult deleteBlobDirectory(String path, Executor executor) {
+        try {
+            SocketAccess.doPrivilegedVoidException(() -> {
+               BlobContainerClient blobContainerClient = client().getBlobContainerClient(container);
+                for (BlobItem blobItem : blobContainerClient.listBlobsByHierarchy(path)) {
+                    blobContainerClient.getBlobClient(blobItem.getName()).delete();
+                }
+            });
+        } catch (Exception e) { }
         return new DeleteResult(0, 0);
 //        final BlobServiceClient client = client();
 //        //final OperationContext context = hookMetricCollector(client.v2().get(), getMetricsCollector);
@@ -307,7 +316,7 @@ public class AzureBlobStore implements BlobStore {
         SocketAccess.doPrivilegedVoidException(() -> {
             BlobContainerClient blobContainerClient = client().getBlobContainerClient(container);
             final BlobClient blob = blobContainerClient.getBlobClient(blobName);
-            blob.upload(inputStream, blobSize);
+            blob.upload(inputStream, blobSize, failIfAlreadyExists == false);
         });
 //                blob.uploadWithResponse(inputStream, blobSize, ParallelTransferOptions)
 //                blob.upload(inputStream, blobSize, accessCondition, service.getBlobRequestOptionsForWriteBlob(), operationContext));
