@@ -71,15 +71,15 @@ public class AzureBlobContainer extends AbstractBlobContainer {
 
     private InputStream openInputStream(String blobName, long position, @Nullable Long length) throws IOException {
         logger.trace("readBlob({}) from position [{}] with length [{}]", blobName, position, length != null ? length : "unlimited");
-//        if (blobStore.getLocationMode() == LocationMode.SECONDARY_ONLY && !blobExists(blobName)) {
-//            // On Azure, if the location path is a secondary location, and the blob does not
-//            // exist, instead of returning immediately from the getInputStream call below
-//            // with a 404 StorageException, Azure keeps trying and trying for a long timeout
-//            // before throwing a storage exception.  This can cause long delays in retrieving
-//            // snapshots, so we first check if the blob exists before trying to open an input
-//            // stream to it.
-//            throw new NoSuchFileException("Blob [" + blobName + "] does not exist");
-//        }
+        if (blobStore.getLocationMode() == LocationMode.SECONDARY_ONLY && !blobExists(blobName)) {
+            // On Azure, if the location path is a secondary location, and the blob does not
+            // exist, instead of returning immediately from the getInputStream call below
+            // with a 404 StorageException, Azure keeps trying and trying for a long timeout
+            // before throwing a storage exception.  This can cause long delays in retrieving
+            // snapshots, so we first check if the blob exists before trying to open an input
+            // stream to it.
+            throw new NoSuchFileException("Blob [" + blobName + "] does not exist");
+        }
         try {
             return blobStore.getInputStream(buildKey(blobName), position, length);
         } catch (BlobStorageException e) {

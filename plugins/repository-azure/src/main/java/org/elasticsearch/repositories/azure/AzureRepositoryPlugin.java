@@ -34,6 +34,7 @@ import org.elasticsearch.repositories.Repository;
 import org.elasticsearch.threadpool.ExecutorBuilder;
 import org.elasticsearch.threadpool.ScalingExecutorBuilder;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -99,5 +100,10 @@ public class AzureRepositoryPlugin extends Plugin implements RepositoryPlugin, R
             throw new SettingsException("If you want to use an azure repository, you need to define a client configuration.");
         }
         azureStoreService.refreshAndClearCache(clientsSettings);
+    }
+
+    @Override
+    public void close() throws IOException {
+        azureStoreService.close();
     }
 }

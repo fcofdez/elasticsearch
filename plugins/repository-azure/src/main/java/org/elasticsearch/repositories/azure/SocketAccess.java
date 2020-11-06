@@ -61,7 +61,7 @@ public final class SocketAccess {
         }
     }
 
-    public static void doPrivilegedVoidException(StorageRunnable action) throws URISyntaxException {
+    public static void doPrivilegedVoidException(StorageRunnable action) {
         SpecialPermission.check();
         try {
             AccessController.doPrivileged((PrivilegedExceptionAction<Void>) () -> {

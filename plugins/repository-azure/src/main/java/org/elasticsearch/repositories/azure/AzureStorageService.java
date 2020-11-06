@@ -23,22 +23,33 @@ import com.azure.core.http.HttpClient;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
-import com.azure.storage.common.StorageSharedKeyCredential;
 import com.azure.storage.common.policy.RequestRetryOptions;
 import com.azure.storage.common.policy.RetryPolicyType;
 import io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsException;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.util.concurrent.AbstractRefCounted;
-import org.elasticsearch.common.util.concurrent.RefCounted;
+import org.elasticsearch.common.util.concurrent.FutureUtils;
 import org.elasticsearch.threadpool.ThreadPool;
+import reactor.core.scheduler.Scheduler;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Collections.emptyMap;
 
@@ -59,6 +70,8 @@ public class AzureStorageService {
         refreshAndClearCache(clientsSettings);
     }
 
+    private volatile Map<AzureStorageSettings, BlobServiceClientRef> clients = Collections.emptyMap();
+
     /**
      * Creates a {@code CloudBlobClient} on each invocation using the current client
      * settings. CloudBlobClient is not thread safe and the settings can change,
@@ -66,13 +79,29 @@ public class AzureStorageService {
      * thread for logically coupled ops. The {@code OperationContext} is used to
      * specify the proxy, but a new context is *required* for each call.
      */
-    public BlobServiceClient client(String clientName) {
+    public BlobServiceClientRef client(String clientName, ThreadPool threadPool) {
         final AzureStorageSettings azureStorageSettings = this.storageSettings.get(clientName);
         if (azureStorageSettings == null) {
             throw new SettingsException("Unable to find client with name [" + clientName + "]");
         }
         try {
-            return createClient(azureStorageSettings);
+            {
+                final BlobServiceClientRef blobServiceClientRef = clients.get(azureStorageSettings);
+                if (blobServiceClientRef != null && blobServiceClientRef.tryIncRef()) {
+                    return blobServiceClientRef;
+                }
+            }
+
+            synchronized (this) {
+                final BlobServiceClientRef existing = clients.get(azureStorageSettings);
+                if (existing != null && existing.tryIncRef()) {
+                    return existing;
+                }
+                final BlobServiceClientRef blobServiceClientRef = createClientInternal(azureStorageSettings, threadPool);
+                blobServiceClientRef.incRef();
+                clients = Maps.copyMapWithAddedEntry(clients, azureStorageSettings, blobServiceClientRef);
+                return blobServiceClientRef;
+            }
         } catch (IllegalArgumentException e) {
             throw new SettingsException("Invalid azure client settings with name [" + clientName + "]", e);
         }
@@ -102,47 +131,80 @@ public class AzureStorageService {
             Math.toIntExact(azureStorageSettings.getTimeout().getMillis()), null, null, null);
     }
 
-    static class EsThreadFactory implements ThreadFactory {
+    /**
+     * Executor that gives permissions to runnables
+     */
+    private static class PrivilegedExecutor implements Executor {
+        private final Executor delegate;
 
-        final ThreadGroup group;
-        final AtomicInteger threadNumber = new AtomicInteger(1);
-        final String namePrefix;
-
-        EsThreadFactory(String namePrefix) {
-            this.namePrefix = namePrefix;
-            SecurityManager s = System.getSecurityManager();
-            group = (s != null) ? s.getThreadGroup() :
-                Thread.currentThread().getThreadGroup();
+        private PrivilegedExecutor(Executor delegate) {
+            this.delegate = delegate;
         }
 
         @Override
-        public Thread newThread(Runnable r) {
-            Thread t = new Thread(group, r,
-                namePrefix + "[T#" + threadNumber.getAndIncrement() + "]",
-                0);
-            t.setDaemon(true);
-            return t;
+        public void execute(Runnable command) {
+            delegate.execute(() -> {
+                SocketAccess.doPrivilegedVoidException(command::run);
+            });
         }
     }
 
+    private final static AtomicBoolean hackSetUp = new AtomicBoolean(false);
 
-    private static BlobServiceClient createClient(AzureStorageSettings azureStorageSettings) {
-        final String connectionString = azureStorageSettings.getConnectString();
-        final StorageSharedKeyCredential credential = StorageSharedKeyCredential.fromConnectionString(connectionString);
+    static class BlobServiceClientRef extends AbstractRefCounted implements Releasable {
+        private final Logger logger = LogManager.getLogger(BlobServiceClientRef.class);
+
+        private final BlobServiceClient blobServiceClient;
+        private final NioEventLoopGroup eventLoopGroup;
+
+        public BlobServiceClientRef(String name, BlobServiceClient blobServiceClient, NioEventLoopGroup eventLoopGroup) {
+            super(name);
+            this.blobServiceClient = blobServiceClient;
+            this.eventLoopGroup = eventLoopGroup;
+        }
+
+        public BlobServiceClient getClient() {
+            return blobServiceClient;
+        }
+
+        @Override
+        protected void closeInternal() {
+            logger.debug("CLOSING IZUU");
+            eventLoopGroup.shutdownGracefully();
+            logger.debug("CLOSED HOLA");
+        }
+
+        @Override
+        public void close() {
+            decRef();
+        }
+    }
+
+    private static BlobServiceClientRef createClientInternal(AzureStorageSettings settings, ThreadPool threadPool) {
+        if (hackSetUp.compareAndSet(false, true)) {
+            Schedulers.setFactory(new Schedulers.Factory() {
+                @Override
+                public Scheduler newParallel(int parallelism, ThreadFactory threadFactory) {
+                    return Schedulers.fromExecutor(threadPool.scheduler());
+                }
+            });
+        }
+
+        final String connectionString = settings.getConnectString();
         NettyAsyncHttpClientBuilder httpClientBuilder = new NettyAsyncHttpClientBuilder();
         //TODO
 //        new ProxyOptions()
 //        httpClientBuilder.proxy()
-        NioEventLoopGroup nioEventLoopGroup = new NioEventLoopGroup(2, new EsThreadFactory("azure"));
+        //ProxyOptions proxyOptions = new ProxyOptions();
+        NioEventLoopGroup nioEventLoopGroup = new NioEventLoopGroup(2, new PrivilegedExecutor(threadPool.executor(ThreadPool.Names.GENERIC)));
         HttpClient httpClient = httpClientBuilder.eventLoopGroup(nioEventLoopGroup).build();
 
         // TODO add ref counting to shutdown the EventLoopGroup once the refcount == 0
         BlobServiceClientBuilder builder = new BlobServiceClientBuilder()
-            .credential(credential)
             .connectionString(connectionString)
             .httpClient(httpClient)
-            .retryOptions(getRetryOptions(azureStorageSettings));
-        return SocketAccess.doPrivilegedException(builder::buildClient);
+            .retryOptions(getRetryOptions(settings));
+        return new BlobServiceClientRef("azure", SocketAccess.doPrivilegedException(builder::buildClient), nioEventLoopGroup);
     }
 
     private static RequestRetryOptions getRetryOptions(AzureStorageSettings azureStorageSettings) {
@@ -189,6 +251,17 @@ public class AzureStorageService {
         final String[] splits = path.split("/", 3);
         // We return the remaining end of the string
         return splits[2];
+    }
+
+    void close() {
+        releaseCachedClients();
+    }
+
+    private void releaseCachedClients() {
+        for (BlobServiceClientRef clientRef : clients.values()) {
+            clientRef.decRef();
+        }
+        clients = Collections.emptyMap();
     }
 
     // package private for testing
