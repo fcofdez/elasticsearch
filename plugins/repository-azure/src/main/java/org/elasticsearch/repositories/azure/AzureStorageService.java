@@ -20,34 +20,31 @@
 package org.elasticsearch.repositories.azure;
 
 import com.azure.core.http.HttpClient;
+import com.azure.core.http.ProxyOptions;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
-import com.azure.storage.blob.BlobServiceClient;
+import com.azure.core.util.Configuration;
 import com.azure.storage.blob.BlobServiceClientBuilder;
+import com.azure.storage.common.implementation.connectionstring.StorageConnectionString;
 import com.azure.storage.common.policy.RequestRetryOptions;
 import com.azure.storage.common.policy.RetryPolicyType;
+import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.elasticsearch.common.lease.Releasable;
+import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsException;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.Maps;
-import org.elasticsearch.common.util.concurrent.AbstractRefCounted;
-import org.elasticsearch.common.util.concurrent.FutureUtils;
 import org.elasticsearch.threadpool.ThreadPool;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.URI;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -70,7 +67,7 @@ public class AzureStorageService {
         refreshAndClearCache(clientsSettings);
     }
 
-    private volatile Map<AzureStorageSettings, BlobServiceClientRef> clients = Collections.emptyMap();
+    private volatile Map<Tuple<AzureStorageSettings, LocationMode>, AzureBlobServiceClientRef> clients = Collections.emptyMap();
 
     /**
      * Creates a {@code CloudBlobClient} on each invocation using the current client
@@ -79,27 +76,30 @@ public class AzureStorageService {
      * thread for logically coupled ops. The {@code OperationContext} is used to
      * specify the proxy, but a new context is *required* for each call.
      */
-    public BlobServiceClientRef client(String clientName, ThreadPool threadPool) {
+    public AzureBlobServiceClientRef client(String clientName, LocationMode locationMode, ThreadPool threadPool) {
         final AzureStorageSettings azureStorageSettings = this.storageSettings.get(clientName);
         if (azureStorageSettings == null) {
             throw new SettingsException("Unable to find client with name [" + clientName + "]");
         }
+
+        Tuple<AzureStorageSettings, LocationMode> settings = new Tuple<>(azureStorageSettings, locationMode);
         try {
             {
-                final BlobServiceClientRef blobServiceClientRef = clients.get(azureStorageSettings);
+                final AzureBlobServiceClientRef blobServiceClientRef = clients.get(settings);
                 if (blobServiceClientRef != null && blobServiceClientRef.tryIncRef()) {
                     return blobServiceClientRef;
                 }
             }
 
             synchronized (this) {
-                final BlobServiceClientRef existing = clients.get(azureStorageSettings);
+                final AzureBlobServiceClientRef existing = clients.get(settings);
                 if (existing != null && existing.tryIncRef()) {
                     return existing;
                 }
-                final BlobServiceClientRef blobServiceClientRef = createClientInternal(azureStorageSettings, threadPool);
+                final AzureBlobServiceClientRef blobServiceClientRef = createClientReference(clientName, locationMode, azureStorageSettings,
+                    threadPool);
                 blobServiceClientRef.incRef();
-                clients = Maps.copyMapWithAddedEntry(clients, azureStorageSettings, blobServiceClientRef);
+                clients = Maps.copyMapWithAddedEntry(clients, settings, blobServiceClientRef);
                 return blobServiceClientRef;
             }
         } catch (IllegalArgumentException e) {
@@ -151,68 +151,105 @@ public class AzureStorageService {
 
     private final static AtomicBoolean hackSetUp = new AtomicBoolean(false);
 
-    static class BlobServiceClientRef extends AbstractRefCounted implements Releasable {
-        private final Logger logger = LogManager.getLogger(BlobServiceClientRef.class);
-
-        private final BlobServiceClient blobServiceClient;
-        private final NioEventLoopGroup eventLoopGroup;
-
-        public BlobServiceClientRef(String name, BlobServiceClient blobServiceClient, NioEventLoopGroup eventLoopGroup) {
-            super(name);
-            this.blobServiceClient = blobServiceClient;
-            this.eventLoopGroup = eventLoopGroup;
-        }
-
-        public BlobServiceClient getClient() {
-            return blobServiceClient;
-        }
-
-        @Override
-        protected void closeInternal() {
-            logger.debug("CLOSING IZUU");
-            eventLoopGroup.shutdownGracefully();
-            logger.debug("CLOSED HOLA");
-        }
-
-        @Override
-        public void close() {
-            decRef();
-        }
-    }
-
-    private static BlobServiceClientRef createClientInternal(AzureStorageSettings settings, ThreadPool threadPool) {
+    private static AzureBlobServiceClientRef createClientReference(String clientName, LocationMode locationMode, AzureStorageSettings settings, ThreadPool threadPool) {
         if (hackSetUp.compareAndSet(false, true)) {
             Schedulers.setFactory(new Schedulers.Factory() {
                 @Override
                 public Scheduler newParallel(int parallelism, ThreadFactory threadFactory) {
                     return Schedulers.fromExecutor(threadPool.scheduler());
                 }
+
+                @Override
+                public Scheduler newElastic(int ttlSeconds, ThreadFactory threadFactory) {
+                    return Schedulers.fromExecutor(threadPool.executor(ThreadPool.Names.SNAPSHOT));
+                }
+
+                @Override
+                public Scheduler newBoundedElastic(int threadCap, int queuedTaskCap, ThreadFactory threadFactory, int ttlSeconds) {
+                    return Schedulers.fromExecutor(threadPool.executor(ThreadPool.Names.SNAPSHOT));
+                }
+
+                @Override
+                public Scheduler newSingle(ThreadFactory threadFactory) {
+                    return Schedulers.fromExecutor(threadPool.executor(ThreadPool.Names.SNAPSHOT));
+                }
             });
         }
 
-        final String connectionString = settings.getConnectString();
-        NettyAsyncHttpClientBuilder httpClientBuilder = new NettyAsyncHttpClientBuilder();
-        //TODO
-//        new ProxyOptions()
-//        httpClientBuilder.proxy()
-        //ProxyOptions proxyOptions = new ProxyOptions();
-        NioEventLoopGroup nioEventLoopGroup = new NioEventLoopGroup(2, new PrivilegedExecutor(threadPool.executor(ThreadPool.Names.GENERIC)));
-        HttpClient httpClient = httpClientBuilder.eventLoopGroup(nioEventLoopGroup).build();
+        final EventLoopGroup eventLoopGroup = new NioEventLoopGroup(2,
+            new PrivilegedExecutor(threadPool.executor(ThreadPool.Names.GENERIC)));
+        final HttpClient httpClient = new NettyAsyncHttpClientBuilder().eventLoopGroup(eventLoopGroup)
+            .disableBufferCopy(true)
+            .proxy(getProxyOptions(settings))
+            .build();
 
-        // TODO add ref counting to shutdown the EventLoopGroup once the refcount == 0
+        final String connectionString = settings.getConnectString();
+
         BlobServiceClientBuilder builder = new BlobServiceClientBuilder()
             .connectionString(connectionString)
             .httpClient(httpClient)
-            .retryOptions(getRetryOptions(settings));
-        return new BlobServiceClientRef("azure", SocketAccess.doPrivilegedException(builder::buildClient), nioEventLoopGroup);
+            .retryOptions(getRetryOptions(locationMode, settings));
+
+        if (locationMode.isSecondary()) {
+            StorageConnectionString storageConnectionString = StorageConnectionString.create(connectionString, null);
+            String secondaryUri = storageConnectionString.getBlobEndpoint().getSecondaryUri();
+            if (secondaryUri == null) {
+                throw new IllegalArgumentException();
+            }
+
+            builder.endpoint(secondaryUri);
+        }
+
+        return new AzureBlobServiceClientRef(clientName, SocketAccess.doPrivilegedException(builder::buildClient), eventLoopGroup);
     }
 
-    private static RequestRetryOptions getRetryOptions(AzureStorageSettings azureStorageSettings) {
-        // TODO add a secondary host if the retry policy requires to
+    private static ProxyOptions getProxyOptions(AzureStorageSettings settings) {
+        Proxy proxy = settings.getProxy();
+        if (proxy == null) {
+            return null;
+        }
+
+        switch (proxy.type()) {
+            case HTTP:
+                return new ProxyOptions(ProxyOptions.Type.HTTP, (InetSocketAddress) proxy.address());
+            case SOCKS:
+                return new ProxyOptions(ProxyOptions.Type.SOCKS5, (InetSocketAddress) proxy.address());
+            default:
+                return null;
+        }
+    }
+
+    private static RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
+        // TODO, throw a proper exception here?
         int timeout = Math.toIntExact(azureStorageSettings.getTimeout().getMillis());
+        String connectString = azureStorageSettings.getConnectString();
+        StorageConnectionString storageConnectionString = StorageConnectionString.create(connectString, null);
+        String primaryUri = storageConnectionString.getBlobEndpoint().getPrimaryUri();
+        String secondaryUri = storageConnectionString.getBlobEndpoint().getSecondaryUri();
+
+        if (locationMode.isSecondary() && secondaryUri == null) {
+            throw new IllegalArgumentException("Expected to get a secondary URI");
+        }
+
+        final String secondaryHost;
+        switch (locationMode) {
+            case PRIMARY_ONLY:
+            case SECONDARY_ONLY:
+                secondaryHost = null;
+                break;
+            case PRIMARY_THEN_SECONDARY:
+                secondaryHost = secondaryUri;
+                break;
+            case SECONDARY_THEN_PRIMARY:
+                secondaryHost = primaryUri;
+                break;
+            default:
+                throw new IllegalStateException();
+        }
+
         return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
             azureStorageSettings.getMaxRetries(), timeout == -1 ? null : timeout,
-            null, null, null);
+            null, null, secondaryHost);
     }
 
 //    private static OperationContext buildOperationContext(AzureStorageSettings azureStorageSettings) {
@@ -258,7 +295,7 @@ public class AzureStorageService {
     }
 
     private void releaseCachedClients() {
-        for (BlobServiceClientRef clientRef : clients.values()) {
+        for (AzureBlobServiceClientRef clientRef : clients.values()) {
             clientRef.decRef();
         }
         clients = Collections.emptyMap();

@@ -38,6 +38,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 final class AzureStorageSettings {
 
@@ -246,5 +247,23 @@ final class AzureStorageSettings {
                     entry.getValue().timeout, entry.getValue().maxRetries, entry.getValue().proxy));
         }
         return Map.copyOf(map);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        AzureStorageSettings that = (AzureStorageSettings) o;
+        return maxRetries == that.maxRetries &&
+            Objects.equals(account, that.account) &&
+            Objects.equals(connectString, that.connectString) &&
+            Objects.equals(endpointSuffix, that.endpointSuffix) &&
+            Objects.equals(timeout, that.timeout) &&
+            Objects.equals(proxy, that.proxy);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(account, connectString, endpointSuffix, timeout, maxRetries, proxy);
     }
 }

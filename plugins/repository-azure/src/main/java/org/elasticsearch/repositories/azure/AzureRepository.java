@@ -89,9 +89,12 @@ public class AzureRepository extends BlobStoreRepository {
         // For secondary_only setting, the repository should be read only
         final LocationMode locationMode = Repository.LOCATION_MODE_SETTING.get(metadata.settings());
         if (Repository.READONLY_SETTING.exists(metadata.settings())) {
+            if (locationMode.isSecondary() && Repository.READONLY_SETTING.get(metadata.settings()) == false) {
+                throw new IllegalArgumentException();
+            }
             this.readonly = Repository.READONLY_SETTING.get(metadata.settings());
         } else {
-            this.readonly = false;
+            this.readonly = locationMode.isSecondary();
         }
     }
 

@@ -26,5 +26,13 @@ enum LocationMode {
     PRIMARY_ONLY,
     SECONDARY_ONLY,
     PRIMARY_THEN_SECONDARY,
-    SECONDARY_THEN_PRIMARY
+    SECONDARY_THEN_PRIMARY;
+
+    boolean isSecondary() {
+        return this == SECONDARY_ONLY || this == SECONDARY_THEN_PRIMARY;
+    }
+
+    boolean isPrimary() {
+        return isPrimary() == false;
+    }
 }

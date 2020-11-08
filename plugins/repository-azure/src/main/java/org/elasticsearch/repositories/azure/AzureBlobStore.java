@@ -23,6 +23,7 @@ import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.models.BlobItem;
+import com.azure.storage.blob.models.BlobItemProperties;
 import com.azure.storage.blob.models.BlobListDetails;
 import com.azure.storage.blob.models.BlobRange;
 import com.azure.storage.blob.models.ListBlobsOptions;
@@ -30,6 +31,7 @@ import com.azure.storage.blob.specialized.BlobInputStream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.cluster.metadata.RepositoryMetadata;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.blobstore.BlobContainer;
@@ -41,16 +43,21 @@ import org.elasticsearch.common.blobstore.support.PlainBlobMetadata;
 import org.elasticsearch.repositories.azure.AzureRepository.Repository;
 import org.elasticsearch.threadpool.ThreadPool;
 
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URISyntaxException;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static java.util.Collections.emptyMap;
 
@@ -140,7 +147,7 @@ public class AzureBlobStore implements BlobStore {
     public boolean blobExists(String blob) {
         // Container name must be lower case.
         //final OperationContext context = hookMetricCollector(client.v2().get(), getMetricsCollector);
-        try(final AzureStorageService.BlobServiceClientRef blobServiceClient = client()) {
+        try(final AzureBlobServiceClientRef blobServiceClient = client()) {
             final BlobServiceClient client = blobServiceClient.getClient();
 
             Boolean blobExists = SocketAccess.doPrivilegedException(() -> {
@@ -153,7 +160,7 @@ public class AzureBlobStore implements BlobStore {
 
     public void deleteBlob(String blob) throws URISyntaxException {
         //final OperationContext context = hookMetricCollector(client.v2().get(), getMetricsCollector);
-        try(final AzureStorageService.BlobServiceClientRef blobServiceClient = client()) {
+        try(final AzureBlobServiceClientRef blobServiceClient = client()) {
             final BlobServiceClient client = blobServiceClient.getClient();
             logger.trace(() -> new ParameterizedMessage("delete blob for container [{}], blob [{}]", container, blob));
             SocketAccess.doPrivilegedVoidException(() -> {
@@ -170,7 +177,7 @@ public class AzureBlobStore implements BlobStore {
         try {
             int blobsDeleted = 0;
             long bytesDeleted = 0;
-            try(final AzureStorageService.BlobServiceClientRef blobServiceClient = client()) {
+            try(final AzureBlobServiceClientRef blobServiceClient = client()) {
                 final BlobServiceClient client = blobServiceClient.getClient();
                 SocketAccess.doPrivilegedVoidException(() -> {
                     BlobContainerClient blobContainerClient = client.getBlobContainerClient(container);
@@ -244,7 +251,7 @@ public class AzureBlobStore implements BlobStore {
 
     public InputStream getInputStream(String blob, long position, @Nullable Long length) {
         logger.trace(() -> new ParameterizedMessage("reading container [{}], blob [{}]", container, blob));
-        final AzureStorageService.BlobServiceClientRef clientRef = client();
+        final AzureBlobServiceClientRef clientRef = client();
 
         final BlobServiceClient client = clientRef.getClient();
         final BlobInputStream is = SocketAccess.doPrivilegedException(() ->{
@@ -255,11 +262,13 @@ public class AzureBlobStore implements BlobStore {
         return new Stream(clientRef, is);
     }
 
-    private final static class Stream extends InputStream {
-        private final AzureStorageService.BlobServiceClientRef clientRef;
+    private final static class Stream extends FilterInputStream {
+        private final AzureBlobServiceClientRef clientRef;
         private final BlobInputStream stream;
+        private boolean closed = false;
 
-        public Stream(AzureStorageService.BlobServiceClientRef clientRef, BlobInputStream stream) {
+        public Stream(AzureBlobServiceClientRef clientRef, BlobInputStream stream) {
+            super(stream);
             this.clientRef = clientRef;
             this.stream = stream;
         }
@@ -281,7 +290,11 @@ public class AzureBlobStore implements BlobStore {
 
         @Override
         public void close() throws IOException {
-            clientRef.close();
+            if (closed == false) {
+                super.close();
+                clientRef.close();
+                closed = true;
+            }
         }
     }
 
@@ -293,16 +306,21 @@ public class AzureBlobStore implements BlobStore {
         final var blobsBuilder = new HashMap<String, BlobMetadata>();
         logger.trace(() ->
             new ParameterizedMessage("listing container [{}], keyPath [{}], prefix [{}]", container, keyPath, prefix));
-        try (AzureStorageService.BlobServiceClientRef clientRef = client()) {
+        try (AzureBlobServiceClientRef clientRef = client()) {
             final BlobServiceClient client = clientRef.getClient();
-            BlobContainerClient containerClient = client.getBlobContainerClient(container);
             SocketAccess.doPrivilegedVoidException(() -> {
+                final BlobContainerClient containerClient = client.getBlobContainerClient(container);
                 final ListBlobsOptions listBlobsOptions = new ListBlobsOptions();
                 listBlobsOptions.setPrefix(keyPath + (prefix == null ? "" : prefix)).setDetails(
                     new BlobListDetails().setRetrieveMetadata(true));
-                for (final BlobItem blobItem : containerClient.listBlobs(listBlobsOptions, null)) {
+                for (final BlobItem blobItem : containerClient.listBlobsByHierarchy("/", listBlobsOptions, null)) {
+                    BlobItemProperties properties = blobItem.getProperties();
+                    Boolean isPrefix = blobItem.isPrefix();
+                    if (isPrefix != null && isPrefix) {
+                        continue;
+                    }
                     blobsBuilder.put(blobItem.getName(),
-                        new PlainBlobMetadata(blobItem.getName(), blobItem.getProperties().getContentLength()));
+                        new PlainBlobMetadata(blobItem.getName(), properties.getContentLength()));
                 }
             });
         }
@@ -310,30 +328,29 @@ public class AzureBlobStore implements BlobStore {
     }
 
     public Map<String, BlobContainer> children(BlobPath path) {
-//        final var blobsBuilder = new HashSet<String>();
-//        final Tuple<CloudBlobClient, Supplier<OperationContext>> client = client();
-//        final OperationContext context = hookMetricCollector(client.v2().get(), listMetricsCollector);
-//        final CloudBlobContainer blobContainer = client.v1().getContainerReference(container);
-//        final String keyPath = path.buildAsString();
-//        final EnumSet<BlobListingDetails> enumBlobListingDetails = EnumSet.of(BlobListingDetails.METADATA);
-//
-//        SocketAccess.doPrivilegedVoidException(() -> {
-//            for (ListBlobItem blobItem : blobContainer.listBlobs(keyPath, false, enumBlobListingDetails, null, context)) {
-//                if (blobItem instanceof CloudBlobDirectory) {
-//                    final URI uri = blobItem.getUri();
-//                    logger.trace(() -> new ParameterizedMessage("blob url [{}]", uri));
-//                    // uri.getPath is of the form /container/keyPath.* and we want to strip off the /container/
-//                    // this requires 1 + container.length() + 1, with each 1 corresponding to one of the /.
-//                    // Lastly, we add the length of keyPath to the offset to strip this container's path.
-//                    final String uriPath = uri.getPath();
-//                    blobsBuilder.add(uriPath.substring(1 + container.length() + 1 + keyPath.length(), uriPath.length() - 1));
-//                }
-//            }
-//        });
-//
-//        return Collections.unmodifiableMap(blobsBuilder.stream().collect(
-//            Collectors.toMap(Function.identity(), name -> new AzureBlobContainer(path.add(name), this, threadPool))));
-        return Collections.emptyMap();
+        final var blobsBuilder = new HashSet<String>();
+        final String keyPath = path.buildAsString();
+
+        try (AzureBlobServiceClientRef clientRef = client()) {
+            final BlobServiceClient client = clientRef.getClient();
+            SocketAccess.doPrivilegedVoidException(() -> {
+                BlobContainerClient blobContainer = client.getBlobContainerClient(container);
+                final ListBlobsOptions listBlobsOptions = new ListBlobsOptions();
+                listBlobsOptions.setPrefix(keyPath).setDetails(new BlobListDetails().setRetrieveMetadata(true));
+                for (final BlobItem blobItem : blobContainer.listBlobsByHierarchy("/", listBlobsOptions, null)) {
+                    logger.info(() -> new ParameterizedMessage("blob url [{}]", blobItem.getName()));
+                    // uri.getPath is of the form /container/keyPath.* and we want to strip off the /container/
+                    // this requires 1 + container.length() + 1, with each 1 corresponding to one of the /.
+                    // Lastly, we add the length of keyPath to the offset to strip this container's path.
+                    Boolean isPrefix = blobItem.isPrefix();
+                    if (isPrefix != null && isPrefix) {
+                        blobsBuilder.add(blobItem.getName());
+                    }
+                }
+            });
+        }
+        return Collections.unmodifiableMap(blobsBuilder.stream().collect(
+            Collectors.toMap(Function.identity(), name -> new AzureBlobContainer(BlobPath.cleanPath().add(name), this, threadPool))));
     }
 
     public void writeBlob(String blobName, InputStream inputStream, long blobSize, boolean failIfAlreadyExists)
@@ -345,7 +362,7 @@ public class AzureBlobStore implements BlobStore {
 
 //            final AccessCondition accessCondition =
 //                failIfAlreadyExists ? AccessCondition.generateIfNotExistsCondition() : AccessCondition.generateEmptyCondition();
-        try (AzureStorageService.BlobServiceClientRef blobContainerClientRef = client()) {
+        try (AzureBlobServiceClientRef blobContainerClientRef = client()) {
             final BlobServiceClient client = blobContainerClientRef.getClient();
             SocketAccess.doPrivilegedVoidException(() -> {
                 final BlobClient blob = client.getBlobContainerClient(container).getBlobClient(blobName);
@@ -364,8 +381,8 @@ public class AzureBlobStore implements BlobStore {
         logger.trace(() -> new ParameterizedMessage("writeBlob({}, stream, {}) - done", blobName, blobSize));
     }
 
-    private AzureStorageService.BlobServiceClientRef client() {
-        return service.client(clientName, threadPool);
+    private AzureBlobServiceClientRef client() {
+        return service.client(clientName, locationMode, threadPool);
     }
 
 //    private OperationContext hookMetricCollector(OperationContext context, Consumer<HttpURLConnection> metricCollector) {
