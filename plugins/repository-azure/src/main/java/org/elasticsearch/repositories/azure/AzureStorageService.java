@@ -124,13 +124,6 @@ public class AzureStorageService {
 //        return client;
 //    }
 
-    // non-static, package private for testing
-    RequestRetryOptions createRetryPolicy(final AzureStorageSettings azureStorageSettings) {
-        return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
-            azureStorageSettings.getMaxRetries(),
-            Math.toIntExact(azureStorageSettings.getTimeout().getMillis()), null, null, null);
-    }
-
     /**
      * Executor that gives permissions to runnables
      */
@@ -151,7 +144,7 @@ public class AzureStorageService {
 
     private final static AtomicBoolean hackSetUp = new AtomicBoolean(false);
 
-    private static AzureBlobServiceClientRef createClientReference(String clientName, LocationMode locationMode, AzureStorageSettings settings, ThreadPool threadPool) {
+    private AzureBlobServiceClientRef createClientReference(String clientName, LocationMode locationMode, AzureStorageSettings settings, ThreadPool threadPool) {
         if (hackSetUp.compareAndSet(false, true)) {
             Schedulers.setFactory(new Schedulers.Factory() {
                 @Override
@@ -219,7 +212,8 @@ public class AzureStorageService {
         }
     }
 
-    private static RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
+    // non-static, package private for testing
+    RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
         // TODO, throw a proper exception here?
         int timeout = Math.toIntExact(azureStorageSettings.getTimeout().getMillis());
         String connectString = azureStorageSettings.getConnectString();
@@ -266,6 +260,7 @@ public class AzureStorageService {
      * @return the old settings
      */
     public Map<String, AzureStorageSettings> refreshAndClearCache(Map<String, AzureStorageSettings> clientsSettings) {
+        releaseCachedClients();
         final Map<String, AzureStorageSettings> prevSettings = this.storageSettings;
         this.storageSettings = Map.copyOf(clientsSettings);
         // clients are built lazily by {@link client(String)}

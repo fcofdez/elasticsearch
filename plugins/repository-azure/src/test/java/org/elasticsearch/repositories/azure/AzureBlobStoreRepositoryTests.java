@@ -18,8 +18,11 @@
  */
 package org.elasticsearch.repositories.azure;
 
+import com.azure.storage.common.policy.RequestRetryOptions;
+import com.azure.storage.common.policy.RetryPolicyType;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpHandler;
+import fixture.azure.AzureBatchHttpHandler;
 import fixture.azure.AzureHttpHandler;
 import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.common.regex.Regex;
@@ -35,6 +38,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @SuppressForbidden(reason = "this test uses a HttpServer to emulate an Azure endpoint")
@@ -61,7 +65,7 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
 
     @Override
     protected Map<String, HttpHandler> createHttpHandlers() {
-        return Collections.singletonMap("/account/container",
+        return Collections.singletonMap("/account",
             new AzureHTTPStatsCollectorHandler(new AzureBlobStoreHttpHandler("container")));
     }
 
@@ -102,22 +106,23 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
             super(settings);
         }
 
-//        @Override
-//        AzureStorageService createAzureStoreService(final Settings settings) {
-//            return new AzureStorageService(settings) {
-//                @Override
-//                RetryPolicyFactory createRetryPolicy(final AzureStorageSettings azureStorageSettings) {
-//                    return new RetryExponentialRetry(1, 100, 500, azureStorageSettings.getMaxRetries());
-//                }
-//
+        @Override
+        AzureStorageService createAzureStoreService(final Settings settings) {
+            return new AzureStorageService(settings) {
+                @Override
+                RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
+                    return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
+                        azureStorageSettings.getMaxRetries(), 600,
+                        1L, 500L, null);
+                }
 //                @Override
 //                BlobRequestOptions getBlobRequestOptionsForWriteBlob() {
 //                    BlobRequestOptions options = new BlobRequestOptions();
 //                    options.setSingleBlobPutThresholdInBytes(Math.toIntExact(ByteSizeUnit.MB.toBytes(1)));
 //                    return options;
 //                }
-//            };
-//        }
+            };
+        }
     }
 
     @SuppressForbidden(reason = "this test uses a HttpHandler to emulate an Azure endpoint")

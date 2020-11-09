@@ -96,16 +96,18 @@ final class AzureStorageSettings {
     private final TimeValue timeout;
     private final int maxRetries;
     private final Proxy proxy;
+    private final LocationMode locationMode;
 
     // copy-constructor
     private AzureStorageSettings(String account, String connectString, String endpointSuffix, TimeValue timeout, int maxRetries,
-                                 Proxy proxy) {
+                                 Proxy proxy, LocationMode locationMode) {
         this.account = account;
         this.connectString = connectString;
         this.endpointSuffix = endpointSuffix;
         this.timeout = timeout;
         this.maxRetries = maxRetries;
         this.proxy = proxy;
+        this.locationMode = locationMode;
     }
 
     private AzureStorageSettings(String account, String key, String sasToken, String endpointSuffix, TimeValue timeout, int maxRetries,
@@ -133,6 +135,8 @@ final class AzureStorageSettings {
                 throw new SettingsException("Azure proxy host is unknown.", e);
             }
         }
+
+        this.locationMode = LocationMode.PRIMARY_ONLY;
     }
 
     public String getEndpointSuffix() {
@@ -239,12 +243,13 @@ final class AzureStorageSettings {
         return setting.getConcreteSetting(fullKey).get(settings);
     }
 
-    static Map<String, AzureStorageSettings> overrideLocationMode(Map<String, AzureStorageSettings> clientsSettings) {
+    static Map<String, AzureStorageSettings> overrideLocationMode(Map<String, AzureStorageSettings> clientsSettings,
+                                                                  LocationMode locationMode) {
         final var map = new HashMap<String, AzureStorageSettings>();
         for (final Map.Entry<String, AzureStorageSettings> entry : clientsSettings.entrySet()) {
             map.put(entry.getKey(),
                 new AzureStorageSettings(entry.getValue().account, entry.getValue().connectString, entry.getValue().endpointSuffix,
-                    entry.getValue().timeout, entry.getValue().maxRetries, entry.getValue().proxy));
+                    entry.getValue().timeout, entry.getValue().maxRetries, entry.getValue().proxy, locationMode));
         }
         return Map.copyOf(map);
     }

@@ -19,13 +19,17 @@
 
 package org.elasticsearch.repositories.azure;
 
+import com.azure.core.http.rest.Response;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
+import com.azure.storage.blob.batch.BlobBatchClient;
+import com.azure.storage.blob.batch.BlobBatchClientBuilder;
 import com.azure.storage.blob.models.BlobItem;
 import com.azure.storage.blob.models.BlobItemProperties;
 import com.azure.storage.blob.models.BlobListDetails;
 import com.azure.storage.blob.models.BlobRange;
+import com.azure.storage.blob.models.DeleteSnapshotsOptionType;
 import com.azure.storage.blob.models.ListBlobsOptions;
 import com.azure.storage.blob.specialized.BlobInputStream;
 import org.apache.logging.log4j.LogManager;
@@ -48,10 +52,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URISyntaxException;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -86,9 +94,9 @@ public class AzureBlobStore implements BlobStore {
         this.threadPool = threadPool;
         // locationMode is set per repository, not per client
         this.locationMode = Repository.LOCATION_MODE_SETTING.get(metadata.settings());
-        final Map<String, AzureStorageSettings> prevSettings = this.service.refreshAndClearCache(emptyMap());
-        final Map<String, AzureStorageSettings> newSettings = AzureStorageSettings.overrideLocationMode(prevSettings);
-        this.service.refreshAndClearCache(newSettings);
+//        final Map<String, AzureStorageSettings> prevSettings = this.service.refreshAndClearCache(emptyMap());
+//        final Map<String, AzureStorageSettings> newSettings = AzureStorageSettings.overrideLocationMode(prevSettings, locationMode);
+//        this.service.refreshAndClearCache(newSettings);
         this.getMetricsCollector = (httpURLConnection) -> {
             if (httpURLConnection.getRequestMethod().equals("HEAD")) {
                 stats.headOperations.incrementAndGet();
@@ -183,13 +191,29 @@ public class AzureBlobStore implements BlobStore {
                 final BlobServiceClient client = blobServiceClient.getClient();
                 SocketAccess.doPrivilegedVoidException(() -> {
                     final BlobContainerClient blobContainerClient = client.getBlobContainerClient(container);
-                    final BlobListDetails blobListDetails = new BlobListDetails().setRetrieveMetadata(true);
-                    final ListBlobsOptions options = (new ListBlobsOptions()).setPrefix(path).setDetails(blobListDetails);
-                    for (BlobItem blobItem : blobContainerClient.listBlobsByHierarchy("/", options, null)) {
-                        blobContainerClient.getBlobClient(blobItem.getName()).delete();
-                        if (blobItem.getProperties() != null) {
-                            bytesDeleted.addAndGet(blobItem.getProperties().getContentLength());
-                            blobsDeleted.incrementAndGet();
+                    final List<String> blobURLs = new ArrayList<>();
+                    final Queue<String> directories = new ArrayDeque<>();
+                    directories.offer(path);
+                    String dir;
+                    while ((dir = directories.poll()) != null) {
+                        final BlobListDetails blobListDetails = new BlobListDetails().setRetrieveMetadata(true);
+                        final ListBlobsOptions options = (new ListBlobsOptions()).setPrefix(dir).setDetails(blobListDetails);
+                        for (BlobItem blobItem : blobContainerClient.listBlobsByHierarchy("/", options, null)) {
+                            boolean isPrefix = blobItem.isPrefix() != null && blobItem.isPrefix();
+                            if (isPrefix == true) {
+                                directories.offer(blobItem.getName());
+                            } else {
+                                BlobClient blobClient = blobContainerClient.getBlobClient(blobItem.getName());
+                                blobURLs.add(blobClient.getBlobUrl());
+                                bytesDeleted.addAndGet(blobItem.getProperties().getContentLength());
+                                blobsDeleted.incrementAndGet();
+                            }
+                        }
+                    }
+                    final BlobBatchClient blobBatchClient = new BlobBatchClientBuilder(client).buildClient();
+                    if (blobURLs.size() > 0) {
+                        for (Response<Void> deleteBlob : blobBatchClient.deleteBlobs(blobURLs, DeleteSnapshotsOptionType.ONLY)) {
+
                         }
                     }
                 });

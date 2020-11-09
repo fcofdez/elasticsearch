@@ -19,7 +19,6 @@
 
 package org.elasticsearch.repositories.azure;
 
-
 import org.elasticsearch.cluster.metadata.RepositoryMetadata;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
