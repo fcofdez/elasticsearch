@@ -54,6 +54,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -174,20 +175,30 @@ public class AzureBlobStore implements BlobStore {
     }
 
     public DeleteResult deleteBlobDirectory(String path, Executor executor) {
+        final AtomicInteger blobsDeleted = new AtomicInteger(0);
+        final AtomicLong bytesDeleted = new AtomicLong(0);
+
         try {
-            int blobsDeleted = 0;
-            long bytesDeleted = 0;
             try(final AzureBlobServiceClientRef blobServiceClient = client()) {
                 final BlobServiceClient client = blobServiceClient.getClient();
                 SocketAccess.doPrivilegedVoidException(() -> {
-                    BlobContainerClient blobContainerClient = client.getBlobContainerClient(container);
-                    for (BlobItem blobItem : blobContainerClient.listBlobsByHierarchy(path)) {
+                    final BlobContainerClient blobContainerClient = client.getBlobContainerClient(container);
+                    final BlobListDetails blobListDetails = new BlobListDetails().setRetrieveMetadata(true);
+                    final ListBlobsOptions options = (new ListBlobsOptions()).setPrefix(path).setDetails(blobListDetails);
+                    for (BlobItem blobItem : blobContainerClient.listBlobsByHierarchy("/", options, null)) {
                         blobContainerClient.getBlobClient(blobItem.getName()).delete();
+                        if (blobItem.getProperties() != null) {
+                            bytesDeleted.addAndGet(blobItem.getProperties().getContentLength());
+                            blobsDeleted.incrementAndGet();
+                        }
                     }
                 });
             }
-        } catch (Exception e) { }
-        return new DeleteResult(0, 0);
+        } catch (Exception e) {
+            throw new RuntimeException("Deleting directory [" + path + "] failed", e);
+        }
+
+        return new DeleteResult(blobsDeleted.get(), bytesDeleted.get());
 //        final BlobServiceClient client = client();
 //        //final OperationContext context = hookMetricCollector(client.v2().get(), getMetricsCollector);
 //        final BlobContainerClient blobContainer = client.getBlobContainerClient(container);
@@ -252,14 +263,19 @@ public class AzureBlobStore implements BlobStore {
     public InputStream getInputStream(String blob, long position, @Nullable Long length) {
         logger.trace(() -> new ParameterizedMessage("reading container [{}], blob [{}]", container, blob));
         final AzureBlobServiceClientRef clientRef = client();
-
         final BlobServiceClient client = clientRef.getClient();
-        final BlobInputStream is = SocketAccess.doPrivilegedException(() ->{
-            final BlobContainerClient blobContainerClient = client.getBlobContainerClient(container);
-            final BlobClient blobClient = blobContainerClient.getBlobClient(blob);
-            return blobClient.openInputStream(new BlobRange(position, length), null);
-        });
-        return new Stream(clientRef, is);
+
+        try {
+            final BlobInputStream is = SocketAccess.doPrivilegedException(() ->{
+                final BlobContainerClient blobContainerClient = client.getBlobContainerClient(container);
+                final BlobClient blobClient = blobContainerClient.getBlobClient(blob);
+                return blobClient.openInputStream(new BlobRange(position, length), null);
+            });
+            return new Stream(clientRef, is);
+        } catch (Exception e) {
+            clientRef.close();
+            throw e;
+        }
     }
 
     private final static class Stream extends FilterInputStream {
@@ -291,8 +307,8 @@ public class AzureBlobStore implements BlobStore {
         @Override
         public void close() throws IOException {
             if (closed == false) {
-                super.close();
                 clientRef.close();
+                super.close();
                 closed = true;
             }
         }
@@ -397,25 +413,6 @@ public class AzureBlobStore implements BlobStore {
 //        });
 //        return context;
 //    }
-
-    static InputStream giveSocketPermissionsToStream(final InputStream stream) {
-        return new InputStream() {
-            @Override
-            public int read() throws IOException {
-                return SocketAccess.doPrivilegedIOException(stream::read);
-            }
-
-            @Override
-            public int read(byte[] b) throws IOException {
-                return SocketAccess.doPrivilegedIOException(() -> stream.read(b));
-            }
-
-            @Override
-            public int read(byte[] b, int off, int len) throws IOException {
-                return SocketAccess.doPrivilegedIOException(() -> stream.read(b, off, len));
-            }
-        };
-    }
 
     @Override
     public Map<String, Long> stats() {
