@@ -20,15 +20,28 @@
 package org.elasticsearch.repositories.azure;
 
 import com.azure.core.http.HttpClient;
+import com.azure.core.http.HttpPipeline;
+import com.azure.core.http.HttpPipelineBuilder;
+import com.azure.core.http.HttpRequest;
+import com.azure.core.http.HttpResponse;
 import com.azure.core.http.ProxyOptions;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
+import com.azure.core.http.policy.HttpPipelinePolicy;
 import com.azure.core.util.Configuration;
+import com.azure.storage.blob.BlobServiceAsyncClient;
+import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
 import com.azure.storage.common.implementation.connectionstring.StorageConnectionString;
 import com.azure.storage.common.policy.RequestRetryOptions;
 import com.azure.storage.common.policy.RetryPolicyType;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsException;
@@ -36,16 +49,28 @@ import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.threadpool.ThreadPool;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+import reactor.netty.Connection;
+import reactor.netty.resources.ConnectionProvider;
 
 import java.net.InetSocketAddress;
 import java.net.Proxy;
-import java.net.URI;
+import java.time.Duration;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Collections.emptyMap;
@@ -142,14 +167,149 @@ public class AzureStorageService {
         }
     }
 
-    private final static AtomicBoolean hackSetUp = new AtomicBoolean(false);
+    private static final AtomicBoolean hackSetUp = new AtomicBoolean(false);
+
+    private final static class PrivilegedScheduledEx implements ScheduledExecutorService {
+        private final ScheduledExecutorService delegate;
+
+        public PrivilegedScheduledEx(ScheduledExecutorService delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public <V> ScheduledFuture<V> schedule(Callable<V> callable, long delay, TimeUnit unit) {
+            Callable<V> privilegedCallable = () -> SocketAccess.doPrivilegedException(callable::call);
+            return delegate.schedule(privilegedCallable, delay, unit);
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit) {
+            Runnable privilegedCommand = () -> SocketAccess.doPrivilegedVoidException(command::run);
+            return delegate.scheduleAtFixedRate(privilegedCommand, initialDelay, period, unit);
+        }
+
+        @Override
+        public <T> Future<T> submit(Callable<T> task) {
+            Callable<T> privilegedTask = () -> SocketAccess.doPrivilegedException(task::call);
+            return delegate.submit(privilegedTask);
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            return delegate.schedule(command, delay, unit);
+        }
+
+        @Override
+        public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit) {
+            return delegate.scheduleWithFixedDelay(command, initialDelay, delay, unit);
+        }
+
+        private final Logger logger = LogManager.getLogger(PrivilegedScheduledEx.class);
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return delegate.shutdownNow();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return delegate.isShutdown();
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return delegate.isTerminated();
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            return delegate.awaitTermination(timeout, unit);
+        }
+
+
+        @Override
+        public <T> Future<T> submit(Runnable task, T result) {
+            return delegate.submit(task, result);
+        }
+
+        @Override
+        public Future<?> submit(Runnable task) {
+            return delegate.submit(task);
+        }
+
+        @Override
+        public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks) throws InterruptedException {
+            return delegate.invokeAll(tasks);
+        }
+
+        @Override
+        public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) throws InterruptedException {
+            return delegate.invokeAll(tasks, timeout, unit);
+        }
+
+        @Override
+        public <T> T invokeAny(Collection<? extends Callable<T>> tasks) throws InterruptedException, ExecutionException {
+            return delegate.invokeAny(tasks);
+        }
+
+        @Override
+        public <T> T invokeAny(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+            return delegate.invokeAny(tasks, timeout, unit);
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            delegate.execute(command);
+        }
+    }
+
+    static class LoggerEventLoopGroup extends NioEventLoopGroup {
+        private final Logger logger = LogManager.getLogger(LoggerEventLoopGroup.class);
+
+        public LoggerEventLoopGroup(int nThreads, Executor executor) {
+            super(nThreads, executor);
+        }
+
+        @Override
+        public ChannelFuture register(Channel channel) {
+            logger.info("Register channel {}", channel);
+            return super.register(channel);
+        }
+
+        @Override
+        public ChannelFuture register(ChannelPromise promise) {
+            logger.info("Register channel {}", promise);
+            return super.register(promise);
+        }
+    }
+
+    static class HttpCl implements HttpClient {
+        private final HttpClient delegate;
+        private final Logger logger = LogManager.getLogger(HttpCl.class);
+
+        public HttpCl(HttpClient delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Mono<HttpResponse> send(HttpRequest request) {
+            logger.info("Sending http req {} {} / {}", request.getHttpMethod(), request.getUrl(), Thread.currentThread().getStackTrace());
+            Mono<HttpResponse> send = delegate.send(request);
+            logger.info("Request sent");
+            return send;
+        }
+    }
 
     private AzureBlobServiceClientRef createClientReference(String clientName, LocationMode locationMode, AzureStorageSettings settings, ThreadPool threadPool) {
         if (hackSetUp.compareAndSet(false, true)) {
             Schedulers.setFactory(new Schedulers.Factory() {
                 @Override
                 public Scheduler newParallel(int parallelism, ThreadFactory threadFactory) {
-                    return Schedulers.fromExecutor(threadPool.scheduler());
+                    return Schedulers.fromExecutor(new PrivilegedScheduledEx(threadPool.scheduler()));
                 }
 
                 @Override
@@ -169,12 +329,39 @@ public class AzureStorageService {
             });
         }
 
-        final EventLoopGroup eventLoopGroup = new NioEventLoopGroup(2,
-            new PrivilegedExecutor(threadPool.executor(ThreadPool.Names.GENERIC)));
-        final HttpClient httpClient = new NettyAsyncHttpClientBuilder().eventLoopGroup(eventLoopGroup)
+        final EventLoopGroup eventLoopGroup = new LoggerEventLoopGroup(12,
+            new PrivilegedExecutor(threadPool.executor(AzureRepositoryPlugin.REPOSITORY_THREAD_POOL_NAME)));
+        ConnectionProvider provider =
+            ConnectionProvider.builder("fixed")
+                .maxConnections(50)
+                .pendingAcquireTimeout(Duration.ofMillis(30000))
+                .maxIdleTime(Duration.ofMinutes(60))
+                .build();
+
+        reactor.netty.http.client.HttpClient nettyHttpClient = reactor.netty.http.client.HttpClient.create(provider);
+        nettyHttpClient = nettyHttpClient
+            .port(80)
+            .wiretap(true);
+
+        nettyHttpClient = nettyHttpClient.tcpConfiguration(tcpClient -> {
+            tcpClient = tcpClient.runOn(eventLoopGroup);
+            return tcpClient;
+        });
+
+        final HttpClient httpClient = new NettyAsyncHttpClientBuilder()
+            .eventLoopGroup(eventLoopGroup)
             .disableBufferCopy(true)
             .proxy(getProxyOptions(settings))
+            .connectionProvider(provider)
             .build();
+
+//        NettyAsyncHttp httpClient = new NettyAsyncHttp(nettyHttpClient, false);
+
+        HttpPipeline build = new HttpPipelineBuilder()
+            .httpClient(httpClient)
+            .policies(new RetryPolicy(getRetryOptions(locationMode, settings)))
+            .build();
+
 
         final String connectionString = settings.getConnectString();
 
@@ -193,7 +380,9 @@ public class AzureStorageService {
             builder.endpoint(secondaryUri);
         }
 
-        return new AzureBlobServiceClientRef(clientName, SocketAccess.doPrivilegedException(builder::buildClient), eventLoopGroup);
+        BlobServiceClient blobServiceClient = SocketAccess.doPrivilegedException(builder::buildClient);
+        BlobServiceAsyncClient asyncClient = SocketAccess.doPrivilegedException(builder::buildAsyncClient);
+        return new AzureBlobServiceClientRef(clientName, blobServiceClient, asyncClient, eventLoopGroup, settings.getTimeout(), provider);
     }
 
     private static ProxyOptions getProxyOptions(AzureStorageSettings settings) {
@@ -212,10 +401,11 @@ public class AzureStorageService {
         }
     }
 
+    Logger logger = LogManager.getLogger(AzureStorageService.class);
     // non-static, package private for testing
     RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
         // TODO, throw a proper exception here?
-        int timeout = Math.toIntExact(azureStorageSettings.getTimeout().getMillis());
+        int timeout = Math.toIntExact(azureStorageSettings.getTimeout().getSeconds());
         String connectString = azureStorageSettings.getConnectString();
         StorageConnectionString storageConnectionString = StorageConnectionString.create(connectString, null);
         String primaryUri = storageConnectionString.getBlobEndpoint().getPrimaryUri();
@@ -241,9 +431,10 @@ public class AzureStorageService {
                 throw new IllegalStateException();
         }
 
+        logger.info("TIMEOUT {}", timeout);
         return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
-            azureStorageSettings.getMaxRetries(), timeout == -1 ? null : timeout,
-            null, null, secondaryHost);
+            azureStorageSettings.getMaxRetries(), 1,
+            1L, 15L, secondaryHost);
     }
 
 //    private static OperationContext buildOperationContext(AzureStorageSettings azureStorageSettings) {
@@ -267,25 +458,8 @@ public class AzureStorageService {
         return prevSettings;
     }
 
-    /**
-     * Extract the blob name from a URI like https://myservice.azure.net/container/path/to/myfile
-     * It should remove the container part (first part of the path) and gives path/to/myfile
-     * @param uri URI to parse
-     * @return The blob name relative to the container
-     */
-    static String blobNameFromUri(URI uri) {
-        final String path = uri.getPath();
-        // We remove the container name from the path
-        // The 3 magic number cames from the fact if path is /container/path/to/myfile
-        // First occurrence is empty "/"
-        // Second occurrence is "container
-        // Last part contains "path/to/myfile" which is what we want to get
-        final String[] splits = path.split("/", 3);
-        // We return the remaining end of the string
-        return splits[2];
-    }
-
     void close() {
+        hackSetUp.compareAndSet(true, false);
         releaseCachedClients();
     }
 

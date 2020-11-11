@@ -22,7 +22,6 @@ import com.azure.storage.common.policy.RequestRetryOptions;
 import com.azure.storage.common.policy.RetryPolicyType;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpHandler;
-import fixture.azure.AzureBatchHttpHandler;
 import fixture.azure.AzureHttpHandler;
 import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.common.regex.Regex;
@@ -38,7 +37,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @SuppressForbidden(reason = "this test uses a HttpServer to emulate an Azure endpoint")

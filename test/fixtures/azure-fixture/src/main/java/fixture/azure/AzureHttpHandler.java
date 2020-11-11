@@ -236,7 +236,7 @@ public class AzureHttpHandler implements HttpHandler {
                         response.append("Content-Type: application/xml").append(HTTP_NEWLINE);
                         response.append("Content-Length: ").append(errorBody.length()).append(HTTP_NEWLINE);
                         response.append(HTTP_NEWLINE);
-                        response.append(errorBody);
+                        response.append(errorBody).append(HTTP_NEWLINE);
                     }
                 }
                 response.append("--").append(responseBoundary).append("--");

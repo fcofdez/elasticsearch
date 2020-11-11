@@ -19,6 +19,11 @@
 
 package org.elasticsearch.repositories.azure;
 
+import com.azure.storage.blob.BlobContainerClient;
+import com.azure.storage.blob.BlobServiceClient;
+import com.azure.storage.blob.models.BlobStorageException;
+import org.elasticsearch.action.ActionRunnable;
+import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.action.support.master.AcknowledgedResponse;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.MockSecureSettings;
@@ -26,7 +31,9 @@ import org.elasticsearch.common.settings.SecureSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.repositories.AbstractThirdPartyRepositoryTestCase;
+import org.elasticsearch.repositories.blobstore.BlobStoreRepository;
 
+import java.net.HttpURLConnection;
 import java.util.Collection;
 
 import static org.hamcrest.Matchers.blankOrNullString;
@@ -84,31 +91,35 @@ public class AzureStorageCleanupThirdPartyTests extends AbstractThirdPartyReposi
             ).get();
         assertThat(putRepositoryResponse.isAcknowledged(), equalTo(true));
         if (Strings.hasText(System.getProperty("test.azure.sas_token"))) {
-            //ensureSasTokenPermissions();
+            ensureSasTokenPermissions();
         }
     }
 
-//    private void ensureSasTokenPermissions() {
-//        final BlobStoreRepository repository = getRepository();
-//        final PlainActionFuture<Void> future = PlainActionFuture.newFuture();
-//        repository.threadPool().generic().execute(ActionRunnable.wrap(future, l -> {
-//            final AzureBlobStore blobStore = (AzureBlobStore) repository.blobStore();
-//            final String account = "default";
-//            final Tuple<CloudBlobClient, Supplier<OperationContext>> client = blobStore.getService().client(account);
-//            final CloudBlobContainer blobContainer = client.v1().getContainerReference(blobStore.toString());
-//            try {
-//                SocketAccess.doPrivilegedException(() -> blobContainer.exists(null, null, client.v2().get()));
-//                future.onFailure(new RuntimeException(
-//                    "The SAS token used in this test allowed for checking container existence. This test only supports tokens " +
-//                        "that grant only the documented permission requirements for the Azure repository plugin."));
-//            } catch (StorageException e) {
-//                if (e.getHttpStatusCode() == HttpURLConnection.HTTP_FORBIDDEN) {
-//                    future.onResponse(null);
-//                } else {
-//                    future.onFailure(e);
-//                }
-//            }
-//        }));
-//        future.actionGet();
-//    }
+    private void ensureSasTokenPermissions() {
+        final BlobStoreRepository repo = getRepository();
+        final PlainActionFuture<Void> future = PlainActionFuture.newFuture();
+        repo.threadPool().generic().execute(ActionRunnable.wrap(future, l -> {
+            final AzureBlobStore blobStore = (AzureBlobStore) repo.blobStore();
+            final String account = "default";
+            try (AzureBlobServiceClientRef clientRef = blobStore.getService().client(account, LocationMode.PRIMARY_ONLY, repo.threadPool())) {
+                final BlobServiceClient client = clientRef.getClient();
+                try {
+                    SocketAccess.doPrivilegedException(() -> {
+                        final BlobContainerClient blobContainer = client.getBlobContainerClient(blobStore.toString());
+                        return blobContainer.exists();
+                    });
+                    future.onFailure(new RuntimeException(
+                        "The SAS token used in this test allowed for checking container existence. This test only supports tokens " +
+                            "that grant only the documented permission requirements for the Azure repository plugin."));
+                } catch (BlobStorageException e) {
+                    if (e.getStatusCode() == HttpURLConnection.HTTP_FORBIDDEN) {
+                        future.onResponse(null);
+                    } else {
+                        future.onFailure(e);
+                    }
+                }
+            }
+        }));
+        future.actionGet();
+    }
 }

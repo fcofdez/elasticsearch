@@ -19,28 +19,51 @@
 
 package org.elasticsearch.repositories.azure;
 
+import com.azure.storage.blob.BlobAsyncClient;
+import com.azure.storage.blob.BlobServiceAsyncClient;
 import com.azure.storage.blob.BlobServiceClient;
 import io.netty.channel.EventLoopGroup;
 import org.elasticsearch.common.lease.Releasable;
+import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.AbstractRefCounted;
+import reactor.netty.resources.ConnectionProvider;
 
 class AzureBlobServiceClientRef extends AbstractRefCounted implements Releasable {
     private final BlobServiceClient blobServiceClient;
+    private final BlobServiceAsyncClient blobAsyncClient;
     private final EventLoopGroup eventLoopGroup;
+    private final TimeValue timeout;
+    private final ConnectionProvider connectionProvider;
 
-    public AzureBlobServiceClientRef(String name, BlobServiceClient blobServiceClient, EventLoopGroup eventLoopGroup) {
+    public AzureBlobServiceClientRef(String name,
+                                     BlobServiceClient blobServiceClient,
+                                     BlobServiceAsyncClient blobAsyncClient,
+                                     EventLoopGroup eventLoopGroup,
+                                     TimeValue timeout, ConnectionProvider provider) {
         super(name);
         this.blobServiceClient = blobServiceClient;
+        this.blobAsyncClient = blobAsyncClient;
         this.eventLoopGroup = eventLoopGroup;
+        this.timeout = timeout;
+        this.connectionProvider = provider;
     }
 
     public BlobServiceClient getClient() {
         return blobServiceClient;
     }
 
+    public BlobServiceAsyncClient getAsyncClient() {
+        return blobAsyncClient;
+    }
+
     @Override
     protected void closeInternal() {
+        connectionProvider.dispose();
         eventLoopGroup.shutdownGracefully();
+    }
+
+    public TimeValue getTimeout() {
+        return timeout;
     }
 
     @Override
