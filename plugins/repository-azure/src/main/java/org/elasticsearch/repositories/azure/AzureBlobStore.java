@@ -19,26 +19,26 @@
 
 package org.elasticsearch.repositories.azure;
 
-import com.azure.core.http.rest.PagedIterable;
 import com.azure.core.http.rest.Response;
+import com.azure.core.util.Context;
 import com.azure.storage.blob.BlobAsyncClient;
 import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceAsyncClient;
 import com.azure.storage.blob.BlobServiceClient;
-import com.azure.storage.blob.batch.BlobBatchClient;
+import com.azure.storage.blob.batch.BlobBatch;
+import com.azure.storage.blob.batch.BlobBatchAsyncClient;
 import com.azure.storage.blob.batch.BlobBatchClientBuilder;
 import com.azure.storage.blob.batch.BlobBatchStorageException;
 import com.azure.storage.blob.models.BlobErrorCode;
 import com.azure.storage.blob.models.BlobItem;
 import com.azure.storage.blob.models.BlobItemProperties;
 import com.azure.storage.blob.models.BlobListDetails;
-import com.azure.storage.blob.models.BlobRange;
 import com.azure.storage.blob.models.BlobRequestConditions;
 import com.azure.storage.blob.models.BlobStorageException;
-import com.azure.storage.blob.models.DeleteSnapshotsOptionType;
 import com.azure.storage.blob.models.ListBlobsOptions;
-import com.azure.storage.blob.specialized.BlobInputStream;
+import com.azure.storage.blob.models.ParallelTransferOptions;
+import com.azure.storage.blob.options.BlobParallelUploadOptions;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
@@ -52,12 +52,13 @@ import org.elasticsearch.common.blobstore.DeleteResult;
 import org.elasticsearch.common.blobstore.support.PlainBlobMetadata;
 import org.elasticsearch.repositories.azure.AzureRepository.Repository;
 import org.elasticsearch.threadpool.ThreadPool;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
-import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
-import java.net.URISyntaxException;
+import java.net.URL;
 import java.nio.file.FileAlreadyExistsException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -76,6 +77,8 @@ import java.util.stream.Collectors;
 public class AzureBlobStore implements BlobStore {
 
     private static final Logger logger = LogManager.getLogger(AzureBlobStore.class);
+    // See https://docs.microsoft.com/en-us/rest/api/storageservices/blob-batch#request-body
+    private static final int MAX_ELEMENTS_PER_BATCH = 256;
 
     private final AzureStorageService service;
     private final ThreadPool threadPool;
@@ -166,22 +169,8 @@ public class AzureBlobStore implements BlobStore {
                 final BlobClient azureBlob = client.getBlobContainerClient(container).getBlobClient(blob);
                 return azureBlob.exists();
             });
+            stats.headOperations.incrementAndGet();
             return blobExists != null ? blobExists : false;
-        }
-    }
-
-    public void deleteBlob(String blob) throws URISyntaxException {
-        //final OperationContext context = hookMetricCollector(client.v2().get(), getMetricsCollector);
-        try(final AzureBlobServiceClientRef blobServiceClient = client()) {
-            final BlobServiceClient client = blobServiceClient.getClient();
-            logger.trace(() -> new ParameterizedMessage("delete blob for container [{}], blob [{}]", container, blob));
-            SocketAccess.doPrivilegedVoidException(() -> {
-                final BlobContainerClient blobContainer = client.getBlobContainerClient(container);
-                final BlobClient azureBlob = blobContainer.getBlobClient(blob);
-                logger.trace(() -> new ParameterizedMessage("container [{}]: blob [{}] found. removing.", container, blob));
-                azureBlob.delete();
-//            azureBlob.delete(DeleteSnapshotsOption.NONE, null, null, client.v2().get());
-            });
         }
     }
 
@@ -248,13 +237,26 @@ public class AzureBlobStore implements BlobStore {
         }
 
         try(final AzureBlobServiceClientRef blobServiceClient = client()) {
-            final BlobServiceClient client = blobServiceClient.getClient();
             SocketAccess.doPrivilegedVoidException(() -> {
-                final BlobBatchClient blobBatchClient = new BlobBatchClientBuilder(client).buildClient();
-                PagedIterable<Response<Void>> responses = blobBatchClient.deleteBlobs(blobUrls, DeleteSnapshotsOptionType.ONLY);
-                for (Response<Void> deleteBlob : responses) {
-                    // We have to consume the results
+                final BlobBatchAsyncClient blobBatchClient =
+                    new BlobBatchClientBuilder(blobServiceClient.getAsyncClient()).buildAsyncClient();
+                int numBatches = (int) Math.ceil((double) blobUrls.size() / (double) 256);
+                List<BlobBatch> batches = new ArrayList<>(numBatches);
+                for (int batchNumber = 0; batchNumber < numBatches; batchNumber++) {
+                    final BlobBatch blobBatch = blobBatchClient.getBlobBatch();
+                    int rangeStart = batchNumber * 256;
+                    for (int i = rangeStart; i < Math.min(rangeStart + MAX_ELEMENTS_PER_BATCH, blobUrls.size()); i++) {
+                        blobBatch.deleteBlob(blobUrls.get(i));
+                    }
+                    batches.add(blobBatch);
                 }
+
+                List<Mono<Response<Void>>> batchResponse = new ArrayList<>(batches.size());
+                for (BlobBatch batch : batches) {
+                    batchResponse.add(blobBatchClient.submitBatchWithResponse(batch, false));
+                }
+
+                Flux.merge(batchResponse).collectList().block();
             });
         } catch (BlobBatchStorageException e) {
             for (BlobStorageException batchException : e.getBatchExceptions()) {
@@ -278,7 +280,7 @@ public class AzureBlobStore implements BlobStore {
             BlobAsyncClient blobAsyncClient =
                 SocketAccess.doPrivilegedException(() -> asyncClient.getBlobContainerAsyncClient(container).getBlobAsyncClient(blob));
             return new AzureInputStream(clientRef, blobAsyncClient, position, length == null ? realLength : length, realLength,
-                new BlobRequestConditions(), null);
+                new BlobRequestConditions(), null, stats.getOperations::incrementAndGet);
 //            final BlobInputStream is = SocketAccess.doPrivilegedException(() ->{
 //                final BlobContainerClient blobContainerClient = client.getBlobContainerClient(container);
 //                final BlobClient blobClient = blobContainerClient.getBlobClient(blob);
@@ -288,42 +290,6 @@ public class AzureBlobStore implements BlobStore {
         } catch (Exception e) {
             clientRef.close();
             throw e;
-        }
-    }
-
-    private final static class PrivilegedInputStream extends FilterInputStream {
-        private final AzureBlobServiceClientRef clientRef;
-        private final BlobInputStream stream;
-        private boolean closed = false;
-
-        public PrivilegedInputStream(AzureBlobServiceClientRef clientRef, BlobInputStream stream) {
-            super(stream);
-            this.clientRef = clientRef;
-            this.stream = stream;
-        }
-
-        @Override
-        public int read() throws IOException {
-            return SocketAccess.doPrivilegedIOException(stream::read);
-        }
-
-        @Override
-        public int read(byte[] b) throws IOException {
-            return SocketAccess.doPrivilegedIOException(() -> stream.read(b));
-        }
-
-        @Override
-        public int read(byte[] b, int off, int len) throws IOException {
-            return SocketAccess.doPrivilegedIOException(() -> stream.read(b, off, len));
-        }
-
-        @Override
-        public void close() throws IOException {
-            if (closed == false) {
-                closed = true;
-                clientRef.close();
-                super.close();
-            }
         }
     }
 
@@ -380,20 +346,36 @@ public class AzureBlobStore implements BlobStore {
     public void writeBlob(String blobName, InputStream inputStream, long blobSize, boolean failIfAlreadyExists) throws IOException {
         assert inputStream.markSupported()
             : "Should not be used with non-mark supporting streams as their retry handling in the SDK is broken";
-        logger.info(() -> new ParameterizedMessage("writeBlob({}, stream, {})", blobName, blobSize));
-
+        logger.trace(() -> new ParameterizedMessage("writeBlob({}, stream, {})", blobName, blobSize));
         try (AzureBlobServiceClientRef blobContainerClientRef = client()) {
             final BlobServiceClient client = blobContainerClientRef.getClient();
             SocketAccess.doPrivilegedVoidException(() -> {
                 final BlobClient blob = client.getBlobContainerClient(container).getBlobClient(blobName);
-                blob.upload(inputStream, blobSize, failIfAlreadyExists == false);
+                ParallelTransferOptions parallelTransferOptions = new ParallelTransferOptions();
+                parallelTransferOptions.setBlockSizeLong(service.getUploadBlockSize())
+                    .setMaxSingleUploadSizeLong(service.getUploadBlockSize())
+                    .setMaxConcurrency(5);
+                BlobParallelUploadOptions blobParallelUploadOptions =
+                    new BlobParallelUploadOptions(inputStream, blobSize).setParallelTransferOptions(parallelTransferOptions);
+                Context collector = Context.of(Map.of("collector", new AzureStorageService.ReqInfoCollector() {
+                    @Override
+                    public void collect(String requestMethod, URL requestURL, int responseStatus) {
+                        logger.info("Received response {} {} {}", requestMethod, requestURL, responseStatus);
+                    }
+                }));
+                blob.uploadWithResponse(blobParallelUploadOptions, null, collector);
             });
         } catch (final BlobStorageException e) {
             if (failIfAlreadyExists && e.getStatusCode() == HttpURLConnection.HTTP_CONFLICT &&
                 BlobErrorCode.BLOB_ALREADY_EXISTS.equals(e.getErrorCode())) {
                 throw new FileAlreadyExistsException(blobName, null, e.getMessage());
             }
-            throw e;
+            throw new IOException("Unable to write blob " + blobName, e);
+        } catch (RuntimeException e) {
+            if (e.getCause() != null && e.getCause() instanceof IOException) {
+                throw (IOException) e.getCause();
+            }
+            throw new IOException("Unable to write blob " + blobName, e);
         }
 
         logger.trace(() -> new ParameterizedMessage("writeBlob({}, stream, {}) - done", blobName, blobSize));

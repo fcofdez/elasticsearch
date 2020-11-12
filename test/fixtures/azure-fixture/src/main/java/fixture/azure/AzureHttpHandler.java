@@ -100,6 +100,7 @@ public class AzureHttpHandler implements HttpHandler {
                     block.writeTo(blob);
                 }
                 blobs.put(exchange.getRequestURI().getPath(), new BytesArray(blob.toByteArray()));
+                exchange.getResponseHeaders().add("x-ms-request-server-encrypted", "false");
                 exchange.sendResponseHeaders(RestStatus.CREATED.getStatus(), -1);
 
             } else if (Regex.simpleMatch("PUT /" + container + "/*", request)) {
@@ -207,6 +208,7 @@ public class AzureHttpHandler implements HttpHandler {
                 List<String> blobsToDelete = getBlobsToDelete(exchange);
                 String requestId = exchange.getRequestHeaders().getFirst("X-ms-client-request-id");
                 String msVersion = exchange.getRequestHeaders().getFirst("X-ms-version");
+                assert blobsToDelete.size() <= 256 : "Blobs to delete larger than maximum (256) " + blobsToDelete.size();
                 String responseBoundary = "batchresponse_" + UUID.randomUUID();
                 StringBuilder response = new StringBuilder();
                 for (int i = 0; i < blobsToDelete.size(); i++) {
@@ -247,8 +249,6 @@ public class AzureHttpHandler implements HttpHandler {
             } else {
                 sendError(exchange, RestStatus.BAD_REQUEST);
             }
-        } catch (Exception e) {
-          throw e;
         } finally {
             exchange.close();
         }

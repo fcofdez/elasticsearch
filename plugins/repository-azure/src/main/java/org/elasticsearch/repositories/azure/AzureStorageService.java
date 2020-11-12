@@ -22,21 +22,23 @@ package org.elasticsearch.repositories.azure;
 import com.azure.core.http.HttpClient;
 import com.azure.core.http.HttpPipeline;
 import com.azure.core.http.HttpPipelineBuilder;
+import com.azure.core.http.HttpPipelineCallContext;
+import com.azure.core.http.HttpPipelineNextPolicy;
 import com.azure.core.http.HttpRequest;
 import com.azure.core.http.HttpResponse;
 import com.azure.core.http.ProxyOptions;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
 import com.azure.core.http.policy.HttpPipelinePolicy;
-import com.azure.core.util.Configuration;
 import com.azure.storage.blob.BlobServiceAsyncClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
 import com.azure.storage.common.implementation.connectionstring.StorageConnectionString;
 import com.azure.storage.common.policy.RequestRetryOptions;
 import com.azure.storage.common.policy.RetryPolicyType;
-import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -52,16 +54,17 @@ import org.elasticsearch.threadpool.ThreadPool;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
-import reactor.netty.Connection;
 import reactor.netty.resources.ConnectionProvider;
 
 import java.net.InetSocketAddress;
 import java.net.Proxy;
+import java.net.URL;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
@@ -131,6 +134,11 @@ public class AzureStorageService {
             throw new SettingsException("Invalid azure client settings with name [" + clientName + "]", e);
         }
     }
+
+    long getUploadBlockSize() {
+        return Math.toIntExact(ByteSizeUnit.MB.toBytes(1));
+    }
+
 
 //    private BlobServiceClient buildClient(AzureStorageSettings azureStorageSettings) throws InvalidKeyException, URISyntaxException {
 //        final BlobServiceClient client = createClient(azureStorageSettings);
@@ -304,6 +312,31 @@ public class AzureStorageService {
         }
     }
 
+    public interface ReqInfoCollector {
+        void collect(String requestMethod, URL requestURL, int responseStatus);
+    }
+
+    private static final class RequestCollector implements HttpPipelinePolicy {
+        @Override
+        public Mono<HttpResponse> process(HttpPipelineCallContext context, HttpPipelineNextPolicy next) {
+            Optional<Object> collector = context.getData("collector");
+            if (collector.isEmpty() || collector.get() instanceof ReqInfoCollector == false) {
+                return next.process();
+            }
+
+            ReqInfoCollector reqInfoCollector = (ReqInfoCollector) collector.get();
+            return next.process()
+                .doOnSuccess(httpResponse -> {
+                    HttpRequest httpRequest = context.getHttpRequest();
+                    try {
+                        reqInfoCollector.collect(httpRequest.getHttpMethod().name(), httpRequest.getUrl(), httpResponse.getStatusCode());
+                    } catch (Exception e) {
+                        // Ignore
+                    }
+                });
+        }
+    }
+
     private AzureBlobServiceClientRef createClientReference(String clientName, LocationMode locationMode, AzureStorageSettings settings, ThreadPool threadPool) {
         if (hackSetUp.compareAndSet(false, true)) {
             Schedulers.setFactory(new Schedulers.Factory() {
@@ -329,7 +362,7 @@ public class AzureStorageService {
             });
         }
 
-        final EventLoopGroup eventLoopGroup = new LoggerEventLoopGroup(12,
+        final EventLoopGroup eventLoopGroup = new NioEventLoopGroup(12,
             new PrivilegedExecutor(threadPool.executor(AzureRepositoryPlugin.REPOSITORY_THREAD_POOL_NAME)));
         ConnectionProvider provider =
             ConnectionProvider.builder("fixed")
@@ -341,25 +374,33 @@ public class AzureStorageService {
         reactor.netty.http.client.HttpClient nettyHttpClient = reactor.netty.http.client.HttpClient.create(provider);
         nettyHttpClient = nettyHttpClient
             .port(80)
-            .wiretap(true);
+            .wiretap(false);
+
+        int nHeapArena = PooledByteBufAllocator.defaultNumHeapArena();
+        int pageSize = PooledByteBufAllocator.defaultPageSize();
+        int maxOrder = PooledByteBufAllocator.defaultMaxOrder();
+        int tinyCacheSize = PooledByteBufAllocator.defaultTinyCacheSize();
+        int smallCacheSize = PooledByteBufAllocator.defaultSmallCacheSize();
+        int normalCacheSize = PooledByteBufAllocator.defaultNormalCacheSize();
+        boolean useCacheForAllThreads = PooledByteBufAllocator.defaultUseCacheForAllThreads();
+        PooledByteBufAllocator pooledByteBufAllocator = new PooledByteBufAllocator(false, nHeapArena, 0, pageSize, maxOrder, tinyCacheSize,
+            smallCacheSize, normalCacheSize, useCacheForAllThreads);
 
         nettyHttpClient = nettyHttpClient.tcpConfiguration(tcpClient -> {
             tcpClient = tcpClient.runOn(eventLoopGroup);
+            tcpClient = tcpClient.option(ChannelOption.ALLOCATOR, pooledByteBufAllocator);
             return tcpClient;
         });
 
-        final HttpClient httpClient = new NettyAsyncHttpClientBuilder()
-            .eventLoopGroup(eventLoopGroup)
-            .disableBufferCopy(true)
+        final HttpClient httpClient = new NettyAsyncHttpClientBuilder(nettyHttpClient)
+            .disableBufferCopy(false)
             .proxy(getProxyOptions(settings))
             .connectionProvider(provider)
             .build();
 
-//        NettyAsyncHttp httpClient = new NettyAsyncHttp(nettyHttpClient, false);
-
         HttpPipeline build = new HttpPipelineBuilder()
             .httpClient(httpClient)
-            .policies(new RetryPolicy(getRetryOptions(locationMode, settings)))
+            .policies(new RequestRetryPolicy(getRetryOptions(locationMode, settings)))
             .build();
 
 
@@ -367,7 +408,7 @@ public class AzureStorageService {
 
         BlobServiceClientBuilder builder = new BlobServiceClientBuilder()
             .connectionString(connectionString)
-            .httpClient(httpClient)
+            .pipeline(build)
             .retryOptions(getRetryOptions(locationMode, settings));
 
         if (locationMode.isSecondary()) {
@@ -401,7 +442,6 @@ public class AzureStorageService {
         }
     }
 
-    Logger logger = LogManager.getLogger(AzureStorageService.class);
     // non-static, package private for testing
     RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
         // TODO, throw a proper exception here?
@@ -431,7 +471,6 @@ public class AzureStorageService {
                 throw new IllegalStateException();
         }
 
-        logger.info("TIMEOUT {}", timeout);
         return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
             azureStorageSettings.getMaxRetries(), 1,
             1L, 15L, secondaryHost);

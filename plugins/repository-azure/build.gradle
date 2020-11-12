@@ -39,7 +39,7 @@ versions << [
   'stax2API': '4.2',
   'woodstox': '6.0.2',
 
-  'reactorNetty': '0.9.10.RELEASE',
+  'reactorNetty': '0.9.12.RELEASE',
   'reactorCore': '3.3.8.RELEASE',
   'reactiveStreams': '1.0.3',
 ]

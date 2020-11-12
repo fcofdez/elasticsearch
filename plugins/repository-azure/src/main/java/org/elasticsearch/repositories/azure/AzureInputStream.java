@@ -41,6 +41,7 @@ public final class AzureInputStream extends StorageInputStream {
     private final BlobAsyncClientBase blobClient;
     private final BlobRequestConditions accessCondition;
     private final TimeValue timeout;
+    private final Runnable onHTTPRequest;
     private boolean closed = false;
     private final ByteBuffer buffer = ByteBuffer.allocate(CHUNK_SIZE);
 
@@ -50,14 +51,15 @@ public final class AzureInputStream extends StorageInputStream {
                      long blobRangeLength,
                      long blobSize,
                      BlobRequestConditions accessCondition,
-                     TimeValue timeout) throws BlobStorageException {
+                     TimeValue timeout,
+                     Runnable onHTTPRequest) throws BlobStorageException {
         super(blobRangeOffset, blobRangeLength, CHUNK_SIZE, blobSize);
         this.clientRef = clientRef;
         this.blobClient = blobClient;
         this.accessCondition = accessCondition;
         this.timeout = timeout;
+        this.onHTTPRequest = onHTTPRequest;
     }
-    private final Logger logger = LogManager.getLogger(AzureInputStream.class);
 
     protected ByteBuffer dispatchRead(int readLength, long offset) throws IOException {
         try {
@@ -65,6 +67,8 @@ public final class AzureInputStream extends StorageInputStream {
                 (long) readLength), new DownloadRetryOptions(), this.accessCondition, false)
                 .flatMap(response -> FluxUtil.collectBytesInByteBufferStream(response.getValue()).map(ByteBuffer::wrap));
             ByteBuffer currentBuffer = byteBufferMono.block();
+            assert currentBuffer != null;
+            onHTTPRequest.run();
 
             this.bufferSize = currentBuffer.remaining();
             this.bufferStartOffset = offset;
