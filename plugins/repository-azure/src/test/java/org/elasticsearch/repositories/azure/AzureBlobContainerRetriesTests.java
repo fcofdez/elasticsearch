@@ -97,23 +97,28 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
 
     private HttpServer httpServer;
     private ThreadPool threadPool;
+    private AzureClientProvider clientProvider;
 
     @Before
     public void setUp() throws Exception {
-        threadPool = new TestThreadPool(getTestClass().getName(), AzureRepositoryPlugin.executorBuilder());
+        threadPool = new TestThreadPool(getTestClass().getName(), AzureRepositoryPlugin.executorBuilder(),
+            AzureRepositoryPlugin.nettyEventLoopExecutorBuilder(Settings.EMPTY));
         httpServer = MockHttpServer.createHttp(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         httpServer.start();
+        clientProvider = AzureClientProvider.create(threadPool, Settings.EMPTY);
+        clientProvider.start();
         super.setUp();
     }
 
     @After
     public void tearDown() throws Exception {
+        clientProvider.close();
         httpServer.stop(0);
         super.tearDown();
         ThreadPool.terminate(threadPool, 10L, TimeUnit.SECONDS);
     }
 
-    private Tuple<AzureStorageService, BlobContainer> createBlobContainer(final int maxRetries) {
+    private BlobContainer createBlobContainer(final int maxRetries) {
         final Settings.Builder clientSettings = Settings.builder();
         final String clientName = randomAlphaOfLength(5).toLowerCase(Locale.ROOT);
 
@@ -130,20 +135,25 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
         secureSettings.setString(KEY_SETTING.getConcreteSettingForNamespace(clientName).getKey(), key);
         clientSettings.setSecureSettings(secureSettings);
 
-        final AzureStorageService service = new AzureStorageService(clientSettings.build()) {
+        final AzureStorageService service = new AzureStorageService(clientSettings.build(), clientProvider) {
             @Override
             RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
                 return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
                     maxRetries + 1,
                     1,
-                    10L,
-                    100L,
+                    1L,
+                    5L,
                     null);
             }
 
             @Override
             long getUploadBlockSize() {
                 return ByteSizeUnit.MB.toBytes(1);
+            }
+
+            @Override
+            int getMaxUploadParallelism() {
+                return 1;
             }
         };
 
@@ -153,13 +163,11 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
                 .put(ACCOUNT_SETTING.getKey(), clientName)
                 .build());
 
-        return Tuple.tuple(service, new AzureBlobContainer(BlobPath.cleanPath(), new AzureBlobStore(repositoryMetadata, service,
-            threadPool)));
+        return new AzureBlobContainer(BlobPath.cleanPath(), new AzureBlobStore(repositoryMetadata, service, threadPool));
     }
 
     public void testReadNonexistentBlobThrowsNoSuchFileException() {
-        final Tuple<AzureStorageService, BlobContainer> blobContainerTuple = createBlobContainer(between(1, 5));
-        final BlobContainer blobContainer = blobContainerTuple.v2();
+        final BlobContainer blobContainer = createBlobContainer(between(1, 5));
         final Exception exception = expectThrows(NoSuchFileException.class,
             () -> {
                 if (randomBoolean()) {
@@ -171,7 +179,6 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
                 }
             });
         assertThat(exception.toString(), exception.getMessage().toLowerCase(Locale.ROOT), containsString("not found"));
-        blobContainerTuple.v1().close();
     }
 
     public void testReadBlobWithRetries() throws Exception {
@@ -214,14 +221,11 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
             }
         });
 
-        final Tuple<AzureStorageService, BlobContainer> blobContainerTuple = createBlobContainer(maxRetries);
-        final BlobContainer blobContainer = blobContainerTuple.v2();
+        final BlobContainer blobContainer = createBlobContainer(maxRetries);
         try (InputStream inputStream = blobContainer.readBlob("read_blob_max_retries")) {
             assertArrayEquals(bytes, BytesReference.toBytes(Streams.readFully(inputStream)));
             assertThat(countDownHead.isCountedDown(), is(true));
             assertThat(countDownGet.isCountedDown(), is(true));
-        } finally {
-            blobContainerTuple.v1().close();
         }
     }
 
@@ -257,54 +261,11 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
             }
         });
 
-        final Settings.Builder clientSettings = Settings.builder();
-        final String clientName = randomAlphaOfLength(5).toLowerCase(Locale.ROOT);
-
-        final InetSocketAddress address = httpServer.getAddress();
-        final String endpoint = "ignored;DefaultEndpointsProtocol=http;BlobEndpoint=http://"
-            + InetAddresses.toUriString(address.getAddress()) + ":" + address.getPort() + "/account";
-        clientSettings.put(ENDPOINT_SUFFIX_SETTING.getConcreteSettingForNamespace(clientName).getKey(), endpoint);
-        clientSettings.put(MAX_RETRIES_SETTING.getConcreteSettingForNamespace(clientName).getKey(), maxRetries);
-        clientSettings.put(TIMEOUT_SETTING.getConcreteSettingForNamespace(clientName).getKey(), TimeValue.timeValueMillis(500));
-
-        final MockSecureSettings secureSettings = new MockSecureSettings();
-        secureSettings.setString(ACCOUNT_SETTING.getConcreteSettingForNamespace(clientName).getKey(), "account");
-        final String key = Base64.getEncoder().encodeToString(randomAlphaOfLength(10).getBytes(UTF_8));
-        secureSettings.setString(KEY_SETTING.getConcreteSettingForNamespace(clientName).getKey(), key);
-        clientSettings.setSecureSettings(secureSettings);
-
-        final AzureStorageService service = new AzureStorageService(clientSettings.build()) {
-            @Override
-            RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
-                return new RequestRetryOptions(RetryPolicyType.FIXED, azureStorageSettings.getMaxRetries() + 1, 1, 10L, 100L, null);
-            }
-            //            @Override
-//            RetryPolicyFactory createRetryPolicy(final AzureStorageSettings azureStorageSettings) {
-//                return new RetryExponentialRetry(1, 10, 100, azureStorageSettings.getMaxRetries());
-//            }
-
-//            @Override
-//            BlobRequestOptions getBlobRequestOptionsForWriteBlob() {
-//                BlobRequestOptions options = new BlobRequestOptions();
-//                options.setSingleBlobPutThresholdInBytes(Math.toIntExact(ByteSizeUnit.MB.toBytes(1)));
-//                return options;
-//            }
-        };
-
-        final RepositoryMetadata repositoryMetadata = new RepositoryMetadata("repository", AzureRepository.TYPE,
-            Settings.builder()
-                .put(CONTAINER_SETTING.getKey(), "container")
-                .put(ACCOUNT_SETTING.getKey(), clientName)
-                .build());
-
-        final BlobContainer blobContainer = new AzureBlobContainer(BlobPath.cleanPath(), new AzureBlobStore(repositoryMetadata, service, threadPool));
+        final BlobContainer blobContainer = createBlobContainer(maxRetries);
         try (InputStream inputStream = blobContainer.readBlob("read_blob_small_chunks")) {
             assertArrayEquals(bytes, BytesReference.toBytes(Streams.readFully(inputStream)));
-        } finally {
-            service.close();
         }
     }
-
 
     public void testReadRangeBlobWithRetries() throws Exception {
         final int maxRetries = randomIntBetween(1, 5);
@@ -352,8 +313,7 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
             }
         });
 
-        final Tuple<AzureStorageService, BlobContainer> blobContainerTuple = createBlobContainer(maxRetries);
-        final BlobContainer blobContainer = blobContainerTuple.v2();
+        final BlobContainer blobContainer = createBlobContainer(maxRetries);
         final int position = randomIntBetween(0, bytes.length - 1);
         final int length = randomIntBetween(1, bytes.length - position);
         try (InputStream inputStream = blobContainer.readBlob("read_range_blob_max_retries", position, length)) {
@@ -361,8 +321,6 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
             assertArrayEquals(Arrays.copyOfRange(bytes, position, Math.min(bytes.length, position + length)), bytesRead);
             assertThat(countDownHead.isCountedDown(), is(true));
             assertThat(countDownGet.isCountedDown(), is(true));
-        } finally {
-            blobContainerTuple.v1().close();
         }
     }
 
@@ -398,12 +356,9 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
             }
         });
 
-        final Tuple<AzureStorageService, BlobContainer> blobContainerTuple = createBlobContainer(maxRetries);
-        final BlobContainer blobContainer = blobContainerTuple.v2();
+        final BlobContainer blobContainer = createBlobContainer(maxRetries);
         try (InputStream stream = new InputStreamIndexInput(new ByteArrayIndexInput("desc", bytes), bytes.length)) {
             blobContainer.writeBlob("write_blob_max_retries", stream, bytes.length, false);
-        } finally {
-            blobContainerTuple.v1().close();
         }
         assertThat(countDown.isCountedDown(), is(true));
     }
@@ -411,7 +366,7 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
     public void testWriteLargeBlob() throws Exception {
         final int maxRetries = randomIntBetween(2, 5);
 
-        final byte[] data = randomBytes((int) ByteSizeUnit.MB.toBytes(20));
+        final byte[] data = randomBytes((int) ByteSizeUnit.MB.toBytes(10));
         int nbBlocks = (int) Math.ceil((double) data.length / (double) ByteSizeUnit.MB.toBytes(1));
 
         final int nbErrors = 2; // we want all requests to fail at least once
@@ -462,53 +417,12 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
             exchange.close();
         });
 
-        final Settings.Builder clientSettings = Settings.builder();
-        final String clientName = randomAlphaOfLength(5).toLowerCase(Locale.ROOT);
-
-        final InetSocketAddress address = httpServer.getAddress();
-        final String endpoint = "ignored;DefaultEndpointsProtocol=http;BlobEndpoint=http://"
-            + InetAddresses.toUriString(address.getAddress()) + ":" + address.getPort() + "/account";
-        clientSettings.put(ENDPOINT_SUFFIX_SETTING.getConcreteSettingForNamespace(clientName).getKey(), endpoint);
-        clientSettings.put(MAX_RETRIES_SETTING.getConcreteSettingForNamespace(clientName).getKey(), maxRetries);
-        clientSettings.put(TIMEOUT_SETTING.getConcreteSettingForNamespace(clientName).getKey(), TimeValue.timeValueMillis(500));
-
-        final MockSecureSettings secureSettings = new MockSecureSettings();
-        secureSettings.setString(ACCOUNT_SETTING.getConcreteSettingForNamespace(clientName).getKey(), "account");
-        final String key = Base64.getEncoder().encodeToString(randomAlphaOfLength(10).getBytes(UTF_8));
-        secureSettings.setString(KEY_SETTING.getConcreteSettingForNamespace(clientName).getKey(), key);
-        clientSettings.setSecureSettings(secureSettings);
-
-        final AzureStorageService service = new AzureStorageService(clientSettings.build()) {
-            @Override
-            RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
-                return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
-                    maxRetries + 1,
-                    1,
-                    10L,
-                    100L,
-                    null);
-            }
-
-            @Override
-            long getUploadBlockSize() {
-                return ByteSizeUnit.MB.toBytes(1);
-            }
-        };
-
-        final RepositoryMetadata repositoryMetadata = new RepositoryMetadata("repository", AzureRepository.TYPE,
-            Settings.builder()
-                .put(CONTAINER_SETTING.getKey(), "container")
-                .put(ACCOUNT_SETTING.getKey(), clientName)
-                .build());
-
-        final BlobContainer blobContainer = new AzureBlobContainer(BlobPath.cleanPath(), new AzureBlobStore(repositoryMetadata, service,
-            threadPool));
+        final BlobContainer blobContainer = createBlobContainer(maxRetries);
 
         try (InputStream stream = new InputStreamIndexInput(new ByteArrayIndexInput("desc", data), data.length)) {
             blobContainer.writeBlob("write_large_blob", stream, data.length, false);
-        } finally {
-            service.close();
         }
+
         assertThat(countDownUploads.get(), equalTo(0));
         assertThat(countDownComplete.isCountedDown(), is(true));
         assertThat(blocks.isEmpty(), is(true));
@@ -528,10 +442,8 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
             }
         });
 
-        final Tuple<AzureStorageService, BlobContainer> blobContainerTuple = createBlobContainer(randomIntBetween(2, 5));
-        final BlobContainer blobContainer = blobContainerTuple.v2();
+        final BlobContainer blobContainer = createBlobContainer(randomIntBetween(2, 5));
         try (InputStream stream = new InputStream() {
-
             @Override
             public int read() throws IOException {
                 throw new IOException("foo");
@@ -543,13 +455,12 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
             }
 
             @Override
-            public void reset() { }
+            public void reset() {
+            }
         }) {
             final IOException ioe = expectThrows(IOException.class, () ->
                 blobContainer.writeBlob("write_blob_max_retries", stream, randomIntBetween(1, 128), randomBoolean()));
             assertThat(ioe.getMessage(), is("foo"));
-        } finally {
-            blobContainerTuple.v1().close();
         }
     }
 

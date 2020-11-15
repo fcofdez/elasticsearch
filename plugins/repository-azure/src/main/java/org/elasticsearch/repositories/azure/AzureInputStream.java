@@ -26,26 +26,22 @@ import com.azure.storage.blob.models.BlobStorageException;
 import com.azure.storage.blob.models.DownloadRetryOptions;
 import com.azure.storage.blob.specialized.BlobAsyncClientBase;
 import com.azure.storage.common.StorageInputStream;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.elasticsearch.common.unit.TimeValue;
 import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.time.Duration;
 
 public final class AzureInputStream extends StorageInputStream {
     private final static int CHUNK_SIZE = 4 * 1024 * 1024;
-    private final AzureBlobServiceClientRef clientRef;
+    private final AzureBlobServiceClient clientRef;
     private final BlobAsyncClientBase blobClient;
     private final BlobRequestConditions accessCondition;
     private final TimeValue timeout;
     private final Runnable onHTTPRequest;
     private boolean closed = false;
-    private final ByteBuffer buffer = ByteBuffer.allocate(CHUNK_SIZE);
 
-    AzureInputStream(AzureBlobServiceClientRef clientRef,
+    AzureInputStream(AzureBlobServiceClient clientRef,
                      BlobAsyncClientBase blobClient,
                      long blobRangeOffset,
                      long blobRangeLength,
@@ -85,7 +81,6 @@ public final class AzureInputStream extends StorageInputStream {
         if (closed == false) {
             closed = true;
             super.close();
-            clientRef.close();
         }
     }
 }

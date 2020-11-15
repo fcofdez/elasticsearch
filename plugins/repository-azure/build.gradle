@@ -30,9 +30,9 @@ esplugin {
 }
 
 versions << [
-  'azure': '12.8.0',
-  'azureCore': '1.7.0',
-  'azureCoreHttpNetty': '1.5.4',
+  'azure': '12.9.0',
+  'azureCore': '1.10.0',
+  'azureCoreHttpNetty': '1.6.3',
 
   'jakartaActivation': '1.2.1',
   'jakartaXMLBind': '2.3.2',
@@ -40,7 +40,7 @@ versions << [
   'woodstox': '6.0.2',
 
   'reactorNetty': '0.9.12.RELEASE',
-  'reactorCore': '3.3.8.RELEASE',
+  'reactorCore': '3.3.10.RELEASE',
   'reactiveStreams': '1.0.3',
 ]
 

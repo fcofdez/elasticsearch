@@ -32,9 +32,11 @@ import org.elasticsearch.common.blobstore.BlobStore;
 import org.elasticsearch.common.regex.Regex;
 import org.elasticsearch.common.settings.MockSecureSettings;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.repositories.blobstore.ESMockAPIBasedRepositoryIntegTestCase;
 import org.elasticsearch.rest.RestStatus;
+import org.elasticsearch.threadpool.ThreadPool;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -78,7 +80,7 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
     @Override
     protected Map<String, HttpHandler> createHttpHandlers() {
         return Collections.singletonMap("/account",
-            new AzureHTTPStatsCollectorHandler(new AzureErroneousHttpHandler(new AzureBlobStoreHttpHandler("container"), 10)));
+            new AzureHTTPStatsCollectorHandler(new AzureBlobStoreHttpHandler("container")));
     }
 
     @Override
@@ -118,21 +120,21 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
             super(settings);
         }
 
+
         @Override
-        AzureStorageService createAzureStoreService(final Settings settings) {
-            return new AzureStorageService(settings) {
+        public AzureStorageService createAzureStorageService(Settings settings, AzureClientProvider azureClientProvider) {
+            return new AzureStorageService(settings, azureClientProvider) {
                 @Override
                 RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
                     return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
                         azureStorageSettings.getMaxRetries(), 600,
                         1L, 500L, null);
                 }
-//                @Override
-//                BlobRequestOptions getBlobRequestOptionsForWriteBlob() {
-//                    BlobRequestOptions options = new BlobRequestOptions();
-//                    options.setSingleBlobPutThresholdInBytes(Math.toIntExact(ByteSizeUnit.MB.toBytes(1)));
-//                    return options;
-//                }
+
+                @Override
+                long uploadChunkSize() {
+                    return Math.toIntExact(ByteSizeUnit.MB.toBytes(1));
+                }
             };
         }
     }
@@ -215,7 +217,7 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
 
     public void testBatchDeletion() throws Exception {
         // Batch API allows up to 256 per batch request
-        int numberOfBlobs = randomIntBetween(256, 2000);
+        int numberOfBlobs = randomIntBetween(257, 2000);
         try (BlobStore store = newBlobStore()) {
             final BlobContainer container = store.blobContainer(new BlobPath());
             for (int i = 0; i < numberOfBlobs; i++) {

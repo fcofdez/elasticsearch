@@ -101,22 +101,21 @@ public class AzureStorageCleanupThirdPartyTests extends AbstractThirdPartyReposi
         repo.threadPool().generic().execute(ActionRunnable.wrap(future, l -> {
             final AzureBlobStore blobStore = (AzureBlobStore) repo.blobStore();
             final String account = "default";
-            try (AzureBlobServiceClientRef clientRef = blobStore.getService().client(account, LocationMode.PRIMARY_ONLY, repo.threadPool())) {
-                final BlobServiceClient client = clientRef.getClient();
-                try {
-                    SocketAccess.doPrivilegedException(() -> {
-                        final BlobContainerClient blobContainer = client.getBlobContainerClient(blobStore.toString());
-                        return blobContainer.exists();
-                    });
-                    future.onFailure(new RuntimeException(
-                        "The SAS token used in this test allowed for checking container existence. This test only supports tokens " +
-                            "that grant only the documented permission requirements for the Azure repository plugin."));
-                } catch (BlobStorageException e) {
-                    if (e.getStatusCode() == HttpURLConnection.HTTP_FORBIDDEN) {
-                        future.onResponse(null);
-                    } else {
-                        future.onFailure(e);
-                    }
+            AzureBlobServiceClient clientRef = blobStore.getService().client(account, LocationMode.PRIMARY_ONLY);
+            final BlobServiceClient client = clientRef.getSyncClient();
+            try {
+                SocketAccess.doPrivilegedException(() -> {
+                    final BlobContainerClient blobContainer = client.getBlobContainerClient(blobStore.toString());
+                    return blobContainer.exists();
+                });
+                future.onFailure(new RuntimeException(
+                    "The SAS token used in this test allowed for checking container existence. This test only supports tokens " +
+                        "that grant only the documented permission requirements for the Azure repository plugin."));
+            } catch (BlobStorageException e) {
+                if (e.getStatusCode() == HttpURLConnection.HTTP_FORBIDDEN) {
+                    future.onResponse(null);
+                } else {
+                    future.onFailure(e);
                 }
             }
         }));

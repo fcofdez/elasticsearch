@@ -75,9 +75,11 @@ public class AzureBlobContainer extends AbstractBlobContainer {
             return blobStore.getInputStream(buildKey(blobName), position, length);
         } catch (BlobStorageException e) {
             if (e.getStatusCode() == 404) {
-                throw new NoSuchFileException(e.getMessage());
+                throw new NoSuchFileException("Blob [" + blobName + "] not found");
             }
             throw new IOException(e);
+        } catch (RuntimeException e) {
+            throw new IOException("Unable to read input stream for blob [" + blobName + "]");
         }
     }
 
@@ -131,7 +133,7 @@ public class AzureBlobContainer extends AbstractBlobContainer {
     }
 
     @Override
-    public Map<String, BlobContainer> children() {
+    public Map<String, BlobContainer> children() throws IOException {
         final BlobPath path = path();
         return blobStore.children(path);
     }
