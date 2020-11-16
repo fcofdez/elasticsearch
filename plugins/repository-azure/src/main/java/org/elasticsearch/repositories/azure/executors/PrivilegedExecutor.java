@@ -24,7 +24,7 @@ import org.elasticsearch.repositories.azure.SocketAccess;
 import java.util.concurrent.Executor;
 
 /**
- * Executor that gives permissions to runnables
+ * Executor that grants security permissions to the tasks executed on it.
  */
 public class PrivilegedExecutor implements Executor {
     private final Executor delegate;

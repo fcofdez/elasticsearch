@@ -22,6 +22,7 @@ package org.elasticsearch.repositories.azure;
 import com.azure.core.http.HttpClient;
 import com.azure.core.http.ProxyOptions;
 import com.azure.core.http.netty.NettyAsyncHttpClientBuilder;
+import com.azure.core.util.logging.ClientLogger;
 import com.azure.storage.blob.BlobServiceAsyncClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
@@ -54,27 +55,47 @@ import static org.elasticsearch.repositories.azure.AzureRepositoryPlugin.NETTY_E
 import static org.elasticsearch.repositories.azure.AzureRepositoryPlugin.REPOSITORY_THREAD_POOL_NAME;
 
 class AzureClientProvider extends AbstractLifecycleComponent {
-    public static final TimeValue DEFAULT_CONNECTION_TIMEOUT = TimeValue.timeValueSeconds(30);
-    public static final TimeValue DEFAULT_MAX_CONNECTION_IDLE_TIME = TimeValue.timeValueSeconds(60);
+    private static final TimeValue DEFAULT_CONNECTION_TIMEOUT = TimeValue.timeValueSeconds(30);
+    private static final TimeValue DEFAULT_MAX_CONNECTION_IDLE_TIME = TimeValue.timeValueSeconds(60);
     private static final int DEFAULT_MAX_CONNECTIONS = Math.min(Runtime.getRuntime().availableProcessors(), 8) * 2;
     private static final int DEFAULT_EVENT_LOOP_THREAD_COUNT = Math.min(Runtime.getRuntime().availableProcessors(), 8) * 2;
 
-    final static Setting<String> EVENT_LOOP_EXECUTOR = Setting.simpleString("azure_event_loop", NETTY_EVENT_LOOP_THREAD_POOL_NAME);
-    final static Setting<Integer> EVENT_LOOP_THREAD_COUNT = Setting.intSetting("azure_event_loop_thread_count",
-        DEFAULT_EVENT_LOOP_THREAD_COUNT);
-    final static Setting<Integer> MAX_OPEN_CONNECTIONS = Setting.intSetting("azure_max_connections", DEFAULT_MAX_CONNECTIONS);
-    final static Setting<TimeValue> OPEN_CONNECTION_TIMEOUT = Setting.timeSetting("azure_connection_timeout",
-        DEFAULT_CONNECTION_TIMEOUT);
-    final static Setting<TimeValue> MAX_IDLE_TIME = Setting.timeSetting("azure_max_connection_idle_time",
-        DEFAULT_MAX_CONNECTION_IDLE_TIME);
-    final static Setting<String> REACTOR_SCHEDULER_EXECUTOR_NAME = Setting.simpleString("azure_reactor_executor_name",
-        REPOSITORY_THREAD_POOL_NAME);
+    static final Setting<String> EVENT_LOOP_EXECUTOR = Setting.simpleString(
+        "repository.azure.http_client.event_loop_executor_name",
+        NETTY_EVENT_LOOP_THREAD_POOL_NAME,
+        Setting.Property.NodeScope);
+
+    static final Setting<Integer> EVENT_LOOP_THREAD_COUNT = Setting.intSetting(
+        "repository.azure.http_client.event_loop_executor_thread_count",
+        DEFAULT_EVENT_LOOP_THREAD_COUNT,
+        Setting.Property.NodeScope);
+
+    static final Setting<Integer> MAX_OPEN_CONNECTIONS = Setting.intSetting(
+        "repository.azure.http_client.max_open_connections",
+        DEFAULT_MAX_CONNECTIONS,
+        Setting.Property.NodeScope);
+
+    static final Setting<TimeValue> OPEN_CONNECTION_TIMEOUT = Setting.timeSetting(
+        "repository.azure.http_client.connection_timeout",
+        DEFAULT_CONNECTION_TIMEOUT,
+        Setting.Property.NodeScope);
+
+    static final Setting<TimeValue> MAX_IDLE_TIME = Setting.timeSetting(
+        "repository.azure.http_client.connection_max_idle_time",
+        DEFAULT_MAX_CONNECTION_IDLE_TIME,
+        Setting.Property.NodeScope);
+
+    static final Setting<String> REACTOR_SCHEDULER_EXECUTOR_NAME = Setting.simpleString(
+        "repository.azure.http_client.reactor_executor_name",
+        REPOSITORY_THREAD_POOL_NAME,
+        Setting.Property.NodeScope);
 
     private final ThreadPool threadPool;
     private final String reactorExecutorName;
     private final EventLoopGroup eventLoopGroup;
     private final ConnectionProvider connectionProvider;
     private final ByteBufAllocator byteBufAllocator;
+    private final ClientLogger clientLogger = new ClientLogger(AzureClientProvider.class);
     private volatile boolean closed = false;
 
     AzureClientProvider(ThreadPool threadPool,
@@ -100,10 +121,15 @@ class AzureClientProvider extends AbstractLifecycleComponent {
         } catch (IllegalArgumentException e) {
             throw new SettingsException("Unable to find executor [" + EVENT_LOOP_EXECUTOR.get(settings) + "]");
         }
-        final EventLoopGroup eventLoopGroup = new NioEventLoopGroup(12,
+        // Most of the code that needs special permissions (i.e. jackson serializers generation) is executed
+        // in the event loop executor. That's the reason why we should provide an executor that allows the
+        // execution of privileged code
+        final EventLoopGroup eventLoopGroup = new NioEventLoopGroup(eventLoopThreadsFromSettings(settings),
             new PrivilegedExecutor(executorService));
+
         final TimeValue openConnectionTimeout = OPEN_CONNECTION_TIMEOUT.get(settings);
         final TimeValue maxIdleTime = MAX_IDLE_TIME.get(settings);
+
         ConnectionProvider provider =
             ConnectionProvider.builder("azure-sdk-connection-pool")
                 .maxConnections(MAX_OPEN_CONNECTIONS.get(settings))
@@ -111,6 +137,14 @@ class AzureClientProvider extends AbstractLifecycleComponent {
                 .maxIdleTime(Duration.ofMillis(maxIdleTime.millis()))
                 .build();
 
+        ByteBufAllocator pooledByteBufAllocator = createByteBufAllocator();
+
+        String reactorExecutorName = REACTOR_SCHEDULER_EXECUTOR_NAME.get(settings);
+
+        return new AzureClientProvider(threadPool, reactorExecutorName, eventLoopGroup, provider, pooledByteBufAllocator);
+    }
+
+    private static ByteBufAllocator createByteBufAllocator() {
         int nHeapArena = PooledByteBufAllocator.defaultNumHeapArena();
         int pageSize = PooledByteBufAllocator.defaultPageSize();
         int maxOrder = PooledByteBufAllocator.defaultMaxOrder();
@@ -118,12 +152,16 @@ class AzureClientProvider extends AbstractLifecycleComponent {
         int smallCacheSize = PooledByteBufAllocator.defaultSmallCacheSize();
         int normalCacheSize = PooledByteBufAllocator.defaultNormalCacheSize();
         boolean useCacheForAllThreads = PooledByteBufAllocator.defaultUseCacheForAllThreads();
-        PooledByteBufAllocator pooledByteBufAllocator = new PooledByteBufAllocator(false, nHeapArena, 0, pageSize, maxOrder, tinyCacheSize,
-            smallCacheSize, normalCacheSize, useCacheForAllThreads);
 
-        String reactorExecutorName = REACTOR_SCHEDULER_EXECUTOR_NAME.get(settings);
-
-        return new AzureClientProvider(threadPool, reactorExecutorName, eventLoopGroup, provider, pooledByteBufAllocator);
+        return new PooledByteBufAllocator(false,
+            nHeapArena,
+            0,
+            pageSize,
+            maxOrder,
+            tinyCacheSize,
+            smallCacheSize,
+            normalCacheSize,
+            useCacheForAllThreads);
     }
 
     AzureBlobServiceClient createClient(AzureStorageSettings settings,
@@ -131,8 +169,9 @@ class AzureClientProvider extends AbstractLifecycleComponent {
                                         RequestRetryOptions retryOptions,
                                         ProxyOptions proxyOptions) {
         if (closed) {
-            throw new IllegalArgumentException("AzureStorageService is already closed");
+            throw new IllegalArgumentException("AzureClientProvider is already closed");
         }
+
         reactor.netty.http.client.HttpClient nettyHttpClient = reactor.netty.http.client.HttpClient.create(connectionProvider);
         nettyHttpClient = nettyHttpClient
             .port(80)
@@ -157,10 +196,10 @@ class AzureClientProvider extends AbstractLifecycleComponent {
             .retryOptions(retryOptions);
 
         if (locationMode.isSecondary()) {
-            StorageConnectionString storageConnectionString = StorageConnectionString.create(connectionString, null);
+            StorageConnectionString storageConnectionString = StorageConnectionString.create(connectionString, clientLogger);
             String secondaryUri = storageConnectionString.getBlobEndpoint().getSecondaryUri();
             if (secondaryUri == null) {
-                throw new IllegalArgumentException();
+                throw new IllegalArgumentException("Unable to configure an AzureClient using a secondary location without a secondary URL");
             }
 
             builder.endpoint(secondaryUri);
@@ -173,7 +212,22 @@ class AzureClientProvider extends AbstractLifecycleComponent {
 
     @Override
     protected void doStart() {
-        ReactorScheduledExecutorService executorService = new ReactorScheduledExecutorService(threadPool, reactorExecutorName);
+        // We should grant privileged access to this executor since some operations (batch deletions) run in this thread pool and need
+        // access to the reflection machinery to provide jackson serializers.
+        ReactorScheduledExecutorService executorService = new ReactorScheduledExecutorService(threadPool, reactorExecutorName) {
+            @Override
+            protected Runnable decorateRunnable(Runnable command) {
+                return () -> SocketAccess.doPrivilegedVoidException(command::run);
+            }
+
+            @Override
+            protected <V> Callable<V> decorateCallable(Callable<V> callable) {
+                return () -> SocketAccess.doPrivilegedException(callable::call);
+            }
+        };
+
+        // The only way to configure the schedulers used by the SDK is to inject a new global factory. This is a bit ugly...
+        // See https://github.com/Azure/azure-sdk-for-java/issues/17272 for a feature request to avoid this need.
         Schedulers.setFactory(new Schedulers.Factory() {
             @Override
             public Scheduler newParallel(int parallelism, ThreadFactory threadFactory) {

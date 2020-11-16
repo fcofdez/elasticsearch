@@ -39,17 +39,6 @@ public final class SocketAccess {
 
     private SocketAccess() {}
 
-    public static <T> T doPrivilegedIOException(PrivilegedExceptionAction<T> operation) throws IOException {
-        SpecialPermission.check();
-        try {
-            return AccessController.doPrivileged(operation);
-        } catch (PrivilegedActionException e) {
-            Throwables.rethrow(e.getCause());
-            assert false : "always throws";
-            return null;
-        }
-    }
-
     public static <T> T doPrivilegedException(PrivilegedExceptionAction<T> operation) {
         SpecialPermission.check();
         try {

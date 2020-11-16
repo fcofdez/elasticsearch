@@ -19,9 +19,6 @@
 
 package org.elasticsearch.repositories.azure;
 
-/**
- * Backwards compatible
- */
 enum LocationMode {
     PRIMARY_ONLY,
     SECONDARY_ONLY,
@@ -30,9 +27,5 @@ enum LocationMode {
 
     boolean isSecondary() {
         return this == SECONDARY_ONLY || this == SECONDARY_THEN_PRIMARY;
-    }
-
-    boolean isPrimary() {
-        return isPrimary() == false;
     }
 }

@@ -26,7 +26,6 @@ import com.sun.net.httpserver.HttpHandler;
 import fixture.azure.AzureHttpHandler;
 import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.common.blobstore.BlobContainer;
-import org.elasticsearch.common.blobstore.BlobMetadata;
 import org.elasticsearch.common.blobstore.BlobPath;
 import org.elasticsearch.common.blobstore.BlobStore;
 import org.elasticsearch.common.regex.Regex;
@@ -36,20 +35,16 @@ import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.repositories.blobstore.ESMockAPIBasedRepositoryIntegTestCase;
 import org.elasticsearch.rest.RestStatus;
-import org.elasticsearch.threadpool.ThreadPool;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.NoSuchFileException;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
@@ -122,18 +117,23 @@ public class AzureBlobStoreRepositoryTests extends ESMockAPIBasedRepositoryInteg
 
 
         @Override
-        public AzureStorageService createAzureStorageService(Settings settings, AzureClientProvider azureClientProvider) {
+        AzureStorageService createAzureStorageService(Settings settings, AzureClientProvider azureClientProvider) {
             return new AzureStorageService(settings, azureClientProvider) {
                 @Override
                 RequestRetryOptions getRetryOptions(LocationMode locationMode, AzureStorageSettings azureStorageSettings) {
                     return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
-                        azureStorageSettings.getMaxRetries(), 600,
-                        1L, 500L, null);
+                        azureStorageSettings.getMaxRetries(), 1,
+                        1L, 15L, null);
                 }
 
                 @Override
-                long uploadChunkSize() {
-                    return Math.toIntExact(ByteSizeUnit.MB.toBytes(1));
+                long getUploadBlockSize() {
+                    return ByteSizeUnit.MB.toBytes(1);
+                }
+
+                @Override
+                long getSizeThresholdForMultiBlockUpload() {
+                    return ByteSizeUnit.MB.toBytes(1);
                 }
             };
         }

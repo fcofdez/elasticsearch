@@ -152,6 +152,11 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
             }
 
             @Override
+            long getSizeThresholdForMultiBlockUpload() {
+                return ByteSizeUnit.MB.toBytes(1);
+            }
+
+            @Override
             int getMaxUploadParallelism() {
                 return 1;
             }
@@ -163,7 +168,7 @@ public class AzureBlobContainerRetriesTests extends ESTestCase {
                 .put(ACCOUNT_SETTING.getKey(), clientName)
                 .build());
 
-        return new AzureBlobContainer(BlobPath.cleanPath(), new AzureBlobStore(repositoryMetadata, service, threadPool));
+        return new AzureBlobContainer(BlobPath.cleanPath(), new AzureBlobStore(repositoryMetadata, service));
     }
 
     public void testReadNonexistentBlobThrowsNoSuchFileException() {

@@ -19,9 +19,6 @@
 
 package org.elasticsearch.repositories.azure;
 
-import io.netty.buffer.PooledByteBufAllocator;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
 import org.apache.lucene.util.SetOnce;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
@@ -40,24 +37,17 @@ import org.elasticsearch.plugins.ReloadablePlugin;
 import org.elasticsearch.plugins.RepositoryPlugin;
 import org.elasticsearch.repositories.RepositoriesService;
 import org.elasticsearch.repositories.Repository;
-import org.elasticsearch.repositories.azure.executors.PrivilegedExecutor;
-import org.elasticsearch.repositories.azure.executors.ReactorScheduledExecutorService;
 import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.threadpool.ExecutorBuilder;
 import org.elasticsearch.threadpool.ScalingExecutorBuilder;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.watcher.ResourceWatcherService;
-import reactor.core.scheduler.Scheduler;
-import reactor.core.scheduler.Schedulers;
-import reactor.netty.resources.ConnectionProvider;
 
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ThreadFactory;
 import java.util.function.Supplier;
 
 /**
@@ -71,9 +61,11 @@ public class AzureRepositoryPlugin extends Plugin implements RepositoryPlugin, R
     // protected for testing
     final SetOnce<AzureStorageService> azureStoreService = new SetOnce<>();
     private final Settings settings;
+    private final Map<String, AzureStorageSettings> initialClientSettings;
 
     public AzureRepositoryPlugin(Settings settings) {
         // eagerly load client settings so that secure settings are read
+        this.initialClientSettings = AzureStorageSettings.load(settings);
         this.settings = settings;
     }
 
@@ -109,7 +101,7 @@ public class AzureRepositoryPlugin extends Plugin implements RepositoryPlugin, R
         return AzureClientProvider.create(threadPool, settings);
     }
 
-    public AzureStorageService createAzureStorageService(Settings settings, AzureClientProvider azureClientProvider) {
+    AzureStorageService createAzureStorageService(Settings settings, AzureClientProvider azureClientProvider) {
         return new AzureStorageService(settings, azureClientProvider);
     }
 

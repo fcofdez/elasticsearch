@@ -171,56 +171,56 @@ public abstract class ESMockAPIBasedRepositoryIntegTestCase extends ESBlobStoreR
         assertAcked(client().admin().cluster().prepareDeleteSnapshot(repository, snapshot).get());
     }
 
-//    public void testRequestStats() throws Exception {
-//        final String repository = createRepository(randomName());
-//        final String index = "index-no-merges";
-//        createIndex(index, Settings.builder()
-//            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
-//            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
-//            .build());
-//
-//        final long nbDocs = randomLongBetween(10_000L, 20_000L);
-//        try (BackgroundIndexer indexer = new BackgroundIndexer(index, "_doc", client(), (int) nbDocs)) {
-//            waitForDocs(nbDocs, indexer);
-//        }
-//
-//        flushAndRefresh(index);
-//        ForceMergeResponse forceMerge = client().admin().indices().prepareForceMerge(index).setFlush(true).setMaxNumSegments(1).get();
-//        assertThat(forceMerge.getSuccessfulShards(), equalTo(1));
-//        assertHitCount(client().prepareSearch(index).setSize(0).setTrackTotalHits(true).get(), nbDocs);
-//
-//        final String snapshot = "snapshot";
-//        assertSuccessfulSnapshot(client().admin().cluster().prepareCreateSnapshot(repository, snapshot)
-//            .setWaitForCompletion(true).setIndices(index));
-//
-//        assertAcked(client().admin().indices().prepareDelete(index));
-//
-//        assertSuccessfulRestore(client().admin().cluster().prepareRestoreSnapshot(repository, snapshot).setWaitForCompletion(true));
-//        ensureGreen(index);
-//        assertHitCount(client().prepareSearch(index).setSize(0).setTrackTotalHits(true).get(), nbDocs);
-//
-//        assertAcked(client().admin().cluster().prepareDeleteSnapshot(repository, snapshot).get());
-//
-//        final RepositoryStats repositoryStats = StreamSupport.stream(
-//            internalCluster().getInstances(RepositoriesService.class).spliterator(), false)
-//            .map(repositoriesService -> {
-//                try {
-//                    return repositoriesService.repository(repository);
-//                } catch (RepositoryMissingException e) {
-//                    return null;
-//                }
-//            })
-//            .filter(Objects::nonNull)
-//            .map(Repository::stats)
-//            .reduce(RepositoryStats::merge)
-//            .get();
-//
-//        Map<String, Long> sdkRequestCounts = repositoryStats.requestCounts;
-//
-//        for (String requestType : requestTypesTracked()) {
-//            assertSDKCallsMatchMockCalls(sdkRequestCounts, requestType);
-//        }
-//    }
+    public void testRequestStats() throws Exception {
+        final String repository = createRepository(randomName());
+        final String index = "index-no-merges";
+        createIndex(index, Settings.builder()
+            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 1)
+            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
+            .build());
+
+        final long nbDocs = randomLongBetween(10_000L, 20_000L);
+        try (BackgroundIndexer indexer = new BackgroundIndexer(index, "_doc", client(), (int) nbDocs)) {
+            waitForDocs(nbDocs, indexer);
+        }
+
+        flushAndRefresh(index);
+        ForceMergeResponse forceMerge = client().admin().indices().prepareForceMerge(index).setFlush(true).setMaxNumSegments(1).get();
+        assertThat(forceMerge.getSuccessfulShards(), equalTo(1));
+        assertHitCount(client().prepareSearch(index).setSize(0).setTrackTotalHits(true).get(), nbDocs);
+
+        final String snapshot = "snapshot";
+        assertSuccessfulSnapshot(client().admin().cluster().prepareCreateSnapshot(repository, snapshot)
+            .setWaitForCompletion(true).setIndices(index));
+
+        assertAcked(client().admin().indices().prepareDelete(index));
+
+        assertSuccessfulRestore(client().admin().cluster().prepareRestoreSnapshot(repository, snapshot).setWaitForCompletion(true));
+        ensureGreen(index);
+        assertHitCount(client().prepareSearch(index).setSize(0).setTrackTotalHits(true).get(), nbDocs);
+
+        assertAcked(client().admin().cluster().prepareDeleteSnapshot(repository, snapshot).get());
+
+        final RepositoryStats repositoryStats = StreamSupport.stream(
+            internalCluster().getInstances(RepositoriesService.class).spliterator(), false)
+            .map(repositoriesService -> {
+                try {
+                    return repositoriesService.repository(repository);
+                } catch (RepositoryMissingException e) {
+                    return null;
+                }
+            })
+            .filter(Objects::nonNull)
+            .map(Repository::stats)
+            .reduce(RepositoryStats::merge)
+            .get();
+
+        Map<String, Long> sdkRequestCounts = repositoryStats.requestCounts;
+
+        for (String requestType : requestTypesTracked()) {
+            assertSDKCallsMatchMockCalls(sdkRequestCounts, requestType);
+        }
+    }
 
     private void assertSDKCallsMatchMockCalls(Map<String, Long> sdkRequestCount, String requestTye) {
         final long sdkCalls = sdkRequestCount.getOrDefault(requestTye, 0L);

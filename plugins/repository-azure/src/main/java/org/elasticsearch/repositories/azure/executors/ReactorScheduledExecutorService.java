@@ -20,6 +20,7 @@
 package org.elasticsearch.repositories.azure.executors;
 
 import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.SuppressForbidden;
 import org.elasticsearch.threadpool.Scheduler;
 import org.elasticsearch.threadpool.ThreadPool;
 
@@ -35,9 +36,10 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Wrapper around {@link ThreadPool} that provides the necessary scheduling methods for a {@link reactor.core.scheduler.Scheduler} to
- * function. This allows injecting a custom Executor to the reactor schedulers factory and avoid fine grained control over the
+ * function. This allows injecting a custom Executor to the reactor schedulers factory and get fine grained control over the
  * thread resources used.
  */
+@SuppressForbidden(reason = "It wraps a ThreadPool and delegates all the work")
 public class ReactorScheduledExecutorService extends AbstractExecutorService implements ScheduledExecutorService {
     private final ThreadPool threadPool;
     private final String executorName;
@@ -132,7 +134,7 @@ public class ReactorScheduledExecutorService extends AbstractExecutorService imp
     private static final class ReactorFuture<V> implements ScheduledFuture<V> {
         private final Scheduler.Cancellable cancellable;
 
-        public ReactorFuture(Scheduler.Cancellable cancellable) {
+        private ReactorFuture(Scheduler.Cancellable cancellable) {
             this.cancellable = cancellable;
         }
 

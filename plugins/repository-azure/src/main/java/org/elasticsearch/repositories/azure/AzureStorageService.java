@@ -28,7 +28,6 @@ import com.azure.core.http.policy.HttpPipelinePolicy;
 import com.azure.storage.common.implementation.connectionstring.StorageConnectionString;
 import com.azure.storage.common.policy.RequestRetryOptions;
 import com.azure.storage.common.policy.RetryPolicyType;
-import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.settings.SettingsException;
 import org.elasticsearch.common.unit.ByteSizeUnit;
@@ -38,20 +37,17 @@ import reactor.core.publisher.Mono;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URL;
-import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 
 import static java.util.Collections.emptyMap;
 
 public class AzureStorageService {
-
     public static final ByteSizeValue MIN_CHUNK_SIZE = new ByteSizeValue(1, ByteSizeUnit.BYTES);
     public static final ByteSizeValue MAX_CHUNK_SIZE = new ByteSizeValue(256, ByteSizeUnit.MB);
 
     // 'package' for testing
     volatile Map<String, AzureStorageSettings> storageSettings = emptyMap();
-    private volatile Map<Tuple<AzureStorageSettings, LocationMode>, AzureBlobServiceClient> clients = Collections.emptyMap();
     private final AzureClientProvider azureClientProvider;
 
     public AzureStorageService(Settings settings, AzureClientProvider azureClientProvider) {
@@ -61,13 +57,6 @@ public class AzureStorageService {
         this.azureClientProvider = azureClientProvider;
     }
 
-    /**
-     * Creates a {@code CloudBlobClient} on each invocation using the current client
-     * settings. CloudBlobClient is not thread safe and the settings can change,
-     * therefore the instance is not cache-able and should only be reused inside a
-     * thread for logically coupled ops. The {@code OperationContext} is used to
-     * specify the proxy, but a new context is *required* for each call.
-     */
     public AzureBlobServiceClient client(String clientName, LocationMode locationMode) {
         final AzureStorageSettings azureStorageSettings = this.storageSettings.get(clientName);
         if (azureStorageSettings == null) {
@@ -80,6 +69,10 @@ public class AzureStorageService {
     }
 
     long getUploadBlockSize() {
+        return Math.toIntExact(ByteSizeUnit.MB.toBytes(1));
+    }
+
+    long getSizeThresholdForMultiBlockUpload() {
         return Math.toIntExact(ByteSizeUnit.MB.toBytes(1));
     }
 
@@ -156,13 +149,15 @@ public class AzureStorageService {
                 throw new IllegalStateException();
         }
 
+        // The request retry policy uses seconds as the default time unit, since
+        // it's possible to configure a timeout < 1s we should ceil that value
+        // as RequestRetryOptions expects a value >= 1.
+        // See https://github.com/Azure/azure-sdk-for-java/issues/17590 for a proposal
+        // to fix this issue.
+        timeout = Math.max(1, timeout);
         return new RequestRetryOptions(RetryPolicyType.EXPONENTIAL,
-            azureStorageSettings.getMaxRetries(), 1,
-            1L, 15L, secondaryHost);
-    }
-
-    long uploadChunkSize() {
-        return ByteSizeUnit.MB.toBytes(1);
+            azureStorageSettings.getMaxRetries(), timeout,
+            null, null, secondaryHost);
     }
 
     /**
@@ -170,7 +165,6 @@ public class AzureStorageService {
      * client requests will use the new refreshed settings.
      *
      * @param clientsSettings the settings for new clients
-     * @return the old settings
      */
     public void refreshSettings(Map<String, AzureStorageSettings> clientsSettings) {
         this.storageSettings = Map.copyOf(clientsSettings);
