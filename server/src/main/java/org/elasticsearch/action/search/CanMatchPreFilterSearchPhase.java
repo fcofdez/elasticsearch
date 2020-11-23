@@ -24,6 +24,7 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.common.lease.Releasable;
+import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchService.CanMatchResponse;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
@@ -118,6 +119,17 @@ final class CanMatchPreFilterSearchPhase extends AbstractSearchAsyncAction<CanMa
         }
         FieldSortBuilder fieldSort = FieldSortBuilder.getPrimaryFieldSortOrNull(source);
         return new GroupShardsIterator<>(sortShards(shardsIts, results.minAndMaxes, fieldSort.order()));
+    }
+
+    @Override
+    protected void onShardGroupFailure(int shardIndex, SearchShardTarget shardTarget, Exception exc) {
+        SearchShardIterator searchShardIterator = shardsIts.get(shardIndex);
+        ShardId shardId = searchShardIterator.shardId();
+
+        //getRequest().source().rewrite()
+        onShardResult(new CanMatchResponse(false, null), searchShardIterator);
+
+        super.onShardGroupFailure(shardIndex, shardTarget, exc);
     }
 
     private static List<SearchShardIterator> sortShards(GroupShardsIterator<SearchShardIterator> shardsIts,

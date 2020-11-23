@@ -428,6 +428,16 @@ public class RangeQueryBuilder extends AbstractQueryBuilder<RangeQueryBuilder> i
 
     // Overridable for testing only
     protected MappedFieldType.Relation getRelation(QueryRewriteContext queryRewriteContext) throws IOException {
+        CoordinatorRewriteContext coordinatorRewriteContext = queryRewriteContext.convertToCoordinatorRewriteContext();
+        if (coordinatorRewriteContext != null) {
+            final MappedFieldType fieldType = coordinatorRewriteContext.getFieldType(fieldName);
+            if (fieldType != null) {
+                DateMathParser dateMathParser = getForceDateParser();
+                return fieldType.isFieldWithinQuery(coordinatorRewriteContext.getIndexReader(), from, to, includeLower,
+                    includeUpper, timeZone, dateMathParser, queryRewriteContext);
+            }
+        }
+
         QueryShardContext shardContext = queryRewriteContext.convertToShardContext();
         if (shardContext != null) {
             final MappedFieldType fieldType = shardContext.getFieldType(fieldName);
