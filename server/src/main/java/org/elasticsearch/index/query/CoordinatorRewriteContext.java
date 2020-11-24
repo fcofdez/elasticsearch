@@ -39,10 +39,7 @@ import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.index.mapper.MappedFieldType;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.Optional;
 import java.util.function.LongSupplier;
 
 public class CoordinatorRewriteContext extends QueryRewriteContext {
@@ -115,19 +112,15 @@ public class CoordinatorRewriteContext extends QueryRewriteContext {
         }
     }
 
-    private final Map<String, ConstantField> constantFields;
+    private final ConstantMetadataProvider constantMetadataProvider;
 
     public CoordinatorRewriteContext(NamedXContentRegistry xContentRegistry,
                                      NamedWriteableRegistry writeableRegistry,
                                      Client client,
                                      LongSupplier nowInMillis,
-                                     List<ConstantField> fields) {
+                                     ConstantMetadataProvider constantMetadataProvider) {
         super(xContentRegistry, writeableRegistry, client, nowInMillis);
-        Map<String, ConstantField> constantFields = new HashMap<>(fields.size());
-        for (ConstantField field : fields) {
-            constantFields.put(field.fieldName, field);
-        }
-        this.constantFields = Collections.unmodifiableMap(constantFields);
+        this.constantMetadataProvider = constantMetadataProvider;
     }
 
     IndexReader getIndexReader() {
@@ -135,12 +128,14 @@ public class CoordinatorRewriteContext extends QueryRewriteContext {
     }
 
     public MappedFieldType getFieldType(String fieldName) {
-        ConstantField constantField = constantFields.get(fieldName);
-        if (constantField == null) {
+        Optional<ConstantField> maybeConstantField =
+            constantMetadataProvider.getCoordinatorRewriteContext(null, fieldName);
+
+        if (maybeConstantField.isEmpty()) {
             return null;
         }
 
-        return constantField.fieldType;
+        return maybeConstantField.get().fieldType;
     }
 
     class ConstantIndexReader extends LeafReader {
@@ -199,13 +194,14 @@ public class CoordinatorRewriteContext extends QueryRewriteContext {
 
         @Override
         public PointValues getPointValues(String field) {
-            ConstantField constantField = constantFields.get(field);
+            Optional<ConstantField> maybeConstantField =
+                constantMetadataProvider.getCoordinatorRewriteContext(null, field);
 
-            if (constantField == null) {
+            if (maybeConstantField.isEmpty()) {
                 return null;
             }
 
-            return constantField.getPointValues();
+            return maybeConstantField.get().getPointValues();
         }
 
         @Override

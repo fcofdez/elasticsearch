@@ -24,19 +24,26 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.common.lease.Releasable;
+import org.elasticsearch.index.query.ConstantMetadataProvider;
+import org.elasticsearch.index.query.CoordinatorRewriteContext;
+import org.elasticsearch.index.query.Rewriteable;
 import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.SearchService.CanMatchResponse;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.internal.AliasFilter;
+import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.search.sort.FieldSortBuilder;
 import org.elasticsearch.search.sort.MinAndMax;
 import org.elasticsearch.search.sort.SortOrder;
 import org.elasticsearch.transport.Transport;
 
+import java.io.IOException;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
@@ -60,6 +67,7 @@ final class CanMatchPreFilterSearchPhase extends AbstractSearchAsyncAction<CanMa
 
     private final Function<GroupShardsIterator<SearchShardIterator>, SearchPhase> phaseFactory;
     private final GroupShardsIterator<SearchShardIterator> shardsIts;
+    private final ConstantMetadataProvider constantMetadataProvider;
 
     CanMatchPreFilterSearchPhase(Logger logger, SearchTransportService searchTransportService,
                                  BiFunction<String, String, Transport.Connection> nodeIdToConnection,
@@ -70,12 +78,26 @@ final class CanMatchPreFilterSearchPhase extends AbstractSearchAsyncAction<CanMa
                                  TransportSearchAction.SearchTimeProvider timeProvider, ClusterState clusterState,
                                  SearchTask task, Function<GroupShardsIterator<SearchShardIterator>, SearchPhase> phaseFactory,
                                  SearchResponse.Clusters clusters) {
+        this(logger, searchTransportService, nodeIdToConnection, aliasFilter, concreteIndexBoosts, indexRoutings, executor, request,
+            listener, shardsIts, timeProvider, clusterState, task, phaseFactory, clusters, ConstantMetadataProvider.EMPTY);
+    }
+
+    CanMatchPreFilterSearchPhase(Logger logger, SearchTransportService searchTransportService,
+                                 BiFunction<String, String, Transport.Connection> nodeIdToConnection,
+                                 Map<String, AliasFilter> aliasFilter, Map<String, Float> concreteIndexBoosts,
+                                 Map<String, Set<String>> indexRoutings,
+                                 Executor executor, SearchRequest request,
+                                 ActionListener<SearchResponse> listener, GroupShardsIterator<SearchShardIterator> shardsIts,
+                                 TransportSearchAction.SearchTimeProvider timeProvider, ClusterState clusterState,
+                                 SearchTask task, Function<GroupShardsIterator<SearchShardIterator>, SearchPhase> phaseFactory,
+                                 SearchResponse.Clusters clusters, ConstantMetadataProvider constantMetadataProvider) {
         //We set max concurrent shard requests to the number of shards so no throttling happens for can_match requests
         super("can_match", logger, searchTransportService, nodeIdToConnection, aliasFilter, concreteIndexBoosts, indexRoutings,
-                executor, request, listener, shardsIts, timeProvider, clusterState, task,
-                new CanMatchSearchPhaseResults(shardsIts.size()), shardsIts.size(), clusters);
+            executor, request, listener, shardsIts, timeProvider, clusterState, task,
+            new CanMatchSearchPhaseResults(shardsIts.size()), shardsIts.size(), clusters);
         this.phaseFactory = phaseFactory;
         this.shardsIts = shardsIts;
+        this.constantMetadataProvider = constantMetadataProvider;
     }
 
     @Override
@@ -119,6 +141,27 @@ final class CanMatchPreFilterSearchPhase extends AbstractSearchAsyncAction<CanMa
         }
         FieldSortBuilder fieldSort = FieldSortBuilder.getPrimaryFieldSortOrNull(source);
         return new GroupShardsIterator<>(sortShards(shardsIts, results.minAndMaxes, fieldSort.order()));
+    }
+
+    @Override
+    protected void performPhaseOnShard(int shardIndex, SearchShardIterator shardIt, SearchShardTarget shard) {
+        SearchSourceBuilder source = getRequest().source();
+        Optional<CoordinatorRewriteContext> coordinatorRewriteContext =
+            constantMetadataProvider.getCoordinatorRewriteContext(shardIt.shardId().getIndex());
+        if (source == null || coordinatorRewriteContext.isEmpty()) {
+            super.performPhaseOnShard(shardIndex, shardIt, shard);
+            return;
+        }
+
+        SearchService searchService = null;
+        try {
+            ShardSearchRequest shardSearchRequest = buildShardSearchRequest(shardIt);
+            searchService.getCanMatchResponse(shardSearchRequest, false, coordinatorRewriteContext.get());
+            Rewriteable.rewrite(shardSearchRequest.getRewriteable(), coordinatorRewriteContext.get(), false);
+            SearchSourceBuilder rewrite = source.rewrite(coordinatorRewriteContext.get());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     @Override
