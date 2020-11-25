@@ -19,12 +19,26 @@
 
 package org.elasticsearch.index.query;
 
+import org.elasticsearch.cluster.metadata.IndexAbstraction;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.index.Index;
 
 import java.util.Optional;
 
-public interface ConstantMetadataProvider {
-    ConstantMetadataProvider EMPTY = (index) -> Optional.empty();
+public class ClusterConstantMetadataProvider implements CoordinatorRewriteContextProvider {
+    private final ClusterService clusterService;
 
-    Optional<CoordinatorRewriteContext> getCoordinatorRewriteContext(Index index);
+    public ClusterConstantMetadataProvider(ClusterService clusterService) {
+        this.clusterService = clusterService;
+    }
+
+    @Override
+    public Optional<CoordinatorRewriteContext> getCoordinatorRewriteContext(Index index) {
+        IndexAbstraction indexAbstraction = clusterService.state().metadata().getIndicesLookup().get(index.getName());
+        if (indexAbstraction == null || indexAbstraction.getType() != IndexAbstraction.Type.DATA_STREAM) {
+            return Optional.empty();
+        }
+
+        return Optional.empty();
+    }
 }

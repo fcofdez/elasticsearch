@@ -19,7 +19,6 @@
 
 package org.elasticsearch.index.query;
 
-import org.apache.lucene.document.LongPoint;
 import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.Fields;
@@ -44,17 +43,13 @@ import java.util.function.LongSupplier;
 
 public class CoordinatorRewriteContext extends QueryRewriteContext {
 
-    static class ConstantField {
+    public static class ConstantField {
         private final String fieldName;
-        private final long minTimestamp;
-        private final long maxTimestamp;
         private final MappedFieldType fieldType;
         private final PointValues pointValues;
 
-        public ConstantField(String fieldName, long minTimestamp, long maxTimestamp, MappedFieldType fieldType) {
+        public ConstantField(String fieldName, byte[] minTimestamp, byte[] maxTimestamp, MappedFieldType fieldType) {
             this.fieldName = fieldName;
-            this.minTimestamp = minTimestamp;
-            this.maxTimestamp = maxTimestamp;
             this.fieldType = fieldType;
             this.pointValues = new PointValues() {
                 @Override
@@ -68,16 +63,18 @@ public class CoordinatorRewriteContext extends QueryRewriteContext {
 
                 @Override
                 public byte[] getMinPackedValue() {
-                    final byte[] encodedMin = new byte[Long.BYTES];
-                    LongPoint.encodeDimension(minTimestamp, encodedMin, 0);
-                    return encodedMin;
+                    return minTimestamp;
+//                    final byte[] encodedMin = new byte[Long.BYTES];
+//                    LongPoint.encodeDimension(minTimestamp, encodedMin, 0);
+//                    return encodedMin;
                 }
 
                 @Override
                 public byte[] getMaxPackedValue() {
-                    final byte[] encodedLong = new byte[Long.BYTES];
-                    LongPoint.encodeDimension(maxTimestamp, encodedLong, 0);
-                    return encodedLong;
+                    return maxTimestamp;
+//                    final byte[] encodedLong = new byte[Long.BYTES];
+//                    LongPoint.encodeDimension(maxTimestamp, encodedLong, 0);
+//                    return encodedLong;
                 }
 
                 @Override
@@ -92,7 +89,7 @@ public class CoordinatorRewriteContext extends QueryRewriteContext {
 
                 @Override
                 public int getBytesPerDimension() {
-                    return Long.BYTES;
+                    return maxTimestamp.length;
                 }
 
                 @Override
@@ -112,15 +109,15 @@ public class CoordinatorRewriteContext extends QueryRewriteContext {
         }
     }
 
-    private final ConstantMetadataProvider constantMetadataProvider;
+    private final FieldDataProvider fieldDataProvider;
 
     public CoordinatorRewriteContext(NamedXContentRegistry xContentRegistry,
                                      NamedWriteableRegistry writeableRegistry,
                                      Client client,
                                      LongSupplier nowInMillis,
-                                     ConstantMetadataProvider constantMetadataProvider) {
+                                     FieldDataProvider fieldDataProvider) {
         super(xContentRegistry, writeableRegistry, client, nowInMillis);
-        this.constantMetadataProvider = constantMetadataProvider;
+        this.fieldDataProvider = fieldDataProvider;
     }
 
     IndexReader getIndexReader() {
@@ -128,14 +125,17 @@ public class CoordinatorRewriteContext extends QueryRewriteContext {
     }
 
     public MappedFieldType getFieldType(String fieldName) {
-        Optional<ConstantField> maybeConstantField =
-            constantMetadataProvider.getCoordinatorRewriteContext(null, fieldName);
-
-        if (maybeConstantField.isEmpty()) {
+        Optional<ConstantField> maybeField = fieldDataProvider.getField(fieldName);
+        if (maybeField.isEmpty()) {
             return null;
         }
 
-        return maybeConstantField.get().fieldType;
+        return maybeField.get().fieldType;
+    }
+
+    @Override
+    public CoordinatorRewriteContext convertToCoordinatorRewriteContext() {
+        return this;
     }
 
     class ConstantIndexReader extends LeafReader {
@@ -195,7 +195,7 @@ public class CoordinatorRewriteContext extends QueryRewriteContext {
         @Override
         public PointValues getPointValues(String field) {
             Optional<ConstantField> maybeConstantField =
-                constantMetadataProvider.getCoordinatorRewriteContext(null, field);
+                fieldDataProvider.getField(field);
 
             if (maybeConstantField.isEmpty()) {
                 return null;
@@ -235,7 +235,6 @@ public class CoordinatorRewriteContext extends QueryRewriteContext {
 
         @Override
         protected void doClose() {
-
         }
 
         @Override
