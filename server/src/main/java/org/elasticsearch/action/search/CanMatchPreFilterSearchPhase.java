@@ -26,10 +26,6 @@ import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.common.lease.Releasable;
 import org.elasticsearch.index.query.CoordinatorRewriteContextProvider;
 import org.elasticsearch.index.query.CoordinatorRewriteContext;
-import org.elasticsearch.index.query.MatchNoneQueryBuilder;
-import org.elasticsearch.index.query.QueryBuilder;
-import org.elasticsearch.index.query.Rewriteable;
-import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.SearchService.CanMatchResponse;
 import org.elasticsearch.search.SearchShardTarget;
@@ -156,15 +152,14 @@ final class CanMatchPreFilterSearchPhase extends AbstractSearchAsyncAction<CanMa
 
         try {
             ShardSearchRequest request = buildShardSearchRequest(shardIt);
-            Rewriteable.rewrite(request.getRewriteable(), coordinatorRewriteContext.get(), true);
-            final boolean aliasFilterCanMatch = request.getAliasFilter()
-                .getQueryBuilder() instanceof MatchNoneQueryBuilder == false;
-            final boolean canMatch;
-            if (SearchService.canRewriteToMatchNone(request.source())) {
-                QueryBuilder queryBuilder = request.source().query();
-                canMatch = aliasFilterCanMatch && queryBuilder instanceof MatchNoneQueryBuilder == false;
-            } else {
-                canMatch = aliasFilterCanMatch;
+            boolean canMatch = SearchService.canMatch(request, coordinatorRewriteContext.get());
+
+            // Trigger the query as there's still a chance that we can skip
+            // this shard given other query filters that we cannot apply
+            // in the coordinator
+            if (canMatch) {
+                super.performPhaseOnShard(shardIndex, shardIt, shard);
+                return;
             }
 
             CanMatchResponse result = new CanMatchResponse(canMatch, null);

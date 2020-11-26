@@ -1179,22 +1179,28 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
             try (canMatchSearcher) {
                 QueryShardContext context = indexService.newQueryShardContext(request.shardId().id(), canMatchSearcher,
                     request::nowInMillis, request.getClusterAlias(), request.getRuntimeMappings());
-                Rewriteable.rewrite(request.getRewriteable(), context, false);
-                final boolean aliasFilterCanMatch = request.getAliasFilter()
-                    .getQueryBuilder() instanceof MatchNoneQueryBuilder == false;
                 FieldSortBuilder sortBuilder = FieldSortBuilder.getPrimaryFieldSortOrNull(request.source());
                 MinAndMax<?> minMax = sortBuilder != null ? FieldSortBuilder.getMinMaxOrNull(context, sortBuilder) : null;
-                final boolean canMatch;
-                if (canRewriteToMatchNone(request.source())) {
-                    QueryBuilder queryBuilder = request.source().query();
-                    canMatch = aliasFilterCanMatch && queryBuilder instanceof MatchNoneQueryBuilder == false;
-                } else {
-                    // null query means match_all
-                    canMatch = aliasFilterCanMatch;
-                }
+
+                final boolean canMatch = canMatch(request, context);
                 return new CanMatchResponse(canMatch || hasRefreshPending, minMax);
             }
         }
+    }
+
+    public static boolean canMatch(ShardSearchRequest request, QueryRewriteContext context) throws IOException {
+        Rewriteable.rewrite(request.getRewriteable(), context, false);
+        final boolean aliasFilterCanMatch = request.getAliasFilter()
+            .getQueryBuilder() instanceof MatchNoneQueryBuilder == false;
+        final boolean canMatch;
+        if (canRewriteToMatchNone(request.source())) {
+            QueryBuilder queryBuilder = request.source().query();
+            canMatch = aliasFilterCanMatch && queryBuilder instanceof MatchNoneQueryBuilder == false;
+        } else {
+            // null query means match_all
+            canMatch = aliasFilterCanMatch;
+        }
+        return canMatch;
     }
 
     /**

@@ -48,6 +48,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -582,24 +583,33 @@ public class SearchAsyncActionTests extends ESTestCase {
 
     static GroupShardsIterator<SearchShardIterator> getShardsIter(String index, OriginalIndices originalIndices, int numShards,
                                                      boolean doReplicas, DiscoveryNode primaryNode, DiscoveryNode replicaNode) {
+        return new GroupShardsIterator<>(
+            getShardsIter(new Index(index, "_na_"), originalIndices, numShards, doReplicas, primaryNode, replicaNode)
+        );
+    }
+
+    static List<SearchShardIterator> getShardsIter(Index index, OriginalIndices originalIndices, int numShards,
+                                                   boolean doReplicas, DiscoveryNode primaryNode, DiscoveryNode replicaNode) {
         ArrayList<SearchShardIterator> list = new ArrayList<>();
         for (int i = 0; i < numShards; i++) {
             ArrayList<ShardRouting> started = new ArrayList<>();
             ArrayList<ShardRouting> initializing = new ArrayList<>();
             ArrayList<ShardRouting> unassigned = new ArrayList<>();
 
-            ShardRouting routing = ShardRouting.newUnassigned(new ShardId(new Index(index, "_na_"), i), true,
+            ShardRouting routing = ShardRouting.newUnassigned(new ShardId(index, i), true,
                 RecoverySource.EmptyStoreRecoverySource.INSTANCE, new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, "foobar"));
-            routing = routing.initialize(primaryNode.getId(), i + "p", 0);
-            routing.started();
-            started.add(routing);
-            if (doReplicas) {
-                routing = ShardRouting.newUnassigned(new ShardId(new Index(index, "_na_"), i), false,
+            if (primaryNode != null) {
+                routing = routing.initialize(primaryNode.getId(), i + "p", 0);
+                routing = routing.moveToStarted();
+                started.add(routing);
+            }
+            if (doReplicas && primaryNode != null) {
+                routing = ShardRouting.newUnassigned(new ShardId(index, i), false,
                     RecoverySource.PeerRecoverySource.INSTANCE, new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, "foobar"));
                 if (replicaNode != null) {
                     routing = routing.initialize(replicaNode.getId(), i + "r", 0);
                     if (randomBoolean()) {
-                        routing.started();
+                        routing = routing.moveToStarted();
                         started.add(routing);
                     } else {
                         initializing.add(routing);
@@ -610,10 +620,11 @@ public class SearchAsyncActionTests extends ESTestCase {
             }
             Collections.shuffle(started, random());
             started.addAll(initializing);
-            list.add(new SearchShardIterator(null, new ShardId(new Index(index, "_na_"), i), started, originalIndices));
+            list.add(new SearchShardIterator(null, new ShardId(index, i), started, originalIndices));
         }
-        return new GroupShardsIterator<>(list);
+        return list;
     }
+
 
     public static class TestSearchResponse extends SearchResponse {
         final Set<ShardId> queried = new HashSet<>();
