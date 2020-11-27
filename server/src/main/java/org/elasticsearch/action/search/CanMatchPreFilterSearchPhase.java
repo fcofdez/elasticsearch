@@ -24,8 +24,8 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.routing.GroupShardsIterator;
 import org.elasticsearch.common.lease.Releasable;
-import org.elasticsearch.index.query.CoordinatorRewriteContextProvider;
 import org.elasticsearch.index.query.CoordinatorRewriteContext;
+import org.elasticsearch.index.query.CoordinatorRewriteContextProvider;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.SearchService.CanMatchResponse;
 import org.elasticsearch.search.SearchShardTarget;
@@ -145,6 +145,7 @@ final class CanMatchPreFilterSearchPhase extends AbstractSearchAsyncAction<CanMa
     protected void performPhaseOnShard(int shardIndex, SearchShardIterator shardIt, SearchShardTarget shard) {
         Optional<CoordinatorRewriteContext> coordinatorRewriteContext =
             coordinatorRewriteContextProvider.getCoordinatorRewriteContext(shardIt.shardId().getIndex());
+
         if (coordinatorRewriteContext.isEmpty()) {
             super.performPhaseOnShard(shardIndex, shardIt, shard);
             return;

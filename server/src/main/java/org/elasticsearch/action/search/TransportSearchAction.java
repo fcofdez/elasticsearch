@@ -31,8 +31,6 @@ import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.block.ClusterBlockLevel;
-import org.elasticsearch.cluster.metadata.DataStream;
-import org.elasticsearch.cluster.metadata.DataStreamMetadata;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.node.DiscoveryNode;
@@ -42,8 +40,8 @@ import org.elasticsearch.cluster.routing.OperationRouting;
 import org.elasticsearch.cluster.routing.ShardIterator;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.Writeable;
@@ -268,22 +266,6 @@ public class TransportSearchAction extends HandledTransportAction<SearchRequest,
                 };
             }
         }, listener);
-    }
-
-    private boolean shouldSkipShard(ShardId shardId) {
-        ClusterState state = clusterService.state();
-        Map<String, DataStream> indexMetadata = state.metadata().dataStreams();
-        for (Map.Entry<String, DataStream> dataStreamEntry : state.metadata().dataStreams().entrySet()) {
-            String dataStreamName = dataStreamEntry.getKey();
-            DataStream dataStream = dataStreamEntry.getValue();
-            for (Index index : dataStream.getIndices()) {
-                if (shardId.getIndex().equals(index)) {
-                    
-                }
-            }
-        }
-
-        return false;
     }
 
     private void executeRequest(Task task, SearchRequest searchRequest,
