@@ -35,6 +35,7 @@ import org.elasticsearch.common.util.concurrent.EsExecutors;
 import org.elasticsearch.common.xcontent.NamedXContentRegistry;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.mapper.DateFieldMapper;
+import org.elasticsearch.index.query.AbstractQueryBuilder;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.CoordinatorRewriteContext;
 import org.elasticsearch.index.query.CoordinatorRewriteContextProvider;
@@ -70,6 +71,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.elasticsearch.action.search.SearchAsyncActionTests.getShardsIter;
@@ -445,13 +447,74 @@ public class CanMatchPreFilterSearchPhaseTests extends ESTestCase {
         }
     }
 
-    public void testApplyCanMatchOnCoordinator() throws Exception {
-        Map<String, Transport.Connection> lookup = new ConcurrentHashMap<>();
-        DiscoveryNode primaryNode = new DiscoveryNode("node_1", buildNewFakeTransportAddress(), Version.CURRENT);
-        DiscoveryNode replicaNode = new DiscoveryNode("node_2", buildNewFakeTransportAddress(), Version.CURRENT);
-        lookup.put("node1", new SearchAsyncActionTests.MockConnection(primaryNode));
-        lookup.put("node2", new SearchAsyncActionTests.MockConnection(replicaNode));
+    public void testCanMatchFilteringOnCoordinatorThatCanBeSkipped() throws Exception {
+        Index dataStreamIndex1 = new Index(".ds-mydata0001", UUIDs.base64UUID());
+        Index dataStreamIndex2 = new Index(".ds-mydata0002", UUIDs.base64UUID());
+        DataStream dataStream =
+            new DataStream("mydata", new DataStream.TimestampField("@timestamp"), List.of(dataStreamIndex1, dataStreamIndex2));
 
+        List<Index> regularIndices =
+            randomList(0, 2, () -> new Index(randomAlphaOfLength(10), UUIDs.base64UUID()));
+
+        long indexMinTimestamp = randomLongBetween(0, 5000);
+        long indexMaxTimestamp = randomLongBetween(indexMinTimestamp, 5000 * 2);
+        FakeCoordinatorRewriteContextProvider contextProvider = new FakeCoordinatorRewriteContextProvider();
+        String timestampFieldName = dataStream.getTimeStampField().getName();
+        for (Index dataStreamIndex : dataStream.getIndices()) {
+            contextProvider.addIndex(dataStreamIndex, timestampFieldName, indexMinTimestamp, indexMaxTimestamp);
+        }
+
+        RangeQueryBuilder rangeQueryBuilder = new RangeQueryBuilder(timestampFieldName);
+        // We query a range outside of the timestamp range covered by both datastream indices
+        rangeQueryBuilder
+            .from(indexMaxTimestamp + 1)
+            .to(indexMaxTimestamp + 2);
+
+        BoolQueryBuilder queryBuilder = new BoolQueryBuilder()
+            .filter(rangeQueryBuilder);
+
+        if (randomBoolean()) {
+            // Add an additional filter that cannot be evaluated in the coordinator but shouldn't
+            // affect the end result as we're filtering
+            queryBuilder.filter(new TermQueryBuilder("fake", "value"));
+        }
+
+        assignShardsAndExecuteCanMatchPhase(dataStream, regularIndices, contextProvider, queryBuilder,
+            (updatedSearchShardIterators, requests) -> {
+                List<SearchShardIterator> skippedShards = updatedSearchShardIterators.stream()
+                    .filter(SearchShardIterator::skip)
+                    .collect(Collectors.toList());;
+
+                List<SearchShardIterator> nonSkippedShards = updatedSearchShardIterators.stream()
+                    .filter(searchShardIterator -> searchShardIterator.skip() == false)
+                    .collect(Collectors.toList());;
+
+                int regularIndexShardCount = (int) updatedSearchShardIterators.stream()
+                    .filter(s -> regularIndices.contains(s.shardId().getIndex()))
+                    .count();
+
+                // When all the shards can be skipped we should query at least 1
+                // in order to get a valid search response.
+                if (regularIndexShardCount == 0) {
+                    assertThat(nonSkippedShards.size(), equalTo(1));
+                } else {
+                    boolean allNonSkippedShardsAreFromRegularIndices = nonSkippedShards.stream()
+                        .allMatch(shardIterator -> regularIndices.contains(shardIterator.shardId().getIndex()));
+
+                    assertThat(allNonSkippedShardsAreFromRegularIndices, equalTo(true));
+                }
+
+                boolean allSkippedShardAreFromDataStream = skippedShards.stream()
+                    .allMatch(shardIterator -> dataStream.getIndices().contains(shardIterator.shardId().getIndex()));
+                assertThat(allSkippedShardAreFromDataStream, equalTo(true));
+
+                boolean allRequestsWereTriggeredAgainstRegularIndices = requests.stream()
+                    .allMatch(request -> regularIndices.contains(request.shardId().getIndex()));
+                assertThat(allRequestsWereTriggeredAgainstRegularIndices, equalTo(true));
+            });
+    }
+
+    public void testCanMatchFilteringOnCoordinatorThatCanNotBeSkipped() throws Exception {
         // Generate indices
         Index dataStreamIndex1 = new Index(".ds-mydata0001", UUIDs.base64UUID());
         Index dataStreamIndex2 = new Index(".ds-mydata0002", UUIDs.base64UUID());
@@ -460,6 +523,80 @@ public class CanMatchPreFilterSearchPhaseTests extends ESTestCase {
 
         List<Index> regularIndices =
             randomList(0, 2, () -> new Index(randomAlphaOfLength(10), UUIDs.base64UUID()));
+
+        long indexMinTimestamp = 10;
+        long indexMaxTimestamp = 20;
+        FakeCoordinatorRewriteContextProvider contextProvider = new FakeCoordinatorRewriteContextProvider();
+        String timestampFieldName = dataStream.getTimeStampField().getName();
+        for (Index dataStreamIndex : dataStream.getIndices()) {
+            contextProvider.addIndex(dataStreamIndex, timestampFieldName, indexMinTimestamp, indexMaxTimestamp);
+        }
+
+        BoolQueryBuilder queryBuilder = new BoolQueryBuilder();
+        // Query inside of the data stream index range
+        if (randomBoolean()) {
+            // Query generation
+            RangeQueryBuilder rangeQueryBuilder = new RangeQueryBuilder(timestampFieldName);
+            // We query a range within the timestamp range covered by both datastream indices
+            rangeQueryBuilder
+                .from(indexMinTimestamp)
+                .to(indexMaxTimestamp);
+
+            queryBuilder.filter(rangeQueryBuilder);
+
+            if (randomBoolean()) {
+                // Add an additional filter that cannot be evaluated in the coordinator but shouldn't
+                // affect the end result as we're filtering
+                queryBuilder.filter(new TermQueryBuilder("fake", "value"));
+            }
+        } else {
+            // We query a range outside of the timestamp range covered by both datastream indices
+            RangeQueryBuilder rangeQueryBuilder = new RangeQueryBuilder(timestampFieldName)
+                .from(indexMaxTimestamp + 1)
+                .to(indexMaxTimestamp + 2);
+
+            TermQueryBuilder termQueryBuilder = new TermQueryBuilder("fake", "value");
+
+            // This is always evaluated as true in the coordinator as we cannot determine there if
+            // the term query clause is false.
+            queryBuilder.should(rangeQueryBuilder)
+                .should(termQueryBuilder);
+        }
+
+        assignShardsAndExecuteCanMatchPhase(dataStream, regularIndices, contextProvider, queryBuilder,
+            (updatedSearchShardIterators, requests) -> {
+                List<SearchShardIterator> skippedShards = updatedSearchShardIterators.stream()
+                    .filter(SearchShardIterator::skip)
+                    .collect(Collectors.toList());;
+
+                List<SearchShardIterator> nonSkippedShards = updatedSearchShardIterators.stream()
+                    .filter(searchShardIterator -> searchShardIterator.skip() == false)
+                    .collect(Collectors.toList());;
+
+                // The query included a range within the data stream index timestamp range
+                assertThat(skippedShards.size(), equalTo(0));
+                assertThat(nonSkippedShards.size(), equalTo(updatedSearchShardIterators.size()));
+
+                // If the shards aren't assigned we don't trigger the can match request
+                int shardsWithPrimariesAssigned = (int) updatedSearchShardIterators.stream()
+                    .filter(s -> s.size() > 0)
+                    .count();
+                assertThat(requests.size(), equalTo(shardsWithPrimariesAssigned));
+            });
+    }
+
+    private <QB extends AbstractQueryBuilder<QB>>
+    void assignShardsAndExecuteCanMatchPhase(DataStream dataStream,
+                                             List<Index> regularIndices,
+                                             CoordinatorRewriteContextProvider contextProvider,
+                                             AbstractQueryBuilder<QB> query,
+                                             BiConsumer<List<SearchShardIterator>,
+                                                 List<ShardSearchRequest>> canMatchResultsConsumer) throws Exception {
+        Map<String, Transport.Connection> lookup = new ConcurrentHashMap<>();
+        DiscoveryNode primaryNode = new DiscoveryNode("node_1", buildNewFakeTransportAddress(), Version.CURRENT);
+        DiscoveryNode replicaNode = new DiscoveryNode("node_2", buildNewFakeTransportAddress(), Version.CURRENT);
+        lookup.put("node1", new SearchAsyncActionTests.MockConnection(primaryNode));
+        lookup.put("node2", new SearchAsyncActionTests.MockConnection(replicaNode));
 
         List<String> indicesToSearch = new ArrayList<>();
         indicesToSearch.add(dataStream.getName());
@@ -500,53 +637,22 @@ public class CanMatchPreFilterSearchPhaseTests extends ESTestCase {
         }
         GroupShardsIterator<SearchShardIterator> shardsIter = GroupShardsIterator.sortAndCreate(originalShardIters);
 
-        // Min Max timestamp provider
-        long indexMinTimestamp = 10;
-        long indexMaxTimestamp = 20;
-        FakeCoordinatorRewriteContextProvider contextProvider = new FakeCoordinatorRewriteContextProvider();
-        String timestampFieldName = dataStream.getTimeStampField().getName();
-        for (Index dataStreamIndex : dataStream.getIndices()) {
-            contextProvider.addIndex(dataStreamIndex, timestampFieldName, indexMinTimestamp, indexMaxTimestamp);
-        }
-
-        // Query generation
         final SearchRequest searchRequest = new SearchRequest();
         searchRequest.indices(indices);
         searchRequest.allowPartialSearchResults(true);
 
-        boolean canFilterDataStreamIndices = randomBoolean();
-        RangeQueryBuilder rangeQueryBuilder = new RangeQueryBuilder(timestampFieldName);
-        // We query a range outside of the timestamp range covered by both datastream indices
-        if (canFilterDataStreamIndices) {
-            rangeQueryBuilder
-                .from(indexMaxTimestamp + 1)
-                .to(indexMaxTimestamp + 2);
-        } else {
-            rangeQueryBuilder
-                .from(indexMinTimestamp)
-                .to(indexMaxTimestamp);
-        }
-
-        BoolQueryBuilder queryBuilder = new BoolQueryBuilder()
-            .filter(rangeQueryBuilder);
-
-        if (randomBoolean()) {
-            // Add an additional filter that cannot be evaluated in the coordinator but shouldn't
-            // affect the end result as we're filtering
-            queryBuilder.filter(new TermQueryBuilder("fake", "value"));
-        }
-
-        // Apply the query on the request body
         final AliasFilter aliasFilter;
         if (randomBoolean()) {
+            // Apply the query on the request body
             SearchSourceBuilder searchSourceBuilder = SearchSourceBuilder.searchSource();
-            searchSourceBuilder.query(queryBuilder);
+            searchSourceBuilder.query(query);
             searchRequest.source(searchSourceBuilder);
 
-            aliasFilter = new AliasFilter(randomBoolean() ? queryBuilder : null, Strings.EMPTY_ARRAY);
+            // Sometimes apply the same query in the alias filter too
+            aliasFilter = new AliasFilter(randomBoolean() ? query : null, Strings.EMPTY_ARRAY);
         } else {
             // Apply the query as an alias filter
-            aliasFilter = new AliasFilter(queryBuilder, Strings.EMPTY_ARRAY);
+            aliasFilter = new AliasFilter(query, Strings.EMPTY_ARRAY);
         }
 
         Map<String, AliasFilter> aliasFilters = new HashMap<>();
@@ -558,157 +664,6 @@ public class CanMatchPreFilterSearchPhaseTests extends ESTestCase {
             aliasFilters.put(regularIndex.getUUID(), aliasFilter);
         }
 
-        // Assertions
-        executeCanMatchPhase(lookup, shardsIter, searchRequest, contextProvider, aliasFilters,
-            (updatedSearchShardIterators, requests) -> {
-                List<SearchShardIterator> skippedShards = new ArrayList<>();
-                List<SearchShardIterator> nonSkippedShards = new ArrayList<>();
-                for (SearchShardIterator updatedSearchShardIterator : updatedSearchShardIterators) {
-                    if (updatedSearchShardIterator.skip()) {
-                        skippedShards.add(updatedSearchShardIterator);
-                    } else {
-                        nonSkippedShards.add(updatedSearchShardIterator);
-                    }
-                }
-
-                if (canFilterDataStreamIndices) {
-                    int regularIndexShardCount = (int) originalShardIters.stream()
-                        .filter(s -> regularIndices.contains(s.shardId().getIndex()))
-                        .count();
-
-                    // When all the shards can be skipped we should query at least 1
-                    // in order to get a valid search response.
-                    if (regularIndexShardCount == 0) {
-                        assertThat(nonSkippedShards.size(), equalTo(1));
-                    } else {
-                        boolean allNonSkippedShardsAreFromRegularIndices = nonSkippedShards.stream()
-                            .allMatch(shardIterator -> regularIndices.contains(shardIterator.shardId().getIndex()));
-
-                        assertThat(allNonSkippedShardsAreFromRegularIndices, equalTo(true));
-                    }
-
-
-                    boolean allSkippedShardAreFromDataStream = skippedShards.stream()
-                        .allMatch(shardIterator -> dataStream.getIndices().contains(shardIterator.shardId().getIndex()));
-                    assertThat(allSkippedShardAreFromDataStream, equalTo(true));
-
-
-                    boolean allRequestsWereTriggeredAgainstRegularIndices = requests.stream()
-                        .allMatch(request -> regularIndices.contains(request.shardId().getIndex()));
-                    assertThat(allRequestsWereTriggeredAgainstRegularIndices, equalTo(true));
-                } else {
-                    // The query included a range within the data stream index timestamp range
-                    assertThat(skippedShards.size(), equalTo(0));
-                    assertThat(nonSkippedShards.size(), equalTo(shardsIter.size()));
-
-                    // If the shards aren't assigned we don't trigger the can match request
-                    int shardsWithPrimariesAssigned = (int) originalShardIters.stream()
-                        .filter(s -> s.size() > 0)
-                        .count();
-                    assertThat(requests.size(), equalTo(shardsWithPrimariesAssigned));
-                }
-            }
-        );
-    }
-
-    public void testApplyCanMatchOnCoordinatorWithQueriesThatCannotBeResolvedInTheCoordinator() throws Exception {
-        Map<String, Transport.Connection> lookup = new ConcurrentHashMap<>();
-        DiscoveryNode primaryNode = new DiscoveryNode("node_1", buildNewFakeTransportAddress(), Version.CURRENT);
-        DiscoveryNode replicaNode = new DiscoveryNode("node_2", buildNewFakeTransportAddress(), Version.CURRENT);
-        lookup.put("node1", new SearchAsyncActionTests.MockConnection(primaryNode));
-        lookup.put("node2", new SearchAsyncActionTests.MockConnection(replicaNode));
-
-        Index dataStreamIndex1 = new Index(".ds-mydata0001", UUIDs.base64UUID());
-        Index dataStreamIndex2 = new Index(".ds-mydata0002", UUIDs.base64UUID());
-        DataStream dataStream =
-            new DataStream("mydata", new DataStream.TimestampField("@timestamp"), List.of(dataStreamIndex1, dataStreamIndex2));
-
-        OriginalIndices originalIndices = new OriginalIndices(new String[]{dataStream.getName()}, SearchRequest.DEFAULT_INDICES_OPTIONS);
-
-        final List<SearchShardIterator> originalShardIters = new ArrayList<>();
-        for (Index dataStreamIndex : dataStream.getIndices()) {
-            originalShardIters.addAll(
-                getShardsIter(dataStreamIndex,
-                    originalIndices,
-                    randomIntBetween(1, 6),
-                    false,
-                    primaryNode,
-                    null)
-            );
-        }
-
-        GroupShardsIterator<SearchShardIterator> shardsIter = GroupShardsIterator.sortAndCreate(originalShardIters);
-
-        final SearchRequest searchRequest = new SearchRequest();
-        searchRequest.indices(dataStream.getName());
-        searchRequest.allowPartialSearchResults(true);
-
-        long indexMinTimestamp = 10;
-        long indexMaxTimestamp = 20;
-        FakeCoordinatorRewriteContextProvider contextProvider = new FakeCoordinatorRewriteContextProvider();
-        String timestampFieldName = dataStream.getTimeStampField().getName();
-        for (Index dataStreamIndex : dataStream.getIndices()) {
-            contextProvider.addIndex(dataStreamIndex, timestampFieldName, indexMinTimestamp, indexMaxTimestamp);
-        }
-
-        // We query a range outside of the timestamp range covered by both datastream indices
-        RangeQueryBuilder rangeQueryBuilder = new RangeQueryBuilder(timestampFieldName)
-            .from(indexMaxTimestamp + 1)
-            .to(indexMaxTimestamp + 2);
-
-        TermQueryBuilder termQueryBuilder = new TermQueryBuilder("fake", "value");
-
-        BoolQueryBuilder queryBuilder = new BoolQueryBuilder()
-            .should(rangeQueryBuilder)
-            .should(termQueryBuilder); // This is always evaluated as true in the coordinator as we cannot determine there if
-                                       // that clause is false.
-
-        final AliasFilter aliasFilter;
-        if (randomBoolean()) {
-            // Apply the query on the request body
-            SearchSourceBuilder searchSourceBuilder = SearchSourceBuilder.searchSource();
-            searchSourceBuilder.query(queryBuilder);
-            searchRequest.source(searchSourceBuilder);
-
-            aliasFilter = new AliasFilter(randomBoolean() ? queryBuilder : null, Strings.EMPTY_ARRAY);
-        } else {
-            // Apply the query as an alias filter
-            aliasFilter = new AliasFilter(queryBuilder, Strings.EMPTY_ARRAY);
-        }
-
-        Map<String, AliasFilter> aliasFilters = new HashMap<>();
-        for (Index dataStreamIndex : dataStream.getIndices()) {
-            aliasFilters.put(dataStreamIndex.getUUID(), aliasFilter);
-        }
-
-        executeCanMatchPhase(lookup, shardsIter, searchRequest, contextProvider, aliasFilters,
-            (updatedSearchShardIterators, requests) -> {
-                int skippedShards = 0;
-                int nonSkippedShards = 0;
-                for (SearchShardIterator updatedSearchShardIterator : updatedSearchShardIterators) {
-                    if (updatedSearchShardIterator.skip()) {
-                        skippedShards++;
-                    } else {
-                        nonSkippedShards++;
-                    }
-                }
-
-                // The query included a term query in a should clause so we should
-                // send the request in order to be sure if we can skip that shard or not
-                assertThat(skippedShards, equalTo(0));
-                assertThat(nonSkippedShards, equalTo(shardsIter.size()));
-                assertThat(requests.size(), equalTo(shardsIter.size()));
-            }
-        );
-    }
-
-    private void executeCanMatchPhase(Map<String, Transport.Connection> lookup,
-                                      GroupShardsIterator<SearchShardIterator> shardsIter,
-                                      SearchRequest searchRequest,
-                                      CoordinatorRewriteContextProvider contextProvider,
-                                      Map<String, AliasFilter> aliasFilters,
-                                      BiConsumer<GroupShardsIterator<SearchShardIterator>,
-                                          List<ShardSearchRequest>> phaseResultsConsumer) throws Exception {
         // We respond by default that the query can match
         final List<ShardSearchRequest> requests = Collections.synchronizedList(new ArrayList<>());
         SearchTransportService searchTransportService = new SearchTransportService(null, null, null) {
@@ -751,7 +706,12 @@ public class CanMatchPreFilterSearchPhaseTests extends ESTestCase {
         canMatchPhase.start();
         latch.await();
 
-        phaseResultsConsumer.accept(result.get(), requests);
+        List<SearchShardIterator> updatedSearchShardIterators = new ArrayList<>();
+        for (SearchShardIterator updatedSearchShardIterator : result.get()) {
+            updatedSearchShardIterators.add(updatedSearchShardIterator);
+        }
+
+        canMatchResultsConsumer.accept(updatedSearchShardIterators, requests);
     }
 
     private static class FakeCoordinatorRewriteContextProvider implements CoordinatorRewriteContextProvider {
