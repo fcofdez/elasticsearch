@@ -36,7 +36,9 @@ import com.azure.storage.blob.models.DownloadRetryOptions;
 import com.azure.storage.blob.models.ListBlobsOptions;
 import com.azure.storage.blob.models.ParallelTransferOptions;
 import com.azure.storage.blob.options.BlobParallelUploadOptions;
-import com.azure.storage.common.StorageInputStream;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.util.ReferenceCountUtil;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
@@ -60,7 +62,6 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.nio.ByteBuffer;
 import java.nio.file.FileAlreadyExistsException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -77,8 +78,7 @@ import java.util.function.BiPredicate;
 
 public class AzureBlobStore implements BlobStore {
     private static final Logger logger = LogManager.getLogger(AzureBlobStore.class);
-    // See com.azure.storage.blob.specialized.BlobClientBase.openInputStream(com.azure.storage.blob.options.BlobInputStreamOptions)
-    private static final long DEFAULT_READ_CHUNK_SIZE = new ByteSizeValue(4, ByteSizeUnit.MB).getBytes();
+    private static final long DEFAULT_READ_CHUNK_SIZE = new ByteSizeValue(32, ByteSizeUnit.MB).getBytes();
 
     private final AzureStorageService service;
 
@@ -304,7 +304,7 @@ public class AzureBlobStore implements BlobStore {
             }
             BlobAsyncClient blobAsyncClient = asyncClient().getBlobContainerAsyncClient(container).getBlobAsyncClient(blob);
             int maxReadRetries = service.getMaxReadRetries(clientName);
-            return new AzureInputStream(blobAsyncClient, position, totalSize, (int) getReadChunkSize(), totalSize, maxReadRetries);
+            return new AzureInputStream(blobAsyncClient, position, totalSize, totalSize, maxReadRetries, null);
         });
     }
 
@@ -449,88 +449,105 @@ public class AzureBlobStore implements BlobStore {
         }
     }
 
-    private static class AzureInputStream extends StorageInputStream {
+    private static class AzureInputStream extends InputStream {
         private final BlobAsyncClient client;
-        private final ByteBuffer buffer;
-        private final int maxRetries;
-        private final long firstReadOffset;
-        private final int firstReadLength;
+        private final CancellableRateLimitedFluxIterator<ByteBuf> cancellableRateLimitedFluxIterator;
+        private ByteBuf byteBuf;
+        private boolean closed;
 
         private AzureInputStream(final BlobAsyncClient client,
                                  long rangeOffset,
-                                 Long rangeLength,
-                                 int chunkSize,
+                                 long rangeLength,
                                  long contentLength,
-                                 int maxRetries) throws IOException {
-            super(rangeOffset, rangeLength, chunkSize, contentLength);
+                                 int maxRetries,
+                                 ByteBufAllocator allocator) throws IOException {
             this.client = client;
-            this.buffer = ByteBuffer.allocate(chunkSize);
-            this.maxRetries = maxRetries;
 
+            rangeLength = Math.min(contentLength, rangeOffset + rangeLength);
+            final BlobRange range = new BlobRange(rangeOffset, rangeLength);
+            DownloadRetryOptions downloadRetryOptions = new DownloadRetryOptions()
+                .setMaxRetryRequests(maxRetries);
+            Flux<ByteBuf> byteBufFlux = client.downloadWithResponse(range, downloadRetryOptions, null, false)
+                .flux()
+                .flatMap(ResponseBase::getValue)
+                .filter(Objects::nonNull)
+                .map(b -> {
+                    ByteBuf byteBuf = allocator.heapBuffer(b.remaining(), b.remaining());
+                    byteBuf.setBytes(0, b);
+                    return byteBuf;
+                });
             // Read eagerly the first chunk so we can throw early if the
             // blob doesn't exist
-            this.firstReadOffset = rangeOffset;
-            this.firstReadLength = (int) Math.min(chunkSize, contentLength - rangeOffset);
-            executeRead(firstReadLength, rangeOffset);
+            this.cancellableRateLimitedFluxIterator =
+                new CancellableRateLimitedFluxIterator<>(byteBufFlux, 8, ReferenceCountUtil::safeRelease);
         }
 
         @Override
-        protected ByteBuffer dispatchRead(int readLength, long offset) throws IOException {
-            // If the request is for the first chunk, don't download it again
-            // Since we disabled marking in this InputStream, the offset only advances
-            // and never goes back requesting the firstReadOffset again
-            if (offset != firstReadOffset || readLength != firstReadLength) {
-                executeRead(readLength, offset);
-            }
-
-            this.bufferSize = buffer.remaining();
-            this.bufferStartOffset = offset;
-            return buffer;
+        public int read() throws IOException {
+            byte[] b = new byte[1];
+            return read(b, 0, 1);
         }
 
-        private void executeRead(long readLength, long offset) throws IOException {
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            if (off < 0 || len < 0 || len > b.length - off) {
+                throw new IndexOutOfBoundsException();
+            }
+
+            ByteBuf buffer = getByteBuf();
+            if (buffer == null) {
+                return -1;
+            }
+
+            int totalBytesRead = 0;
+            while (buffer != null && totalBytesRead < len) {
+                ByteBuf byteBuf = buffer.readBytes(b, off, len);
+                totalBytesRead += 1;
+                if (byteBuf.readableBytes() == 0) {
+                    releaseByteBuf(byteBuf);
+                }
+                buffer = getByteBuf();
+            }
+
+            return totalBytesRead;
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (closed == false) {
+                cancellableRateLimitedFluxIterator.cancel();
+                closed = true;
+                releaseByteBuf(byteBuf);
+            }
+        }
+
+        @Override
+        public long skip(long n) {
+            throw new UnsupportedOperationException("skip is not supported");
+        }
+
+        private void releaseByteBuf(ByteBuf buf) {
+            assert closed || buf.readableBytes() == 0;
+            ReferenceCountUtil.safeRelease(buf);
+            this.byteBuf = null;
+        }
+
+        @Nullable
+        private ByteBuf getByteBuf() throws IOException {
             try {
-                buffer.clear();
-                final BlobRange range = new BlobRange(offset, readLength);
-                DownloadRetryOptions downloadRetryOptions = new DownloadRetryOptions()
-                    .setMaxRetryRequests(maxRetries);
-                client.downloadWithResponse(range, downloadRetryOptions, null, false)
-                    .flux()
-                    .flatMap(ResponseBase::getValue)
-                    .filter(Objects::nonNull)
-                    .collect(() -> buffer, ByteBuffer::put)
-                    .block();
+                if (byteBuf == null && cancellableRateLimitedFluxIterator.hasNext() == false) {
+                    return null;
+                }
+
+                if (byteBuf != null) {
+                    return byteBuf;
+                }
+
+                byteBuf = cancellableRateLimitedFluxIterator.next();
+                return byteBuf;
             } catch (Exception e) {
-                this.streamFaulted = true;
-                this.lastError = new IOException(e);
-                throw this.lastError;
+                throw new IOException(e);
             }
-
-            buffer.flip();
-        }
-
-        @Override
-        public synchronized void mark(int readlimit) {
-            throwNotSupported();
-        }
-
-        @Override
-        public boolean markSupported() {
-            return false;
-        }
-
-        @Override
-        public synchronized void reset() {
-            throwNotSupported();
-        }
-
-        @Override
-        public synchronized long skip(long n) {
-            return throwNotSupported();
-        }
-
-        private long throwNotSupported() {
-            throw new UnsupportedOperationException("mark is not supported");
         }
     }
 
