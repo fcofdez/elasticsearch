@@ -30,6 +30,7 @@ import org.elasticsearch.ElasticsearchTimeoutException;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionModule;
 import org.elasticsearch.action.ActionType;
+import org.elasticsearch.action.search.ReduceService;
 import org.elasticsearch.action.search.SearchExecutionStatsCollector;
 import org.elasticsearch.action.search.SearchPhaseController;
 import org.elasticsearch.action.search.SearchTransportService;
@@ -158,6 +159,7 @@ import org.elasticsearch.script.ScriptContext;
 import org.elasticsearch.script.ScriptEngine;
 import org.elasticsearch.script.ScriptModule;
 import org.elasticsearch.script.ScriptService;
+import org.elasticsearch.search.PersistentSearchStorageService;
 import org.elasticsearch.search.SearchModule;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.aggregations.support.AggregationUsageService;
@@ -624,9 +626,12 @@ public class Node implements Closeable {
                 httpServerTransport, ingestService, clusterService, settingsModule.getSettingsFilter(), responseCollectorService,
                 searchTransportService, indexingLimits, searchModule.getValuesSourceRegistry().getUsageService());
 
+            final PersistentSearchStorageService persistentSearchStorageService =
+                new PersistentSearchStorageService(client, ".persistent_search_responses");
+            final ReduceService reduceService = new ReduceService();
             final SearchService searchService = newSearchService(clusterService, indicesService,
                 threadPool, scriptService, bigArrays, searchModule.getFetchPhase(),
-                responseCollectorService, circuitBreakerService);
+                responseCollectorService, circuitBreakerService, persistentSearchStorageService);
 
             final List<PersistentTasksExecutor<?>> tasksExecutors = pluginsService
                 .filterPlugins(PersistentTaskPlugin.class).stream()
@@ -1163,9 +1168,10 @@ public class Node implements Closeable {
     protected SearchService newSearchService(ClusterService clusterService, IndicesService indicesService,
                                              ThreadPool threadPool, ScriptService scriptService, BigArrays bigArrays,
                                              FetchPhase fetchPhase, ResponseCollectorService responseCollectorService,
-                                             CircuitBreakerService circuitBreakerService) {
+                                             CircuitBreakerService circuitBreakerService,
+                                             PersistentSearchStorageService persistentSearchStorageService) {
         return new SearchService(clusterService, indicesService, threadPool,
-            scriptService, bigArrays, fetchPhase, responseCollectorService, circuitBreakerService);
+            scriptService, bigArrays, fetchPhase, responseCollectorService, circuitBreakerService, persistentSearchStorageService);
     }
 
     /**

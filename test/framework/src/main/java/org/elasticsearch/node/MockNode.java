@@ -44,6 +44,7 @@ import org.elasticsearch.script.ScriptContext;
 import org.elasticsearch.script.ScriptEngine;
 import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.search.MockSearchService;
+import org.elasticsearch.search.PersistentSearchStorageService;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.fetch.FetchPhase;
 import org.elasticsearch.test.MockHttpTransport;
@@ -129,13 +130,14 @@ public class MockNode extends Node {
     protected SearchService newSearchService(ClusterService clusterService, IndicesService indicesService,
                                              ThreadPool threadPool, ScriptService scriptService, BigArrays bigArrays,
                                              FetchPhase fetchPhase, ResponseCollectorService responseCollectorService,
-                                             CircuitBreakerService circuitBreakerService) {
+                                             CircuitBreakerService circuitBreakerService,
+                                             PersistentSearchStorageService persistentSearchStorageService) {
         if (getPluginsService().filterPlugins(MockSearchService.TestPlugin.class).isEmpty()) {
             return super.newSearchService(clusterService, indicesService, threadPool, scriptService, bigArrays, fetchPhase,
-                responseCollectorService, circuitBreakerService);
+                responseCollectorService, circuitBreakerService, persistentSearchStorageService);
         }
         return new MockSearchService(clusterService, indicesService, threadPool, scriptService,
-            bigArrays, fetchPhase, circuitBreakerService);
+            bigArrays, fetchPhase, circuitBreakerService, persistentSearchStorageService);
     }
 
     @Override

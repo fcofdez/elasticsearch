@@ -30,7 +30,10 @@ import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.OriginalIndices;
+import org.elasticsearch.action.StepListener;
+import org.elasticsearch.action.search.PersistentSearchResponse;
 import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchShardTask;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.action.support.TransportActions;
@@ -100,9 +103,11 @@ import org.elasticsearch.search.fetch.subphase.FetchFieldsContext;
 import org.elasticsearch.search.fetch.subphase.ScriptFieldsContext.ScriptField;
 import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder;
 import org.elasticsearch.search.internal.AliasFilter;
+import org.elasticsearch.search.internal.AsyncShardSearchRequest;
 import org.elasticsearch.search.internal.InternalScrollSearchRequest;
 import org.elasticsearch.search.internal.LegacyReaderContext;
 import org.elasticsearch.search.internal.ReaderContext;
+import org.elasticsearch.search.internal.ReducePartialResultsRequest;
 import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.search.internal.ShardSearchContextId;
 import org.elasticsearch.search.internal.ShardSearchRequest;
@@ -113,6 +118,7 @@ import org.elasticsearch.search.query.QueryPhase;
 import org.elasticsearch.search.query.QuerySearchRequest;
 import org.elasticsearch.search.query.QuerySearchResult;
 import org.elasticsearch.search.query.ScrollQuerySearchResult;
+import org.elasticsearch.action.search.ReduceService;
 import org.elasticsearch.search.rescore.RescorerBuilder;
 import org.elasticsearch.search.searchafter.SearchAfterBuilder;
 import org.elasticsearch.search.sort.FieldSortBuilder;
@@ -125,6 +131,7 @@ import org.elasticsearch.threadpool.Scheduler.Cancellable;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.threadpool.ThreadPool.Names;
 import org.elasticsearch.transport.TransportRequest;
+import org.elasticsearch.transport.TransportResponse;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -142,6 +149,7 @@ import java.util.function.LongSupplier;
 import static org.elasticsearch.common.unit.TimeValue.timeValueHours;
 import static org.elasticsearch.common.unit.TimeValue.timeValueMillis;
 import static org.elasticsearch.common.unit.TimeValue.timeValueMinutes;
+import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
 
 public class SearchService extends AbstractLifecycleComponent implements IndexEventListener {
     private static final Logger logger = LogManager.getLogger(SearchService.class);
@@ -411,6 +419,37 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
                 listener.onFailure(exc);
             }
         });
+    }
+
+    public void executeAsyncQueryPhase(AsyncShardSearchRequest request, boolean keepStatesInContext,
+                                       SearchShardTask task, ActionListener<TransportResponse.Empty> listener) {
+        StepListener<SearchPhaseResult> queryListener = new StepListener<>();
+        StepListener<Void> storeListener = new StepListener<>();
+
+        queryListener.whenComplete(result -> {
+//            final SearchResponse searchResponse =
+//                reduceService.convertToSearchResponse((QueryFetchSearchResult) result, aggReduceContextBuilder(null));
+//            final PersistentSearchResponse persistentSearchResponse =
+//                new PersistentSearchResponse(request.getAsyncSearchId(),
+//                    request.getShardSearchRequest().shardId(),
+//                    searchResponse);
+//            persistentSearchStorageService.storeResult(persistentSearchResponse, storeListener);
+        }, listener::onFailure);
+
+        storeListener.whenComplete(r -> listener.onResponse(TransportResponse.Empty.INSTANCE), listener::onFailure);
+
+        executeQueryPhase(request.getShardSearchRequest(), keepStatesInContext, task, queryListener);
+    }
+
+    public void executePartialReduce(ReducePartialResultsRequest request, SearchShardTask task,
+                                     ActionListener<TransportResponse.Empty> listener) {
+
+        runAsync(threadPool.executor(Names.SEARCH), () -> runPartialReduce(request, task), listener);
+    }
+
+    private TransportResponse.Empty runPartialReduce(ReducePartialResultsRequest request, SearchShardTask task) {
+        //reduceService.convertToSearchResponse()
+        return TransportResponse.Empty.INSTANCE;
     }
 
     private IndexShard getShard(ShardSearchRequest request) {
@@ -1311,27 +1350,35 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
      * builder retains a reference to the provided {@link SearchRequest}.
      */
     public InternalAggregation.ReduceContextBuilder aggReduceContextBuilder(SearchRequest request) {
+        return aggReduceContextBuilder(request.source());
+    }
+
+    /**
+     * Returns a builder for {@link InternalAggregation.ReduceContext}. This
+     * builder retains a reference to the provided {@link SearchRequest}.
+     */
+    public InternalAggregation.ReduceContextBuilder aggReduceContextBuilder(SearchSourceBuilder searchSource) {
         return new InternalAggregation.ReduceContextBuilder() {
             @Override
             public InternalAggregation.ReduceContext forPartialReduction() {
                 return InternalAggregation.ReduceContext.forPartialReduction(bigArrays, scriptService,
-                        () -> requestToPipelineTree(request));
+                    () -> requestToPipelineTree(searchSource));
             }
 
             @Override
             public ReduceContext forFinalReduction() {
-                PipelineTree pipelineTree = requestToPipelineTree(request);
+                PipelineTree pipelineTree = requestToPipelineTree(searchSource);
                 return InternalAggregation.ReduceContext.forFinalReduction(
-                        bigArrays, scriptService, multiBucketConsumerService.create(), pipelineTree);
+                    bigArrays, scriptService, multiBucketConsumerService.create(), pipelineTree);
             }
         };
     }
 
-    private static PipelineTree requestToPipelineTree(SearchRequest request) {
-        if (request.source() == null || request.source().aggregations() == null) {
+    private static PipelineTree requestToPipelineTree(SearchSourceBuilder searchSource) {
+        if (searchSource == null || searchSource.aggregations() == null) {
             return PipelineTree.EMPTY;
         }
-        return request.source().aggregations().buildPipelineTree();
+        return searchSource.aggregations().buildPipelineTree();
     }
 
     public static final class CanMatchResponse extends SearchPhaseResult {
