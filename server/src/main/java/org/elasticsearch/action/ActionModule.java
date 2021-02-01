@@ -214,10 +214,18 @@ import org.elasticsearch.action.search.ClearScrollAction;
 import org.elasticsearch.action.search.MultiSearchAction;
 import org.elasticsearch.action.search.SearchAction;
 import org.elasticsearch.action.search.SearchScrollAction;
+import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchAction;
+import org.elasticsearch.action.search.persistent.GetPersistentSearchAction;
+import org.elasticsearch.action.search.persistent.ReducePersistentSearchAction;
+import org.elasticsearch.action.search.persistent.SubmitPersistentSearchAction;
 import org.elasticsearch.action.search.TransportClearScrollAction;
 import org.elasticsearch.action.search.TransportMultiSearchAction;
 import org.elasticsearch.action.search.TransportSearchAction;
 import org.elasticsearch.action.search.TransportSearchScrollAction;
+import org.elasticsearch.action.search.persistent.TransportExecuteQueryFetchAction;
+import org.elasticsearch.action.search.persistent.TransportGetPersistentSearchAction;
+import org.elasticsearch.action.search.persistent.TransportReducePartialPersistentSearch;
+import org.elasticsearch.action.search.persistent.TransportSubmitPersistentSearchAction;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.AutoCreateIndex;
 import org.elasticsearch.action.support.DestructiveOperations;
@@ -378,6 +386,9 @@ import org.elasticsearch.rest.action.search.RestExplainAction;
 import org.elasticsearch.rest.action.search.RestMultiSearchAction;
 import org.elasticsearch.rest.action.search.RestSearchAction;
 import org.elasticsearch.rest.action.search.RestSearchScrollAction;
+import org.elasticsearch.rest.action.search.persistent.RestGetPersistentSearchAction;
+import org.elasticsearch.rest.action.search.persistent.RestSubmitPersistentSearchAction;
+import org.elasticsearch.search.internal.ReducePartialResultsRequest;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.usage.UsageService;
@@ -615,6 +626,12 @@ public class ActionModule extends AbstractModule {
         actions.register(TransportShardFlushAction.TYPE, TransportShardFlushAction.class);
         actions.register(TransportShardRefreshAction.TYPE, TransportShardRefreshAction.class);
 
+        // Persistent search
+        actions.register(SubmitPersistentSearchAction.INSTANCE, TransportSubmitPersistentSearchAction.class);
+        actions.register(GetPersistentSearchAction.INSTANCE, TransportGetPersistentSearchAction.class);
+        actions.register(ExecutePersistentQueryFetchAction.INSTANCE, TransportExecuteQueryFetchAction.class);
+        actions.register(ReducePersistentSearchAction.INSTANCE, TransportReducePartialPersistentSearch.class);
+
         return unmodifiableMap(actions.getRegistry());
     }
 
@@ -784,6 +801,10 @@ public class ActionModule extends AbstractModule {
             }
         }
         registerHandler.accept(new RestCatAction(catActions));
+
+        // Persistent search API
+        registerHandler.accept(new RestSubmitPersistentSearchAction());
+        registerHandler.accept(new RestGetPersistentSearchAction());
     }
 
     @Override

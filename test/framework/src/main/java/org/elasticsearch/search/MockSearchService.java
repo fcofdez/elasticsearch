@@ -72,11 +72,9 @@ public class MockSearchService extends SearchService {
 
     public MockSearchService(ClusterService clusterService,
             IndicesService indicesService, ThreadPool threadPool, ScriptService scriptService,
-            BigArrays bigArrays, FetchPhase fetchPhase, CircuitBreakerService circuitBreakerService,
-                             PersistentSearchStorageService persistentSearchStorageService) {
+            BigArrays bigArrays, FetchPhase fetchPhase, CircuitBreakerService circuitBreakerService) {
         super(clusterService, indicesService, threadPool, scriptService, bigArrays, fetchPhase, null,
-            circuitBreakerService,
-            persistentSearchStorageService);
+            circuitBreakerService);
     }
 
     @Override

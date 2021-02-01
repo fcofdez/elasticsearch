@@ -30,7 +30,7 @@ import org.elasticsearch.ElasticsearchTimeoutException;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionModule;
 import org.elasticsearch.action.ActionType;
-import org.elasticsearch.action.search.ReduceService;
+import org.elasticsearch.action.search.PersistentSearchService;
 import org.elasticsearch.action.search.SearchExecutionStatsCollector;
 import org.elasticsearch.action.search.SearchPhaseController;
 import org.elasticsearch.action.search.SearchTransportService;
@@ -159,7 +159,7 @@ import org.elasticsearch.script.ScriptContext;
 import org.elasticsearch.script.ScriptEngine;
 import org.elasticsearch.script.ScriptModule;
 import org.elasticsearch.script.ScriptService;
-import org.elasticsearch.search.PersistentSearchStorageService;
+import org.elasticsearch.search.persistent.PersistentSearchStorageService;
 import org.elasticsearch.search.SearchModule;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.aggregations.support.AggregationUsageService;
@@ -512,10 +512,13 @@ public class Node implements Closeable {
             final Map<String, Collection<SystemIndexDescriptor>> systemIndexDescriptorMap = pluginsService
                 .filterPlugins(SystemIndexPlugin.class)
                 .stream()
-                .collect(Collectors.toUnmodifiableMap(
+                .collect(Collectors.toMap(
                     plugin -> plugin.getClass().getSimpleName(),
                     plugin -> plugin.getSystemIndexDescriptors(settings)));
-            final SystemIndices systemIndices = new SystemIndices(systemIndexDescriptorMap);
+
+            // TODO: Ugly hack to create the persistent search index that for now it isn't a plugin
+            systemIndexDescriptorMap.put("persistent_search", PersistentSearchStorageService.getSystemIndexDescriptors());
+            final SystemIndices systemIndices = new SystemIndices(Collections.unmodifiableMap(systemIndexDescriptorMap));
 
             final SystemIndexManager systemIndexManager = new SystemIndexManager(systemIndices, client);
             clusterService.addListener(systemIndexManager);
@@ -626,12 +629,9 @@ public class Node implements Closeable {
                 httpServerTransport, ingestService, clusterService, settingsModule.getSettingsFilter(), responseCollectorService,
                 searchTransportService, indexingLimits, searchModule.getValuesSourceRegistry().getUsageService());
 
-            final PersistentSearchStorageService persistentSearchStorageService =
-                new PersistentSearchStorageService(client, ".persistent_search_responses");
-            final ReduceService reduceService = new ReduceService();
             final SearchService searchService = newSearchService(clusterService, indicesService,
                 threadPool, scriptService, bigArrays, searchModule.getFetchPhase(),
-                responseCollectorService, circuitBreakerService, persistentSearchStorageService);
+                responseCollectorService, circuitBreakerService);
 
             final List<PersistentTasksExecutor<?>> tasksExecutors = pluginsService
                 .filterPlugins(PersistentTaskPlugin.class).stream()
@@ -645,6 +645,15 @@ public class Node implements Closeable {
                 new PersistentTasksClusterService(settings, registry, clusterService, threadPool);
             resourcesToClose.add(persistentTasksClusterService);
             final PersistentTasksService persistentTasksService = new PersistentTasksService(clusterService, threadPool, client);
+
+            final SearchPhaseController searchPhaseController = new SearchPhaseController(
+                namedWriteableRegistry, searchService::aggReduceContextBuilder);
+
+            final PersistentSearchStorageService persistentSearchStorageService =
+                new PersistentSearchStorageService(client, ".persistent_search_responses");
+
+            final PersistentSearchService persistentSearchService = new PersistentSearchService(searchService, searchPhaseController,
+                persistentSearchStorageService, threadPool.executor(ThreadPool.Names.SEARCH), transportService);
 
             modules.add(b -> {
                     b.bind(Node.class).toInstance(this);
@@ -676,8 +685,7 @@ public class Node implements Closeable {
                     b.bind(MetadataCreateDataStreamService.class).toInstance(metadataCreateDataStreamService);
                     b.bind(SearchService.class).toInstance(searchService);
                     b.bind(SearchTransportService.class).toInstance(searchTransportService);
-                    b.bind(SearchPhaseController.class).toInstance(new SearchPhaseController(
-                        namedWriteableRegistry, searchService::aggReduceContextBuilder));
+                    b.bind(SearchPhaseController.class).toInstance(searchPhaseController);
                     b.bind(Transport.class).toInstance(transport);
                     b.bind(TransportService.class).toInstance(transportService);
                     b.bind(NetworkService.class).toInstance(networkService);
@@ -707,6 +715,7 @@ public class Node implements Closeable {
                     b.bind(ShardLimitValidator.class).toInstance(shardLimitValidator);
                     b.bind(FsHealthService.class).toInstance(fsHealthService);
                     b.bind(SystemIndices.class).toInstance(systemIndices);
+                    b.bind(PersistentSearchService.class).toInstance(persistentSearchService);
                 }
             );
             injector = modules.createInjector();
@@ -1168,10 +1177,9 @@ public class Node implements Closeable {
     protected SearchService newSearchService(ClusterService clusterService, IndicesService indicesService,
                                              ThreadPool threadPool, ScriptService scriptService, BigArrays bigArrays,
                                              FetchPhase fetchPhase, ResponseCollectorService responseCollectorService,
-                                             CircuitBreakerService circuitBreakerService,
-                                             PersistentSearchStorageService persistentSearchStorageService) {
+                                             CircuitBreakerService circuitBreakerService) {
         return new SearchService(clusterService, indicesService, threadPool,
-            scriptService, bigArrays, fetchPhase, responseCollectorService, circuitBreakerService, persistentSearchStorageService);
+            scriptService, bigArrays, fetchPhase, responseCollectorService, circuitBreakerService);
     }
 
     /**

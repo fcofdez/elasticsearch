@@ -22,46 +22,52 @@ package org.elasticsearch.action.search;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.StepListener;
-import org.elasticsearch.action.support.GroupedActionListener;
+import org.elasticsearch.action.search.persistent.AsyncPersistentSearch;
+import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
+import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
+import org.elasticsearch.search.persistent.PersistentSearchResponse;
+import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
+import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
 import org.elasticsearch.common.CheckedSupplier;
-import org.elasticsearch.search.PersistentSearchStorageService;
+import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.search.persistent.PersistentSearchStorageService;
 import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.fetch.FetchSearchResult;
 import org.elasticsearch.search.fetch.QueryFetchSearchResult;
-import org.elasticsearch.search.internal.AsyncShardSearchRequest;
 import org.elasticsearch.search.internal.InternalSearchResponse;
-import org.elasticsearch.search.internal.ReducePartialResultsRequest;
 import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.search.internal.ShardSearchRequest;
-import org.elasticsearch.transport.TransportResponse;
+import org.elasticsearch.transport.TransportService;
 
-import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
 
 import static java.util.Collections.emptyList;
 
-class PersistentSearchService {
+public class PersistentSearchService {
     private final SearchService searchService;
     private final SearchPhaseController searchPhaseController;
     private final PersistentSearchStorageService searchStorageService;
     private final Executor executor;
+    private final TransportService transportService;
 
-    PersistentSearchService(SearchService searchService,
-                            SearchPhaseController searchPhaseController,
-                            PersistentSearchStorageService searchStorageService,
-                            Executor executor) {
+    public PersistentSearchService(SearchService searchService,
+                                   SearchPhaseController searchPhaseController,
+                                   PersistentSearchStorageService searchStorageService,
+                                   Executor executor,
+                                   TransportService transportService) {
         this.searchService = searchService;
         this.searchPhaseController = searchPhaseController;
         this.searchStorageService = searchStorageService;
         this.executor = executor;
+        this.transportService = transportService;
     }
 
-    public void executeAsyncQueryPhase(AsyncShardSearchRequest request, boolean keepStatesInContext,
-                                       SearchShardTask task, ActionListener<TransportResponse.Empty> listener) {
+    public void executeAsyncQueryPhase(ExecutePersistentQueryFetchRequest request,
+                                       SearchShardTask task, ActionListener<ExecutePersistentQueryFetchResponse> listener) {
         StepListener<SearchPhaseResult> queryListener = new StepListener<>();
         StepListener<Void> storeListener = new StepListener<>();
 
@@ -69,86 +75,87 @@ class PersistentSearchService {
         queryListener.whenComplete(result -> {
             final SearchResponse searchResponse =
                 convertToSearchResponse((QueryFetchSearchResult) result, searchService.aggReduceContextBuilder(shardSearchRequest.source()));
-            final PersistentSearchResponse persistentSearchResponse =
-                new PersistentSearchResponse(request.getAsyncSearchId(),
-                    shardSearchRequest.shardId(),
-                    searchResponse);
+            final ShardId shardId = request.getShardSearchRequest().shardId();
+            final String id = PersistentSearchResponse.generatePartialResultIdId(request.getAsyncSearchId(), shardId);
+            final PersistentSearchResponse persistentSearchResponse = new PersistentSearchResponse(id, searchResponse);
             searchStorageService.storeResult(persistentSearchResponse, storeListener);
         }, listener::onFailure);
 
-        storeListener.whenComplete(r -> listener.onResponse(TransportResponse.Empty.INSTANCE), listener::onFailure);
+        storeListener.whenComplete(r -> listener.onResponse(new ExecutePersistentQueryFetchResponse()), listener::onFailure);
 
-        searchService.executeQueryPhase(shardSearchRequest, keepStatesInContext, task, queryListener);
+        searchService.executeQueryPhase(shardSearchRequest, false, task, queryListener);
     }
 
-    public void executePartialReduce(ReducePartialResultsRequest request,
+    public void executePartialReduce(ReducePartialPersistentSearchRequest request,
                                      SearchShardTask task,
-                                     ActionListener<TransportResponse.Empty> listener) {
-        runAsync(() -> runPartialReduce(request, null), listener);
-    }
-
-    static class PartialResultReducer {
-        private final SearchResponseMerger responseMerger;
-
-    }
-
-    public TransportResponse.Empty runPartialReduce(ReducePartialResultsRequest request, ActionListener<SearchResponse> listener) {
+                                     ActionListener<ReducePartialPersistentSearchResponse> listener) {
         // we need to use versioning for SearchResponse (so we avoid conflicting operations)
         // store the number of reduced shards (this would allow to run the last reduction)
         final String searchId = request.getSearchId();
-        StepListener<SearchResponse> getSearchResultListener = new StepListener<>();
-        getSearchResultListener.whenComplete((searchResponse -> {
+        StepListener<PersistentSearchResponse> getSearchResultListener = new StepListener<>();
+        StepListener<SearchResponse> reduceListener = new StepListener<>();
+
+        getSearchResultListener.whenComplete((persistentSearchResponse -> {
             try {
                 // TODO: Extract to a class that keeps track of versioning and base search response
                 final SearchResponseMerger searchResponseMerger = new SearchResponseMerger(
                     SearchService.DEFAULT_FROM,
                     SearchService.DEFAULT_SIZE,
                     SearchContext.DEFAULT_TRACK_TOTAL_HITS_UP_TO,
+                    // TODO: Check why this is important, we might need to pass the values around
                     new TransportSearchAction.SearchTimeProvider(0, 0, () -> 1L),
                     searchPhaseController.getReduceContext(request.getOriginalRequest())
                 );
 
-                if (searchResponse != null) {
-                    searchResponseMerger.add(searchResponse);
+                if (persistentSearchResponse != null) {
+                    searchResponseMerger.add(persistentSearchResponse.getSearchResponse());
                 }
 
-                final SearchResponse reducedResponse = reduce(searchResponseMerger, request);
-                listener.onResponse(reducedResponse);
+                runAsync(() -> reduce(searchResponseMerger, request), reduceListener);
             } catch (Exception e) {
                 listener.onFailure(e);
             }
         }), listener::onFailure);
-        searchStorageService.getTotalPersistentSearchResult(searchId, getSearchResultListener);
 
-        return TransportResponse.Empty.INSTANCE;
+        reduceListener.whenComplete((reducedSearchResponse -> {
+            final PersistentSearchResponse persistentSearchResponse =
+                new PersistentSearchResponse(request.getSearchId(), reducedSearchResponse);
+            searchStorageService.storeResult(persistentSearchResponse, new ActionListener<>() {
+                @Override
+                public void onResponse(Void unused) {
+                    listener.onResponse(new ReducePartialPersistentSearchResponse(request.getShardsToReduce()));
+                }
+
+                @Override
+                public void onFailure(Exception e) {
+                    listener.onFailure(e);
+                }
+            });
+        }), listener::onFailure);
+
+        searchStorageService.getPersistentSearchResult(searchId, getSearchResultListener);
     }
 
-    private void loadPartialResults(ReducePartialResultsRequest request, ActionListener<Collection<PersistentSearchResponse>> listener) {
-        final List<SearchShard> shardsToReduce = request.getShardsToReduce();
-        GroupedActionListener<PersistentSearchResponse> groupListener = new GroupedActionListener<>(listener, shardsToReduce.size());
-
-        for (SearchShard searchShard : shardsToReduce) {
-            final String id = PersistentSearchResponse.generateId(request.getSearchId(), searchShard.getShardId());
-            searchStorageService.getPersistentSearchResult(id, groupListener);
-        }
-    }
-
-    private SearchResponse reduce(SearchResponseMerger searchResponseMerger, ReducePartialResultsRequest request) {
-
+    private SearchResponse reduce(SearchResponseMerger searchResponseMerger, ReducePartialPersistentSearchRequest request) {
+        // TODO: Use circuit breaker
         for (SearchShard searchShard : request.getShardsToReduce()) {
-            final String partialResultId = PersistentSearchResponse.generateId(request.getSearchId(), searchShard.getShardId());
-            final SearchResponse partialResult
-                = searchStorageService.getPartialResult(partialResultId);
-            searchResponseMerger.add(partialResult);
+            final String partialResultId =
+                PersistentSearchResponse.generatePartialResultIdId(request.getSearchId(), searchShard.getShardId());
+
+            try {
+                final SearchResponse partialResult
+                    = searchStorageService.getPartialResult(partialResultId);
+                searchResponseMerger.add(partialResult);
+            } catch (Exception e) {
+                // Ignore if not exists for now...
+            }
         }
 
         return searchResponseMerger.getMergedResponse(SearchResponse.Clusters.EMPTY);
     }
 
-
     private SearchResponse convertToSearchResponse(QueryFetchSearchResult result,
-                                                  InternalAggregation.ReduceContextBuilder aggReduceContextBuilder) {
-        // TODO: Check this
+                                                   InternalAggregation.ReduceContextBuilder aggReduceContextBuilder) {
         SearchPhaseController.TopDocsStats topDocsStats = new SearchPhaseController.TopDocsStats(0);
         final SearchPhaseController.ReducedQueryPhase reducedQueryPhase =
             SearchPhaseController.reducedQueryPhase(Collections.singletonList(result),

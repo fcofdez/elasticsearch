@@ -17,30 +17,27 @@
  * under the License.
  */
 
-package org.elasticsearch.action.search;
+package org.elasticsearch.action.search.persistent;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;
-import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.stream.Writeable;
-import org.elasticsearch.search.SearchService;
+import org.elasticsearch.search.persistent.PersistentSearchResponse;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.transport.TransportService;
 
-public class TransportPersistentSearchAction extends HandledTransportAction<SearchRequest, SearchResponse> {
+public class TransportGetPersistentSearchAction extends HandledTransportAction<GetPersistentSearchRequest, PersistentSearchResponse> {
 
-    @Inject
-    public TransportPersistentSearchAction(String actionName,
-                                           TransportService transportService,
-                                           ActionFilters actionFilters,
-                                           Writeable.Reader<SearchRequest> searchRequestReader,
-                                           SearchService searchService) {
-        super(actionName, transportService, actionFilters, searchRequestReader);
+    public TransportGetPersistentSearchAction(String actionName,
+                                              TransportService transportService,
+                                              ActionFilters actionFilters,
+                                              Writeable.Reader<GetPersistentSearchRequest> reader) {
+        super(actionName, transportService, actionFilters, reader);
     }
 
     @Override
-    protected void doExecute(Task task, SearchRequest request, ActionListener<SearchResponse> listener) {
+    protected void doExecute(Task task, GetPersistentSearchRequest request, ActionListener<PersistentSearchResponse> listener) {
 
     }
 }

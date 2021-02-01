@@ -31,9 +31,7 @@ import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.StepListener;
-import org.elasticsearch.action.search.PersistentSearchResponse;
 import org.elasticsearch.action.search.SearchRequest;
-import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchShardTask;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.action.support.TransportActions;
@@ -118,7 +116,6 @@ import org.elasticsearch.search.query.QueryPhase;
 import org.elasticsearch.search.query.QuerySearchRequest;
 import org.elasticsearch.search.query.QuerySearchResult;
 import org.elasticsearch.search.query.ScrollQuerySearchResult;
-import org.elasticsearch.action.search.ReduceService;
 import org.elasticsearch.search.rescore.RescorerBuilder;
 import org.elasticsearch.search.searchafter.SearchAfterBuilder;
 import org.elasticsearch.search.sort.FieldSortBuilder;
@@ -419,37 +416,6 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
                 listener.onFailure(exc);
             }
         });
-    }
-
-    public void executeAsyncQueryPhase(AsyncShardSearchRequest request, boolean keepStatesInContext,
-                                       SearchShardTask task, ActionListener<TransportResponse.Empty> listener) {
-        StepListener<SearchPhaseResult> queryListener = new StepListener<>();
-        StepListener<Void> storeListener = new StepListener<>();
-
-        queryListener.whenComplete(result -> {
-//            final SearchResponse searchResponse =
-//                reduceService.convertToSearchResponse((QueryFetchSearchResult) result, aggReduceContextBuilder(null));
-//            final PersistentSearchResponse persistentSearchResponse =
-//                new PersistentSearchResponse(request.getAsyncSearchId(),
-//                    request.getShardSearchRequest().shardId(),
-//                    searchResponse);
-//            persistentSearchStorageService.storeResult(persistentSearchResponse, storeListener);
-        }, listener::onFailure);
-
-        storeListener.whenComplete(r -> listener.onResponse(TransportResponse.Empty.INSTANCE), listener::onFailure);
-
-        executeQueryPhase(request.getShardSearchRequest(), keepStatesInContext, task, queryListener);
-    }
-
-    public void executePartialReduce(ReducePartialResultsRequest request, SearchShardTask task,
-                                     ActionListener<TransportResponse.Empty> listener) {
-
-        runAsync(threadPool.executor(Names.SEARCH), () -> runPartialReduce(request, task), listener);
-    }
-
-    private TransportResponse.Empty runPartialReduce(ReducePartialResultsRequest request, SearchShardTask task) {
-        //reduceService.convertToSearchResponse()
-        return TransportResponse.Empty.INSTANCE;
     }
 
     private IndexShard getShard(ShardSearchRequest request) {

@@ -26,6 +26,8 @@ import org.elasticsearch.action.IndicesRequest;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksRequest;
 import org.elasticsearch.action.admin.cluster.node.tasks.get.GetTaskAction;
+import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchAction;
+import org.elasticsearch.action.search.persistent.ReducePersistentSearchAction;
 import org.elasticsearch.action.support.ChannelActionListener;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.client.OriginSettingClient;
@@ -81,8 +83,6 @@ public class SearchTransportService {
     public static final String CLEAR_SCROLL_CONTEXTS_ACTION_NAME = "indices:data/read/search[clear_scroll_contexts]";
     public static final String DFS_ACTION_NAME = "indices:data/read/search[phase/dfs]";
     public static final String QUERY_ACTION_NAME = "indices:data/read/search[phase/query]";
-    public static final String SHARD_QUERY_ACTION_NAME = "indices:data/read/search[phase/query+fetch/async]";
-    public static final String REDUCE_PARTIAL_RESULTS_ACTION_NAME = "indices:data/read/search[phase/reduce/async]";
     public static final String QUERY_ID_ACTION_NAME = "indices:data/read/search[phase/query/id]";
     public static final String QUERY_SCROLL_ACTION_NAME = "indices:data/read/search[phase/query/scroll]";
     public static final String QUERY_FETCH_SCROLL_ACTION_NAME = "indices:data/read/search[phase/query+fetch/scroll]";
@@ -158,15 +158,15 @@ public class SearchTransportService {
                 new ConnectionCountingHandler<>(listener, QuerySearchResult::new, clientConnections, connection.getNode().getId()));
     }
 
-    public void sendAsyncQuery(Transport.Connection connection, final AsyncShardSearchRequest request, SearchTask task,
-                               final ActionListener<TransportResponse.Empty> listener) {
-        transportService.sendChildRequest(connection, SHARD_QUERY_ACTION_NAME, request, task,
+    public void sendExecutePersistentQueryFetch(Transport.Connection connection, final AsyncShardSearchRequest request, SearchTask task,
+                                                final ActionListener<TransportResponse.Empty> listener) {
+        transportService.sendChildRequest(connection, ExecutePersistentQueryFetchAction.NAME, request, task,
             new ConnectionCountingHandler<>(listener, (in) -> TransportResponse.Empty.INSTANCE, clientConnections, connection.getNode().getId()));
     }
 
     public void sendExecutePartialReduce(Transport.Connection connection, final ReducePartialResultsRequest request, SearchTask task,
                                          final ActionListener<TransportResponse.Empty> listener) {
-        transportService.sendChildRequest(connection, REDUCE_PARTIAL_RESULTS_ACTION_NAME, request, task,
+        transportService.sendChildRequest(connection, ReducePersistentSearchAction.NAME, request, task,
             new ConnectionCountingHandler<>(listener, (in) -> TransportResponse.Empty.INSTANCE, clientConnections, connection.getNode().getId()));
     }
 
@@ -345,18 +345,6 @@ public class SearchTransportService {
             });
         TransportActionProxy.registerProxyActionWithDynamicResponseType(transportService, QUERY_ACTION_NAME, true,
             (request) -> ((ShardSearchRequest)request).numberOfShards() == 1 ? QueryFetchSearchResult::new : QuerySearchResult::new);
-
-        transportService.registerRequestHandler(SHARD_QUERY_ACTION_NAME, ThreadPool.Names.SAME, AsyncShardSearchRequest::new,
-            (request, channel, task) -> {
-                searchService.executeAsyncQueryPhase(request, keepStatesInContext(channel.getVersion()), (SearchShardTask) task,
-                    new ChannelActionListener<>(channel, SHARD_QUERY_ACTION_NAME, request));
-            });
-
-        transportService.registerRequestHandler(REDUCE_PARTIAL_RESULTS_ACTION_NAME, ThreadPool.Names.SAME, ReducePartialResultsRequest::new,
-            (request, channel, task) -> {
-                searchService.executePartialReduce(request, (SearchShardTask) task,
-                    new ChannelActionListener<>(channel, REDUCE_PARTIAL_RESULTS_ACTION_NAME, request));
-            });
 
         transportService.registerRequestHandler(QUERY_ID_ACTION_NAME, ThreadPool.Names.SAME, QuerySearchRequest::new,
             (request, channel, task) -> {

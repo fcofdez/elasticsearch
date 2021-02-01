@@ -17,71 +17,69 @@
  * under the License.
  */
 
-package org.elasticsearch.action.search;
+package org.elasticsearch.search.persistent;
 
 import org.elasticsearch.Version;
+import org.elasticsearch.action.ActionResponse;
+import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.StreamInput;
-import org.elasticsearch.common.xcontent.ToXContent;
+import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.common.xcontent.StatusToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.index.Index;
 import org.elasticsearch.index.shard.ShardId;
+import org.elasticsearch.rest.RestStatus;
 
 import java.io.IOException;
 import java.util.Map;
 
-public class PersistentSearchResponse implements ToXContent {
-    private final String searchId;
-    private final ShardId shardId;
+import static org.elasticsearch.search.persistent.PersistentSearchStorageService.EXPIRATION_TIME_FIELD;
+import static org.elasticsearch.search.persistent.PersistentSearchStorageService.ID_FIELD;
+import static org.elasticsearch.search.persistent.PersistentSearchStorageService.RESPONSE_FIELD;
+
+public class PersistentSearchResponse extends ActionResponse implements StatusToXContentObject {
+    private final String id;
     private final SearchResponse searchResponse;
 
-    public PersistentSearchResponse(String searchId,
-                                    ShardId shardId,
+    public PersistentSearchResponse(String id,
                                     SearchResponse searchResponse) {
-        this.searchId = searchId;
-        this.shardId = shardId;
+        this.id = id;
         this.searchResponse = searchResponse;
     }
 
-    public String generateId() {
-        return generateId(searchId, shardId);
+    public PersistentSearchResponse(StreamInput in) throws IOException {
+        super(in);
+        this.id = in.readString();
+        this.searchResponse = new SearchResponse(in);
+    }
+
+    public String getId() {
+        return id;
     }
 
     public SearchResponse getSearchResponse() {
         return searchResponse;
     }
 
-    public static String generateId(String searchId, ShardId shardId) {
+    public static String generatePartialResultIdId(String searchId, ShardId shardId) {
         final String index = shardId.getIndex().toString();
         return String.join("/", searchId, index, Integer.toString(shardId.getId()));
     }
 
     public static PersistentSearchResponse fromXContent(final Map<String, Object> source) throws Exception {
-        final String searchId = (String) source.get("search_id");
+        final String searchId = (String) source.get(ID_FIELD);
         if (searchId == null) {
-            throw invalidDoc("search_id");
-        }
-        final String indexName = (String) source.get("index_name");
-        if (indexName == null) {
-            throw invalidDoc("index_name");
-        }
-        final String indexUUID = (String) source.get("index_uuid");
-        if (indexUUID == null) {
-            throw invalidDoc("index_name");
+            throw invalidDoc(ID_FIELD);
         }
 
-        final Integer shardId = (Integer) source.get("shard_id");
-        if (shardId == null) {
-            throw invalidDoc("shard_id");
-        }
-        final BytesReference queryResult = (BytesReference) source.get("query_fetch_result");
+        final BytesReference queryResult = (BytesReference) source.get(RESPONSE_FIELD);
         if (queryResult == null) {
-            throw invalidDoc("query_fetch_result");
+            throw invalidDoc(RESPONSE_FIELD);
         }
         SearchResponse searchResponse = decodeSearchResponse(queryResult);
 
-        return new PersistentSearchResponse(searchId, new ShardId(new Index(indexName, indexUUID), shardId), searchResponse);
+        return new PersistentSearchResponse(searchId, searchResponse);
     }
 
     private static IllegalArgumentException invalidDoc(String missingField) {
@@ -89,16 +87,25 @@ public class PersistentSearchResponse implements ToXContent {
     }
 
     @Override
+    public void writeTo(StreamOutput out) throws IOException {
+
+
+    }
+
+
+    @Override
+    public RestStatus status() {
+        return RestStatus.OK;
+    }
+
+    @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         builder.startObject();
         {
-            builder.field("creation_time", 10L);
-            builder.field("search_id", searchId);
-            final Index index = shardId.getIndex();
-            builder.field("index_name", index.getName());
-            builder.field("index_uuid", index.getUUID());
-            builder.field("shard_id", shardId.getId());
-            builder.field("query_fetch_result", encodeSearchResponse(searchResponse));
+            builder.field(ID_FIELD, id);
+            builder.field(RESPONSE_FIELD, encodeSearchResponse(searchResponse));
+            builder.field(EXPIRATION_TIME_FIELD, System.currentTimeMillis());
+            // TODO: Store queried shards?
         }
         return builder.endObject();
     }

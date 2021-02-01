@@ -183,7 +183,7 @@ public class TransportSearchAction extends HandledTransportAction<SearchRequest,
      * to moving backwards due to NTP and other such complexities, etc.). There are also issues with
      * using a relative clock for reporting real time. Thus, we simply separate these two uses.
      */
-    static final class SearchTimeProvider {
+    public static final class SearchTimeProvider {
 
         private final long absoluteStartMillis;
         private final long relativeStartNanos;
@@ -200,7 +200,7 @@ public class TransportSearchAction extends HandledTransportAction<SearchRequest,
          * @param relativeStartNanos the relative start time in nanoseconds
          * @param relativeCurrentNanosProvider provides the current relative time
          */
-        SearchTimeProvider(
+        public SearchTimeProvider(
                 final long absoluteStartMillis,
                 final long relativeStartNanos,
                 final LongSupplier relativeCurrentNanosProvider) {
@@ -209,7 +209,7 @@ public class TransportSearchAction extends HandledTransportAction<SearchRequest,
             this.relativeCurrentNanosProvider = relativeCurrentNanosProvider;
         }
 
-        long getAbsoluteStartMillis() {
+        public long getAbsoluteStartMillis() {
             return absoluteStartMillis;
         }
 
