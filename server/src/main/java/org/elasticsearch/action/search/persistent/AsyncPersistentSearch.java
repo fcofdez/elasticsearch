@@ -285,7 +285,7 @@ public class AsyncPersistentSearch {
                 return;
             }
 
-            threadPool.schedule(this::execute, TimeValue.timeValueSeconds(10 << retryCount++), ThreadPool.Names.GENERIC);
+            threadPool.schedule(this::execute, TimeValue.timeValueSeconds(1 << retryCount++), ThreadPool.Names.GENERIC);
         }
 
         boolean canBeRetried() {

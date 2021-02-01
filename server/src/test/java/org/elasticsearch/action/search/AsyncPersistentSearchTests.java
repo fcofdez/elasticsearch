@@ -19,6 +19,8 @@
 
 package org.elasticsearch.action.search;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.search.persistent.AsyncPersistentSearch;
@@ -73,8 +75,8 @@ public class AsyncPersistentSearchTests extends ESTestCase {
     }
 
     static class FakeSearchTransportService extends SearchTransportService {
-        final List<ActionListener<ExecutePersistentQueryFetchResponse>> pendingQueries = new ArrayList<>();
-        final List<ActionListener<ReducePartialPersistentSearchResponse>> pendingReduces = new ArrayList<>();
+        private final List<ActionListener<ExecutePersistentQueryFetchResponse>> pendingQueries = new ArrayList<>();
+        private final List<ActionListener<ReducePartialPersistentSearchResponse>> pendingReduces = new ArrayList<>();
         private final Executor executor;
 
         FakeSearchTransportService(Executor executor) {
@@ -160,21 +162,24 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             clusterService).run();
 
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(5)));
-
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
         searchTransportService.releaseQueryListeners();
+
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(5)));
+
         searchTransportService.releaseQueryListeners();
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
+
         searchTransportService.releaseReduceListeners();
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
+
         searchTransportService.releaseReduceListeners();
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
     }
 
-    public void testShardSearchesAreRetried() throws Exception {
+    public void testShardSearchesAreRetriedUntilSearchIsCancelled() throws Exception {
         final SearchRequest searchRequest = new SearchRequest().allowPartialSearchResults(true);
         final String persistentSearchId = UUIDs.randomBase64UUID();
 
@@ -205,17 +210,19 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             clusterService);
 
         asyncPersistentSearch.run();
+
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
         searchTransportService.releaseQueryListenersWithError();
         // Those are retried
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
+
         asyncPersistentSearch.cancelSearch();
         searchTransportService.releaseQueryListenersWithError();
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
     }
 
-    public void testShardSearchesAreRetriedUntilSearchIsCancelled() throws Exception {
+    public void testShardSearchesAreRetried() throws Exception {
         final SearchRequest searchRequest = new SearchRequest().allowPartialSearchResults(true);
         final String persistentSearchId = UUIDs.randomBase64UUID();
 
@@ -248,10 +255,12 @@ public class AsyncPersistentSearchTests extends ESTestCase {
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
         searchTransportService.releaseQueryListenersWithError();
+
         // Those are retried
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
         searchTransportService.releaseQueryListenersWithError();
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
+        searchTransportService.releaseQueryListeners();
 
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
