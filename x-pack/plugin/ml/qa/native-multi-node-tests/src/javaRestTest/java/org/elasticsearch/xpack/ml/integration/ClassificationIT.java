@@ -141,6 +141,7 @@ public class ClassificationIT extends MlNativeDataFrameAnalyticsIntegTestCase {
                 null,
                 null,
                 null,
+                null,
                 null));
         putAnalytics(config);
 
@@ -192,6 +193,7 @@ public class ClassificationIT extends MlNativeDataFrameAnalyticsIntegTestCase {
             new Classification(
                 KEYWORD_FIELD,
                 BoostedTreeParams.builder().setNumTopFeatureImportanceValues(1).build(),
+                null,
                 null,
                 null,
                 null,
@@ -317,7 +319,8 @@ public class ClassificationIT extends MlNativeDataFrameAnalyticsIntegTestCase {
                     new OneHotEncoding(TEXT_FIELD, MapBuilder.<String, String>newMapBuilder()
                         .put(KEYWORD_FIELD_VALUES.get(0), "cat_column_custom_3")
                         .put(KEYWORD_FIELD_VALUES.get(1), "dog_column_custom_3").map(), true)
-                )));
+                ),
+                null));
         putAnalytics(config);
 
         assertIsStopped(jobId);
@@ -386,7 +389,8 @@ public class ClassificationIT extends MlNativeDataFrameAnalyticsIntegTestCase {
                 sourceIndex,
                 destIndex,
                 null,
-                new Classification(dependentVariable, BoostedTreeParams.builder().build(), null, null, numTopClasses, 50.0, null, null));
+                new Classification(dependentVariable, BoostedTreeParams.builder().build(), null, null, 
+                numTopClasses, 50.0, null, null, null));
         putAnalytics(config);
 
         assertIsStopped(jobId);
@@ -481,6 +485,7 @@ public class ClassificationIT extends MlNativeDataFrameAnalyticsIntegTestCase {
             "classification_training_percent_is_50_boolean", BOOLEAN_FIELD, BOOLEAN_FIELD_VALUES, "boolean");
     }
 
+    @AwaitsFix(bugUrl="https://github.com/elastic/elasticsearch/issues/67581")
     public void testStopAndRestart() throws Exception {
         initialize("classification_stop_and_restart");
         String predictedClassField = KEYWORD_FIELD + "_prediction";
@@ -649,7 +654,7 @@ public class ClassificationIT extends MlNativeDataFrameAnalyticsIntegTestCase {
             .build();
 
         DataFrameAnalyticsConfig firstJob = buildAnalytics(firstJobId, sourceIndex, firstJobDestIndex, null,
-            new Classification(dependentVariable, boostedTreeParams, null, null, 1, 50.0, null, null));
+            new Classification(dependentVariable, boostedTreeParams, null, null, 1, 50.0, null, null, null));
         putAnalytics(firstJob);
         startAnalytics(firstJobId);
         waitUntilAnalyticsIsStopped(firstJobId);
@@ -659,7 +664,7 @@ public class ClassificationIT extends MlNativeDataFrameAnalyticsIntegTestCase {
 
         long randomizeSeed = ((Classification) firstJob.getAnalysis()).getRandomizeSeed();
         DataFrameAnalyticsConfig secondJob = buildAnalytics(secondJobId, sourceIndex, secondJobDestIndex, null,
-            new Classification(dependentVariable, boostedTreeParams, null, null, 1, 50.0, randomizeSeed, null));
+            new Classification(dependentVariable, boostedTreeParams, null, null, 1, 50.0, randomizeSeed, null, null));
 
         putAnalytics(secondJob);
         startAnalytics(secondJobId);

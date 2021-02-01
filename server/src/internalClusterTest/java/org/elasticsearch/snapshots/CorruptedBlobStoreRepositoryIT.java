@@ -207,17 +207,19 @@ public class CorruptedBlobStoreRepositoryIT extends AbstractSnapshotIntegTestCas
 
         logger.info("--> strip version information from index-N blob");
         final RepositoryData withoutVersions = new RepositoryData(
+                RepositoryData.MISSING_UUID, // old-format repository data has no UUID
                 repositoryData.getGenId(),
                 repositoryData.getSnapshotIds().stream().collect(Collectors.toMap(SnapshotId::getUUID, Function.identity())),
                 repositoryData.getSnapshotIds().stream().collect(Collectors.toMap(SnapshotId::getUUID, repositoryData::getSnapshotState)),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 ShardGenerations.EMPTY,
-                IndexMetaDataGenerations.EMPTY);
+                IndexMetaDataGenerations.EMPTY,
+                RepositoryData.MISSING_UUID); // old-format repository has no cluster UUID
 
         Files.write(repo.resolve(BlobStoreRepository.INDEX_FILE_PREFIX + withoutVersions.getGenId()),
             BytesReference.toBytes(BytesReference.bytes(
-                withoutVersions.snapshotsToXContent(XContentFactory.jsonBuilder(), Version.CURRENT))),
+                withoutVersions.snapshotsToXContent(XContentFactory.jsonBuilder(), Version.CURRENT, true))),
             StandardOpenOption.TRUNCATE_EXISTING);
 
         logger.info("--> verify that repo is assumed in old metadata format");
@@ -271,8 +273,10 @@ public class CorruptedBlobStoreRepositoryIT extends AbstractSnapshotIntegTestCas
         expectThrows(RepositoryException.class, () -> getRepositoryData(repository));
 
         final String otherRepoName = "other-repo";
-        createRepository(otherRepoName, "fs", Settings.builder()
-            .put("location", repo).put("compress", false));
+        assertAcked(clusterAdmin().preparePutRepository(otherRepoName)
+            .setType("fs")
+            .setVerify(false) // don't try and load the repo data, since it is corrupt
+            .setSettings(Settings.builder().put("location", repo).put("compress", false)));
         final Repository otherRepo = getRepositoryOnMaster(otherRepoName);
 
         logger.info("--> verify loading repository data from newly mounted repository throws RepositoryException");
@@ -336,13 +340,14 @@ public class CorruptedBlobStoreRepositoryIT extends AbstractSnapshotIntegTestCas
         final Map<String, SnapshotId> snapshotIds =
                 repositoryData.getSnapshotIds().stream().collect(Collectors.toMap(SnapshotId::getUUID, Function.identity()));
         final RepositoryData brokenRepoData = new RepositoryData(
+                repositoryData.getUuid(),
                 repositoryData.getGenId(),
                 snapshotIds,
                 snapshotIds.values().stream().collect(Collectors.toMap(SnapshotId::getUUID, repositoryData::getSnapshotState)),
                 snapshotIds.values().stream().collect(Collectors.toMap(SnapshotId::getUUID, repositoryData::getVersion)),
                 repositoryData.getIndices().values().stream().collect(Collectors.toMap(Function.identity(), repositoryData::getSnapshots)),
                 ShardGenerations.builder().putAll(repositoryData.shardGenerations()).put(indexId, 0, "0").build(),
-                repositoryData.indexMetaDataGenerations());
+                repositoryData.indexMetaDataGenerations(), repositoryData.getClusterUUID());
         Files.write(repoPath.resolve(BlobStoreRepository.INDEX_FILE_PREFIX + repositoryData.getGenId()),
                 BytesReference.toBytes(BytesReference.bytes(
                         brokenRepoData.snapshotsToXContent(XContentFactory.jsonBuilder(), Version.CURRENT))),

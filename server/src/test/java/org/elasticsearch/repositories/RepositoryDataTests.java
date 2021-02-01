@@ -46,6 +46,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.elasticsearch.repositories.RepositoryData.EMPTY_REPO_GEN;
+import static org.elasticsearch.repositories.RepositoryData.MISSING_UUID;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
@@ -75,7 +76,8 @@ public class RepositoryDataTests extends ESTestCase {
     }
 
     public void testXContent() throws IOException {
-        RepositoryData repositoryData = generateRandomRepoData();
+        RepositoryData repositoryData =
+                generateRandomRepoData().withUuid(UUIDs.randomBase64UUID(random())).withClusterUuid(UUIDs.randomBase64UUID(random()));
         XContentBuilder builder = JsonXContent.contentBuilder();
         repositoryData.snapshotsToXContent(builder, Version.CURRENT);
         try (XContentParser parser = createParser(JsonXContent.jsonXContent, BytesReference.bytes(builder))) {
@@ -141,23 +143,27 @@ public class RepositoryDataTests extends ESTestCase {
             snapshotVersions.put(snapshotId.getUUID(), randomFrom(Version.CURRENT, Version.CURRENT.minimumCompatibilityVersion()));
         }
         RepositoryData repositoryData = new RepositoryData(
+                MISSING_UUID,
                 EMPTY_REPO_GEN,
                 snapshotIds,
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 ShardGenerations.EMPTY,
-                IndexMetaDataGenerations.EMPTY);
+                IndexMetaDataGenerations.EMPTY,
+                MISSING_UUID);
         // test that initializing indices works
         Map<IndexId, List<SnapshotId>> indices = randomIndices(snapshotIds);
         RepositoryData newRepoData = new RepositoryData(
+                repositoryData.getUuid(),
                 repositoryData.getGenId(),
                 snapshotIds,
                 snapshotStates,
                 snapshotVersions,
                 indices,
                 ShardGenerations.EMPTY,
-                IndexMetaDataGenerations.EMPTY);
+                IndexMetaDataGenerations.EMPTY,
+                UUIDs.randomBase64UUID(random()));
         List<SnapshotId> expected = new ArrayList<>(repositoryData.getSnapshotIds());
         Collections.sort(expected);
         List<SnapshotId> actual = new ArrayList<>(newRepoData.getSnapshotIds());
@@ -203,7 +209,8 @@ public class RepositoryDataTests extends ESTestCase {
 
     public void testIndexThatReferencesAnUnknownSnapshot() throws IOException {
         final XContent xContent = randomFrom(XContentType.values()).xContent();
-        final RepositoryData repositoryData = generateRandomRepoData();
+        final RepositoryData repositoryData =
+                generateRandomRepoData().withUuid(UUIDs.randomBase64UUID()).withClusterUuid(UUIDs.randomBase64UUID(random()));
 
         XContentBuilder builder = XContentBuilder.builder(xContent);
         repositoryData.snapshotsToXContent(builder, Version.CURRENT);
@@ -241,13 +248,15 @@ public class RepositoryDataTests extends ESTestCase {
         assertNotNull(corruptedIndexId);
 
         RepositoryData corruptedRepositoryData = new RepositoryData(
+                parsedRepositoryData.getUuid(),
                 parsedRepositoryData.getGenId(),
                 snapshotIds,
                 snapshotStates,
                 snapshotVersions,
                 indexSnapshots,
                 shardGenBuilder.build(),
-                IndexMetaDataGenerations.EMPTY);
+                IndexMetaDataGenerations.EMPTY,
+                UUIDs.randomBase64UUID(random()));
 
         final XContentBuilder corruptedBuilder = XContentBuilder.builder(xContent);
         corruptedRepositoryData.snapshotsToXContent(corruptedBuilder, Version.CURRENT);
