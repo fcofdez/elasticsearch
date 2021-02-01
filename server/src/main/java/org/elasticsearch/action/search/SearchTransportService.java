@@ -164,7 +164,8 @@ public class SearchTransportService {
                                                        final ExecutePersistentQueryFetchRequest request,
                                                        SearchTask task,
                                                        final ActionListener<ExecutePersistentQueryFetchResponse> listener) {
-        transportService.sendChildRequest(connection,
+        transportService.sendChildRequest(
+            connection,
             ExecutePersistentQueryFetchAction.NAME,
             request,
             task,

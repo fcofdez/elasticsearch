@@ -35,12 +35,10 @@ public class TransportReducePartialPersistentSearch extends HandledTransportActi
     private final PersistentSearchService persistentSearchService;
 
     @Inject
-    public TransportReducePartialPersistentSearch(String actionName,
-                                                  TransportService transportService,
+    public TransportReducePartialPersistentSearch(TransportService transportService,
                                                   ActionFilters actionFilters,
-                                                  Writeable.Reader<ReducePartialPersistentSearchRequest> reader,
                                                   PersistentSearchService persistentSearchService) {
-        super(actionName, transportService, actionFilters, reader);
+        super(ReducePartialPersistentSearchAction.NAME, transportService, actionFilters, ReducePartialPersistentSearchRequest::new);
         this.persistentSearchService = persistentSearchService;
     }
 

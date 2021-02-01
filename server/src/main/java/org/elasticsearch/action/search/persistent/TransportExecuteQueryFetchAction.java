@@ -35,12 +35,10 @@ public class TransportExecuteQueryFetchAction extends HandledTransportAction<Exe
     private final PersistentSearchService persistentSearchService;
 
     @Inject
-    public TransportExecuteQueryFetchAction(String actionName,
-                                            TransportService transportService,
+    public TransportExecuteQueryFetchAction(TransportService transportService,
                                             ActionFilters actionFilters,
-                                            Writeable.Reader<ExecutePersistentQueryFetchRequest> reader,
                                             PersistentSearchService persistentSearchService) {
-        super(actionName, transportService, actionFilters, reader);
+        super(ExecutePersistentQueryFetchAction.NAME, transportService, actionFilters, ExecutePersistentQueryFetchRequest::new);
         this.persistentSearchService = persistentSearchService;
     }
 
@@ -48,6 +46,12 @@ public class TransportExecuteQueryFetchAction extends HandledTransportAction<Exe
     protected void doExecute(Task task,
                              ExecutePersistentQueryFetchRequest request,
                              ActionListener<ExecutePersistentQueryFetchResponse> listener) {
-        persistentSearchService.executeAsyncQueryPhase(request, (SearchShardTask) task, listener);
+        try {
+            logger.info("Received request");
+            final SearchShardTask searchShardTask = new SearchShardTask(task.getId(), "asd", "asd", "asd", task.getParentTaskId(), task.headers());
+            persistentSearchService.executeAsyncQueryPhase(request, searchShardTask, listener);
+        } catch (Exception e) {
+            logger.info("Error!! ", e);
+        }
     }
 }

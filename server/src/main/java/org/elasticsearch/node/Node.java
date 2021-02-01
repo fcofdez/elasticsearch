@@ -34,6 +34,7 @@ import org.elasticsearch.action.search.PersistentSearchService;
 import org.elasticsearch.action.search.SearchExecutionStatsCollector;
 import org.elasticsearch.action.search.SearchPhaseController;
 import org.elasticsearch.action.search.SearchTransportService;
+import org.elasticsearch.action.search.persistent.SearchShardTargetResolver;
 import org.elasticsearch.action.support.TransportAction;
 import org.elasticsearch.action.update.UpdateHelper;
 import org.elasticsearch.bootstrap.BootstrapCheck;
@@ -647,7 +648,7 @@ public class Node implements Closeable {
                 namedWriteableRegistry, searchService::aggReduceContextBuilder);
 
             final PersistentSearchStorageService persistentSearchStorageService =
-                new PersistentSearchStorageService(client, ".persistent_search_responses");
+                new PersistentSearchStorageService(client);
 
             final PersistentSearchService persistentSearchService = new PersistentSearchService(searchService, searchPhaseController,
                 persistentSearchStorageService, threadPool.executor(ThreadPool.Names.SEARCH), transportService);
@@ -713,6 +714,8 @@ public class Node implements Closeable {
                     b.bind(FsHealthService.class).toInstance(fsHealthService);
                     b.bind(SystemIndices.class).toInstance(systemIndices);
                     b.bind(PersistentSearchService.class).toInstance(persistentSearchService);
+                    b.bind(SearchShardTargetResolver.class)
+                        .toInstance(new SearchShardTargetResolver.DefaultSearchShardTargetResolver(clusterService));
                 }
             );
             injector = modules.createInjector();

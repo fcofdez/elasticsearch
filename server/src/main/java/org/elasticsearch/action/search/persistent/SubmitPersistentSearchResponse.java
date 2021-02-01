@@ -24,10 +24,14 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.StatusToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.search.persistent.PersistentSearchId;
 
 import java.io.IOException;
+
+import static org.elasticsearch.common.xcontent.XContentParserUtils.ensureExpectedToken;
+import static org.elasticsearch.common.xcontent.XContentParserUtils.throwUnknownField;
 
 public class SubmitPersistentSearchResponse extends ActionResponse implements StatusToXContentObject {
     private PersistentSearchId searchId;
@@ -46,6 +50,10 @@ public class SubmitPersistentSearchResponse extends ActionResponse implements St
         out.writeString(searchId.getEncodedId());
     }
 
+    public PersistentSearchId getSearchId() {
+        return searchId;
+    }
+
     @Override
     public RestStatus status() {
         return RestStatus.ACCEPTED;
@@ -57,5 +65,20 @@ public class SubmitPersistentSearchResponse extends ActionResponse implements St
         builder.field("id", searchId.getEncodedId());
         builder.endObject();
         return builder;
+    }
+
+    public static SubmitPersistentSearchResponse fromXContent(XContentParser parser) throws IOException {
+        ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.nextToken(), parser);
+        parser.nextToken();
+        ensureExpectedToken(XContentParser.Token.FIELD_NAME, parser.currentToken(), parser);
+        String fieldName = parser.currentName();
+        if (fieldName.equals("id") == false) {
+            throwUnknownField(fieldName, parser.getTokenLocation());
+        }
+        parser.nextToken();
+        ensureExpectedToken(XContentParser.Token.VALUE_STRING, parser.currentToken(), parser);
+        String id = parser.text();
+        ensureExpectedToken(XContentParser.Token.END_OBJECT, parser.nextToken(), parser);
+        return new SubmitPersistentSearchResponse(PersistentSearchId.decode(id));
     }
 }

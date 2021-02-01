@@ -51,9 +51,10 @@ import java.util.function.BiFunction;
 public class AsyncPersistentSearch {
     private final SearchRequest searchRequest;
     private final String asyncSearchId;
+    private final OriginalIndices originalIndices;
     private final Queue<AsyncSearchShard> shardSearchTargetQueue;
     private final int maxConcurrentRequests;
-    private final ShardSearchTargetResolver shardSearchTargetResolver;
+    private final SearchShardTargetResolver searchShardTargetResolver;
     private final SearchTransportService searchTransportService;
     private final SearchTask task;
     private final ThreadPool threadPool;
@@ -69,14 +70,16 @@ public class AsyncPersistentSearch {
                                  String asyncSearchId,
                                  SearchTask task,
                                  List<SearchShard> searchShards,
+                                 OriginalIndices originalIndices,
                                  int maxConcurrentRequests,
-                                 ShardSearchTargetResolver shardSearchTargetResolver,
+                                 SearchShardTargetResolver searchShardTargetResolver,
                                  SearchTransportService searchTransportService,
                                  ThreadPool threadPool,
                                  BiFunction<String, String, Transport.Connection> connectionProvider,
                                  ClusterService clusterService) {
         this.searchRequest = searchRequest;
         this.asyncSearchId = asyncSearchId;
+        this.originalIndices = originalIndices;
         // Use the same order as provided?
         Queue<AsyncSearchShard> queue = new ArrayDeque<>();
         for (SearchShard searchShard : searchShards) {
@@ -84,7 +87,7 @@ public class AsyncPersistentSearch {
         }
         this.shardSearchTargetQueue = queue;
         this.maxConcurrentRequests = maxConcurrentRequests;
-        this.shardSearchTargetResolver = shardSearchTargetResolver;
+        this.searchShardTargetResolver = searchShardTargetResolver;
         this.searchTransportService = searchTransportService;
         this.task = task;
         this.threadPool = threadPool;
@@ -154,7 +157,6 @@ public class AsyncPersistentSearch {
         logger.info("Shards {} reduced", reducedShards);
     }
 
-
     void onReduceSuccess() {
         // Trigger final reduction
     }
@@ -165,7 +167,7 @@ public class AsyncPersistentSearch {
 
     void sendReduceRequest(ReducePartialPersistentSearchRequest request, ActionListener<Void> listener) {
         // For now, execute reduce requests in the coordinator node
-        Transport.Connection connection = getConnection(null, null);
+        Transport.Connection connection = getConnection(null, clusterService.localNode().getId());
         searchTransportService.sendExecutePartialReduceRequest(connection, request, task, new ActionListener<>() {
             @Override
             public void onResponse(ReducePartialPersistentSearchResponse response) {
@@ -186,6 +188,7 @@ public class AsyncPersistentSearch {
             new ExecutePersistentQueryFetchRequest(asyncSearchId, querySearchRequest);
 
         final Transport.Connection connection = getConnection(searchShardTarget.getClusterAlias(), searchShardTarget.getNodeId());
+        logger.info("Actually sending the request");
         searchTransportService.sendExecutePersistentQueryFetchRequest(connection, asyncShardSearchRequest, task, new ActionListener<>() {
             @Override
             public void onResponse(ExecutePersistentQueryFetchResponse response) {
@@ -194,6 +197,7 @@ public class AsyncPersistentSearch {
 
             @Override
             public void onFailure(Exception e) {
+                logger.info("Error sending the request", e);
                 listener.onFailure(e);
             }
         });
@@ -218,10 +222,6 @@ public class AsyncPersistentSearch {
                 null,
                 null,
                 null);
-        // if we already received a search result we can inform the shard that it
-        // can return a null response if the request rewrites to match none rather
-        // than creating an empty response in the search thread pool.
-        // Note that, we have to disable this shortcut for queries that create a context (scroll and search context).
         shardRequest.canReturnNullResponseIfMatchNoDocs(false);
         return shardRequest;
     }
@@ -248,11 +248,12 @@ public class AsyncPersistentSearch {
         }
 
         void execute() {
-            searchShardIterator = shardSearchTargetResolver.resolve(searchShard);
+            searchShardIterator = searchShardTargetResolver.resolve(searchShard, originalIndices);
             doExecute();
         }
 
         void doExecute() {
+            logger.info("Executing query for shard {}", searchShard);
             if (searchRunning.get() == false) {
                 clear();
                 return;
@@ -394,7 +395,7 @@ public class AsyncPersistentSearch {
                     runningReduce.compareAndSet(reducePartialResultsRequest, null);
                     onShardsReduced(shards);
                     // Keep track of reduced shards
-                    // TODO: This is executed in a IO thread, we shouldn't block there
+                    // TODO: This is executed in a IO thread, we shouldn't block there?
                     if (numberOfShardsToReduce.decrementAndGet() > 0) {
                         executeNext();
                     } else {

@@ -19,8 +19,6 @@
 
 package org.elasticsearch.action.search;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.search.persistent.AsyncPersistentSearch;
@@ -28,7 +26,7 @@ import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchReq
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
-import org.elasticsearch.action.search.persistent.ShardSearchTargetResolver;
+import org.elasticsearch.action.search.persistent.SearchShardTargetResolver;
 import org.elasticsearch.cluster.routing.RecoverySource;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.routing.ShardRoutingHelper;
@@ -56,218 +54,217 @@ import java.util.concurrent.TimeUnit;
 import static org.hamcrest.core.IsEqual.equalTo;
 
 public class AsyncPersistentSearchTests extends ESTestCase {
-    private ThreadPool threadPool;
-    private ClusterService clusterService;
-
-    @Before
-    public void setUp() throws Exception {
-        super.setUp();
-        threadPool = new TestThreadPool(getTestName());
-        clusterService = new ClusterService(Settings.EMPTY,
-            new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS), null);
-    }
-
-    @After
-    public void tearDown() throws Exception {
-        super.tearDown();
-        clusterService.close();
-        ThreadPool.terminate(threadPool, 10, TimeUnit.SECONDS);
-    }
-
-    static class FakeSearchTransportService extends SearchTransportService {
-        private final List<ActionListener<ExecutePersistentQueryFetchResponse>> pendingQueries = new ArrayList<>();
-        private final List<ActionListener<ReducePartialPersistentSearchResponse>> pendingReduces = new ArrayList<>();
-        private final Executor executor;
-
-        FakeSearchTransportService(Executor executor) {
-            super(null, null, null);
-            this.executor = executor;
-        }
-
-        @Override
-        public void sendExecutePersistentQueryFetchRequest(Transport.Connection connection,
-                                                           ExecutePersistentQueryFetchRequest request,
-                                                           SearchTask task,
-                                                           ActionListener<ExecutePersistentQueryFetchResponse> listener) {
-            pendingQueries.add(listener);
-        }
-
-        void releaseQueryListeners() {
-            List<ActionListener<ExecutePersistentQueryFetchResponse>> copy = new ArrayList<>(pendingQueries);
-            pendingQueries.clear();
-            executor.execute(() -> {
-                for (ActionListener<ExecutePersistentQueryFetchResponse> pendingQuery : copy) {
-                    pendingQuery.onResponse(new ExecutePersistentQueryFetchResponse());
-                }
-            });
-        }
-
-        void releaseQueryListenersWithError() {
-            List<ActionListener<ExecutePersistentQueryFetchResponse>> copy = new ArrayList<>(pendingQueries);
-            pendingQueries.clear();
-            executor.execute(() -> {
-                for (ActionListener<ExecutePersistentQueryFetchResponse> pendingQuery : copy) {
-                    pendingQuery.onFailure(new EsRejectedExecutionException());
-                }
-            });
-        }
-
-        @Override
-        public void sendExecutePartialReduceRequest(Transport.Connection connection,
-                                                    ReducePartialPersistentSearchRequest request,
-                                                    SearchTask task,
-                                                    ActionListener<ReducePartialPersistentSearchResponse> listener) {
-            pendingReduces.add(listener);
-        }
-
-        void releaseReduceListeners() {
-            List<ActionListener<ReducePartialPersistentSearchResponse>> copy = new ArrayList<>(pendingReduces);
-            pendingReduces.clear();
-            executor.execute(() -> {
-                for (ActionListener<ReducePartialPersistentSearchResponse> pendingReduce : copy) {
-                    pendingReduce.onResponse(new ReducePartialPersistentSearchResponse(List.of()));
-                }
-            });
-        }
-    }
-
-    public void testRunSearch() throws Exception {
-        final SearchRequest searchRequest = new SearchRequest().allowPartialSearchResults(true);
-        final String persistentSearchId = UUIDs.randomBase64UUID();
-
-
-        List<SearchShard> searchShards = new ArrayList<>(10);
-        for (int i = 0; i < 10; i++) {
-            searchShards.add(new SearchShard(null, new ShardId("index", "_na_", i)));
-        }
-
-        ShardSearchTargetResolver resolver = shardSearchTarget -> {
-            final ShardId shardId = shardSearchTarget.getShardId();
-            ShardRouting shardRouting = ShardRouting.newUnassigned(shardId, true, RecoverySource.EmptyStoreRecoverySource.INSTANCE,
-                new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, ""));
-            shardRouting = ShardRoutingHelper.initialize(shardRouting, "nodeId");
-            return new SearchShardIterator(null, shardId, List.of(shardRouting), OriginalIndices.NONE);
-        };
-        final SearchTask searchTask = new SearchTask(0, "search", "action", () -> "asd", TaskId.EMPTY_TASK_ID, Collections.emptyMap());
-        FakeSearchTransportService searchTransportService = new FakeSearchTransportService(threadPool.executor(ThreadPool.Names.GENERIC));
-        new AsyncPersistentSearch(searchRequest,
-            persistentSearchId,
-            searchTask,
-            searchShards,
-            5,
-            resolver,
-            searchTransportService,
-            threadPool,
-            (cluster, node) -> null,
-            clusterService).run();
-
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(5)));
-        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
-        searchTransportService.releaseQueryListeners();
-
-        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(5)));
-
-        searchTransportService.releaseQueryListeners();
-        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
-
-        searchTransportService.releaseReduceListeners();
-        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
-
-        searchTransportService.releaseReduceListeners();
-        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
-    }
-
-    public void testShardSearchesAreRetriedUntilSearchIsCancelled() throws Exception {
-        final SearchRequest searchRequest = new SearchRequest().allowPartialSearchResults(true);
-        final String persistentSearchId = UUIDs.randomBase64UUID();
-
-
-        List<SearchShard> searchShards = new ArrayList<>(10);
-        for (int i = 0; i < 2; i++) {
-            searchShards.add(new SearchShard(null, new ShardId("index", "_na_", i)));
-        }
-
-        ShardSearchTargetResolver resolver = shardSearchTarget -> {
-            final ShardId shardId = shardSearchTarget.getShardId();
-            ShardRouting shardRouting = ShardRouting.newUnassigned(shardId, true, RecoverySource.EmptyStoreRecoverySource.INSTANCE,
-                new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, ""));
-            shardRouting = ShardRoutingHelper.initialize(shardRouting, "nodeId");
-            return new SearchShardIterator(null, shardId, List.of(shardRouting), OriginalIndices.NONE);
-        };
-        final SearchTask searchTask = new SearchTask(0, "search", "action", () -> "asd", TaskId.EMPTY_TASK_ID, Collections.emptyMap());
-        FakeSearchTransportService searchTransportService = new FakeSearchTransportService(threadPool.executor(ThreadPool.Names.GENERIC));
-        final AsyncPersistentSearch asyncPersistentSearch = new AsyncPersistentSearch(searchRequest,
-            persistentSearchId,
-            searchTask,
-            searchShards,
-            5,
-            resolver,
-            searchTransportService,
-            threadPool,
-            (cluster, node) -> null,
-            clusterService);
-
-        asyncPersistentSearch.run();
-
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
-        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
-        searchTransportService.releaseQueryListenersWithError();
-        // Those are retried
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
-
-        asyncPersistentSearch.cancelSearch();
-        searchTransportService.releaseQueryListenersWithError();
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
-    }
-
-    public void testShardSearchesAreRetried() throws Exception {
-        final SearchRequest searchRequest = new SearchRequest().allowPartialSearchResults(true);
-        final String persistentSearchId = UUIDs.randomBase64UUID();
-
-
-        List<SearchShard> searchShards = new ArrayList<>(10);
-        for (int i = 0; i < 2; i++) {
-            searchShards.add(new SearchShard(null, new ShardId("index", "_na_", i)));
-        }
-
-        ShardSearchTargetResolver resolver = shardSearchTarget -> {
-            final ShardId shardId = shardSearchTarget.getShardId();
-            ShardRouting shardRouting = ShardRouting.newUnassigned(shardId, true, RecoverySource.EmptyStoreRecoverySource.INSTANCE,
-                new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, ""));
-            shardRouting = ShardRoutingHelper.initialize(shardRouting, "nodeId");
-            return new SearchShardIterator(null, shardId, List.of(shardRouting), OriginalIndices.NONE);
-        };
-        final SearchTask searchTask = new SearchTask(0, "search", "action", () -> "asd", TaskId.EMPTY_TASK_ID, Collections.emptyMap());
-        FakeSearchTransportService searchTransportService = new FakeSearchTransportService(threadPool.executor(ThreadPool.Names.GENERIC));
-        new AsyncPersistentSearch(searchRequest,
-            persistentSearchId,
-            searchTask,
-            searchShards,
-            5,
-            resolver,
-            searchTransportService,
-            threadPool,
-            (cluster, node) -> null,
-            clusterService).run();
-
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
-        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
-        searchTransportService.releaseQueryListenersWithError();
-
-        // Those are retried
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
-        searchTransportService.releaseQueryListenersWithError();
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(2)));
-        searchTransportService.releaseQueryListeners();
-
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
-        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
-        searchTransportService.releaseReduceListeners();
-        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
-        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
-    }
-
-
+//    private ThreadPool threadPool;
+//    private ClusterService clusterService;
+//
+//    @Before
+//    public void setUp() throws Exception {
+//        super.setUp();
+//        threadPool = new TestThreadPool(getTestName());
+//        clusterService = new ClusterService(Settings.EMPTY,
+//            new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS), null);
+//    }
+//
+//    @After
+//    public void tearDown() throws Exception {
+//        super.tearDown();
+//        clusterService.close();
+//        ThreadPool.terminate(threadPool, 10, TimeUnit.SECONDS);
+//    }
+//
+//    static class FakeSearchTransportService extends SearchTransportService {
+//        private final List<ActionListener<ExecutePersistentQueryFetchResponse>> pendingQueries = new ArrayList<>();
+//        private final List<ActionListener<ReducePartialPersistentSearchResponse>> pendingReduces = new ArrayList<>();
+//        private final Executor executor;
+//
+//        FakeSearchTransportService(Executor executor) {
+//            super(null, null, null);
+//            this.executor = executor;
+//        }
+//
+//        @Override
+//        public void sendExecutePersistentQueryFetchRequest(Transport.Connection connection,
+//                                                           ExecutePersistentQueryFetchRequest request,
+//                                                           SearchTask task,
+//                                                           ActionListener<ExecutePersistentQueryFetchResponse> listener) {
+//            pendingQueries.add(listener);
+//        }
+//
+//        void releaseQueryListeners() {
+//            List<ActionListener<ExecutePersistentQueryFetchResponse>> copy = new ArrayList<>(pendingQueries);
+//            pendingQueries.clear();
+//            executor.execute(() -> {
+//                for (ActionListener<ExecutePersistentQueryFetchResponse> pendingQuery : copy) {
+//                    pendingQuery.onResponse(new ExecutePersistentQueryFetchResponse());
+//                }
+//            });
+//        }
+//
+//        void releaseQueryListenersWithError() {
+//            List<ActionListener<ExecutePersistentQueryFetchResponse>> copy = new ArrayList<>(pendingQueries);
+//            pendingQueries.clear();
+//            executor.execute(() -> {
+//                for (ActionListener<ExecutePersistentQueryFetchResponse> pendingQuery : copy) {
+//                    pendingQuery.onFailure(new EsRejectedExecutionException());
+//                }
+//            });
+//        }
+//
+//        @Override
+//        public void sendExecutePartialReduceRequest(Transport.Connection connection,
+//                                                    ReducePartialPersistentSearchRequest request,
+//                                                    SearchTask task,
+//                                                    ActionListener<ReducePartialPersistentSearchResponse> listener) {
+//            pendingReduces.add(listener);
+//        }
+//
+//        void releaseReduceListeners() {
+//            List<ActionListener<ReducePartialPersistentSearchResponse>> copy = new ArrayList<>(pendingReduces);
+//            pendingReduces.clear();
+//            executor.execute(() -> {
+//                for (ActionListener<ReducePartialPersistentSearchResponse> pendingReduce : copy) {
+//                    pendingReduce.onResponse(new ReducePartialPersistentSearchResponse(List.of()));
+//                }
+//            });
+//        }
+//    }
+//
+//    public void testRunSearch() throws Exception {
+//        final SearchRequest searchRequest = new SearchRequest().allowPartialSearchResults(true);
+//        final String persistentSearchId = UUIDs.randomBase64UUID();
+//
+//
+//        List<SearchShard> searchShards = new ArrayList<>(10);
+//        for (int i = 0; i < 10; i++) {
+//            searchShards.add(new SearchShard(null, new ShardId("index", "_na_", i)));
+//        }
+//
+//        SearchShardTargetResolver resolver = shardSearchTarget -> {
+//            final ShardId shardId = shardSearchTarget.getShardId();
+//            ShardRouting shardRouting = ShardRouting.newUnassigned(shardId, true, RecoverySource.EmptyStoreRecoverySource.INSTANCE,
+//                new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, ""));
+//            shardRouting = ShardRoutingHelper.initialize(shardRouting, "nodeId");
+//            return new SearchShardIterator(null, shardId, List.of(shardRouting), OriginalIndices.NONE);
+//        };
+//        final SearchTask searchTask = new SearchTask(0, "search", "action", () -> "persistent search", TaskId.EMPTY_TASK_ID,
+//            Collections.emptyMap());
+//        FakeSearchTransportService searchTransportService = new FakeSearchTransportService(threadPool.executor(ThreadPool.Names.GENERIC));
+//        new AsyncPersistentSearch(searchRequest,
+//            persistentSearchId,
+//            searchTask,
+//            searchShards,
+//            localIndices, 5,
+//            resolver,
+//            searchTransportService,
+//            threadPool,
+//            (cluster, node) -> null,
+//            clusterService).run();
+//
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(5)));
+//        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
+//        searchTransportService.releaseQueryListeners();
+//
+//        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(5)));
+//
+//        searchTransportService.releaseQueryListeners();
+//        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
+//
+//        searchTransportService.releaseReduceListeners();
+//        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
+//
+//        searchTransportService.releaseReduceListeners();
+//        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
+//    }
+//
+//    public void testShardSearchesAreRetriedUntilSearchIsCancelled() throws Exception {
+//        final SearchRequest searchRequest = new SearchRequest().allowPartialSearchResults(true);
+//        final String persistentSearchId = UUIDs.randomBase64UUID();
+//
+//        int numOfShards = 2;
+//        List<SearchShard> searchShards = new ArrayList<>();
+//        for (int i = 0; i < numOfShards; i++) {
+//            searchShards.add(new SearchShard(null, new ShardId("index", "_na_", i)));
+//        }
+//
+//        SearchShardTargetResolver resolver = shardSearchTarget -> {
+//            final ShardId shardId = shardSearchTarget.getShardId();
+//            ShardRouting shardRouting = ShardRouting.newUnassigned(shardId, true, RecoverySource.EmptyStoreRecoverySource.INSTANCE,
+//                new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, ""));
+//            shardRouting = ShardRoutingHelper.initialize(shardRouting, "nodeId");
+//            return new SearchShardIterator(null, shardId, List.of(shardRouting), OriginalIndices.NONE);
+//        };
+//        final SearchTask searchTask = new SearchTask(0, "search", "action", () -> "asd", TaskId.EMPTY_TASK_ID, Collections.emptyMap());
+//        FakeSearchTransportService searchTransportService = new FakeSearchTransportService(threadPool.executor(ThreadPool.Names.GENERIC));
+//        final AsyncPersistentSearch asyncPersistentSearch = new AsyncPersistentSearch(searchRequest,
+//            persistentSearchId,
+//            searchTask,
+//            searchShards,
+//            localIndices, 5,
+//            resolver,
+//            searchTransportService,
+//            threadPool,
+//            (cluster, node) -> null,
+//            clusterService);
+//
+//        asyncPersistentSearch.run();
+//
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(numOfShards)));
+//        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
+//        searchTransportService.releaseQueryListenersWithError();
+//        // Those are retried
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(numOfShards)));
+//
+//        asyncPersistentSearch.cancelSearch();
+//        searchTransportService.releaseQueryListenersWithError();
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
+//    }
+//
+//    public void testShardSearchesAreRetried() throws Exception {
+//        final SearchRequest searchRequest = new SearchRequest().allowPartialSearchResults(true);
+//        final String persistentSearchId = UUIDs.randomBase64UUID();
+//
+//        int numOfShards = 2;
+//        List<SearchShard> searchShards = new ArrayList<>();
+//        for (int i = 0; i < numOfShards; i++) {
+//            searchShards.add(new SearchShard(null, new ShardId("index", "_na_", i)));
+//        }
+//
+//        SearchShardTargetResolver resolver = shardSearchTarget -> {
+//            final ShardId shardId = shardSearchTarget.getShardId();
+//            ShardRouting shardRouting = ShardRouting.newUnassigned(shardId, true, RecoverySource.EmptyStoreRecoverySource.INSTANCE,
+//                new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, ""));
+//            shardRouting = ShardRoutingHelper.initialize(shardRouting, "nodeId");
+//            return new SearchShardIterator(null, shardId, List.of(shardRouting), OriginalIndices.NONE);
+//        };
+//        final SearchTask searchTask = new SearchTask(0, "search", "action", () -> "asd", TaskId.EMPTY_TASK_ID, Collections.emptyMap());
+//        FakeSearchTransportService searchTransportService = new FakeSearchTransportService(threadPool.executor(ThreadPool.Names.GENERIC));
+//        new AsyncPersistentSearch(searchRequest,
+//            persistentSearchId,
+//            searchTask,
+//            searchShards,
+//            localIndices, 5,
+//            resolver,
+//            searchTransportService,
+//            threadPool,
+//            (cluster, node) -> null,
+//            clusterService).run();
+//
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(numOfShards)));
+//        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
+//        searchTransportService.releaseQueryListenersWithError();
+//
+//        // Those are retried
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(numOfShards)));
+//        searchTransportService.releaseQueryListenersWithError();
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(numOfShards)));
+//        searchTransportService.releaseQueryListeners();
+//
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
+//        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
+//        searchTransportService.releaseReduceListeners();
+//        assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
+//        assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
+//    }
 }

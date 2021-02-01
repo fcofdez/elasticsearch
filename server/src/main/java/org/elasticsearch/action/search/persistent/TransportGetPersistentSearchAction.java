@@ -20,8 +20,10 @@
 package org.elasticsearch.action.search.persistent;
 
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.search.PersistentSearchService;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;
+import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.search.persistent.PersistentSearchResponse;
 import org.elasticsearch.tasks.Task;
@@ -29,11 +31,14 @@ import org.elasticsearch.transport.TransportService;
 
 public class TransportGetPersistentSearchAction extends HandledTransportAction<GetPersistentSearchRequest, PersistentSearchResponse> {
 
-    public TransportGetPersistentSearchAction(String actionName,
-                                              TransportService transportService,
+    private final PersistentSearchService persistentSearchService;
+
+    @Inject
+    public TransportGetPersistentSearchAction(TransportService transportService,
                                               ActionFilters actionFilters,
-                                              Writeable.Reader<GetPersistentSearchRequest> reader) {
-        super(actionName, transportService, actionFilters, reader);
+                                              PersistentSearchService persistentSearchService) {
+        super(GetPersistentSearchAction.NAME, transportService, actionFilters, GetPersistentSearchRequest::new);
+        this.persistentSearchService = persistentSearchService;
     }
 
     @Override

@@ -19,6 +19,8 @@
 
 package org.elasticsearch.action.search;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.StepListener;
@@ -52,6 +54,7 @@ public class PersistentSearchService {
     private final PersistentSearchStorageService searchStorageService;
     private final Executor executor;
     private final TransportService transportService;
+    private final Logger logger = LogManager.getLogger(PersistentSearchService.class);
 
     public PersistentSearchService(SearchService searchService,
                                    SearchPhaseController searchPhaseController,
@@ -74,6 +77,7 @@ public class PersistentSearchService {
         queryListener.whenComplete(result -> {
             final SearchResponse searchResponse = convertToSearchResponse((QueryFetchSearchResult) result,
                 searchService.aggReduceContextBuilder(shardSearchRequest.source()));
+            logger.info("Executed query + fetch request");
             final ShardId shardId = request.getShardSearchRequest().shardId();
             final String id = PersistentSearchResponse.generatePartialResultIdId(request.getAsyncSearchId(), shardId);
             final PersistentSearchResponse persistentSearchResponse = new PersistentSearchResponse(id, searchResponse);

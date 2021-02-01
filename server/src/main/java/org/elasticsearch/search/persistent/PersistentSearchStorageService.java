@@ -19,6 +19,8 @@
 
 package org.elasticsearch.search.persistent;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.ElasticsearchTimeoutException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.Version;
@@ -27,6 +29,7 @@ import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.get.GetResponse;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.index.IndexResponse;
+import org.elasticsearch.action.search.PersistentSearchService;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.action.support.TransportActions;
@@ -74,12 +77,11 @@ public class PersistentSearchStorageService {
                         .field("dynamic", "strict")
                         .startObject("properties")
                             .startObject(ID_FIELD)
-                            .field("type", "keyword")
-                            .field("enabled", "false")
-                        .endObject()
-                        .startObject(RESPONSE_FIELD)
-                            .field("type", "binary")
-                            .field("enabled", "false")
+                                .field("type", "keyword")
+                            .endObject()
+                            .startObject(RESPONSE_FIELD)
+                                .field("type", "binary")
+                            .endObject()
                         .endObject()
                     .endObject()
                 .endObject();
@@ -102,21 +104,22 @@ public class PersistentSearchStorageService {
     }
 
     private final Client client;
-    private final String index;
+    private final Logger logger = LogManager.getLogger(PersistentSearchService.class);
 
-    public PersistentSearchStorageService(Client client, String index) {
+    public PersistentSearchStorageService(Client client) {
         this.client = client;
-        this.index = index;
     }
 
     public void storeResult(PersistentSearchResponse persistentSearchResponse, ActionListener<Void> listener) {
         try {
-            final IndexRequest indexRequest = new IndexRequest(index)
+            final IndexRequest indexRequest = new IndexRequest(INDEX)
                 .id(persistentSearchResponse.getId());
 
+            logger.info("Storing {}", persistentSearchResponse.getSearchResponse());
             try (XContentBuilder builder = jsonBuilder()) {
                 indexRequest.source(persistentSearchResponse.toXContent(builder, ToXContent.EMPTY_PARAMS));
             }
+            logger.info("Response serialized");
             client.index(indexRequest, new ActionListener<>() {
                 @Override
                 public void onResponse(IndexResponse indexResponse) {
@@ -126,6 +129,7 @@ public class PersistentSearchStorageService {
                 @Override
                 public void onFailure(Exception e) {
                     listener.onFailure(e);
+                    logger.info("Error storing result", e);
                 }
             });
 
@@ -135,7 +139,7 @@ public class PersistentSearchStorageService {
     }
 
     public void getPersistentSearchResult(String id, ActionListener<PersistentSearchResponse> listener) {
-        final GetRequest getRequest = new GetRequest(index).id(id);
+        final GetRequest getRequest = new GetRequest(INDEX).id(id);
         client.get(getRequest, new ActionListener<>() {
             @Override
             public void onResponse(GetResponse getResponse) {

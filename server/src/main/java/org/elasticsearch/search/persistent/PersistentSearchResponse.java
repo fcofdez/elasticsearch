@@ -26,10 +26,9 @@ import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.xcontent.StatusToXContentObject;
+import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.index.shard.ShardId;
-import org.elasticsearch.rest.RestStatus;
 
 import java.io.IOException;
 import java.util.Map;
@@ -38,7 +37,7 @@ import static org.elasticsearch.search.persistent.PersistentSearchStorageService
 import static org.elasticsearch.search.persistent.PersistentSearchStorageService.ID_FIELD;
 import static org.elasticsearch.search.persistent.PersistentSearchStorageService.RESPONSE_FIELD;
 
-public class PersistentSearchResponse extends ActionResponse implements StatusToXContentObject {
+public class PersistentSearchResponse extends ActionResponse implements ToXContentObject {
     private final String id;
     private final SearchResponse searchResponse;
 
@@ -88,14 +87,8 @@ public class PersistentSearchResponse extends ActionResponse implements StatusTo
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-
-
-    }
-
-
-    @Override
-    public RestStatus status() {
-        return RestStatus.OK;
+        out.writeString(id);
+        searchResponse.writeTo(out);
     }
 
     @Override
@@ -104,7 +97,7 @@ public class PersistentSearchResponse extends ActionResponse implements StatusTo
         {
             builder.field(ID_FIELD, id);
             builder.field(RESPONSE_FIELD, encodeSearchResponse(searchResponse));
-            builder.field(EXPIRATION_TIME_FIELD, System.currentTimeMillis());
+            //builder.field(EXPIRATION_TIME_FIELD, System.currentTimeMillis());
             // TODO: Store queried shards?
         }
         return builder.endObject();

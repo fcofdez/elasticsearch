@@ -37,7 +37,6 @@ import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.persistent.PersistentSearchId;
@@ -62,28 +61,25 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
     private final ClusterService clusterService;
     private final RemoteClusterService remoteClusterService;
     private final IndexNameExpressionResolver indexNameExpressionResolver;
-    private final ShardSearchTargetResolver shardSearchTargetResolver;
+    private final SearchShardTargetResolver searchShardTargetResolver;
     private final SearchTransportService searchTransportService;
 
     @Inject
-    public TransportSubmitPersistentSearchAction(String actionName,
-                                                 TransportService transportService,
+    public TransportSubmitPersistentSearchAction(TransportService transportService,
                                                  ActionFilters actionFilters,
-                                                 Writeable.Reader<SearchRequest> searchRequestReader,
                                                  NodeClient nodeClient,
                                                  ThreadPool threadPool,
                                                  ClusterService clusterService,
-                                                 RemoteClusterService remoteClusterService,
                                                  IndexNameExpressionResolver indexNameExpressionResolver,
-                                                 ShardSearchTargetResolver shardSearchTargetResolver,
+                                                 SearchShardTargetResolver searchShardTargetResolver,
                                                  SearchTransportService searchTransportService) {
-        super(actionName, transportService, actionFilters, searchRequestReader);
+        super(SubmitPersistentSearchAction.NAME, transportService, actionFilters, SearchRequest::new);
         this.nodeClient = nodeClient;
         this.threadPool = threadPool;
         this.clusterService = clusterService;
-        this.remoteClusterService = remoteClusterService;
+        this.remoteClusterService = searchTransportService.getRemoteClusterService();
         this.indexNameExpressionResolver = indexNameExpressionResolver;
-        this.shardSearchTargetResolver = shardSearchTargetResolver;
+        this.searchShardTargetResolver = searchShardTargetResolver;
         this.searchTransportService = searchTransportService;
     }
 
@@ -116,8 +112,9 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
             persistentSearchDocId,
             searchTask,
             searchShards,
+            localIndices,
             1,
-            shardSearchTargetResolver,
+            searchShardTargetResolver,
             searchTransportService,
             threadPool,
             connectionProvider(),
