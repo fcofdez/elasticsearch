@@ -27,7 +27,11 @@ import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksRequest;
 import org.elasticsearch.action.admin.cluster.node.tasks.get.GetTaskAction;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchAction;
-import org.elasticsearch.action.search.persistent.ReducePersistentSearchAction;
+import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
+import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
+import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchAction;
+import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
+import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
 import org.elasticsearch.action.support.ChannelActionListener;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.client.OriginSettingClient;
@@ -47,9 +51,7 @@ import org.elasticsearch.search.fetch.QueryFetchSearchResult;
 import org.elasticsearch.search.fetch.ScrollQueryFetchSearchResult;
 import org.elasticsearch.search.fetch.ShardFetchRequest;
 import org.elasticsearch.search.fetch.ShardFetchSearchRequest;
-import org.elasticsearch.search.internal.AsyncShardSearchRequest;
 import org.elasticsearch.search.internal.InternalScrollSearchRequest;
-import org.elasticsearch.search.internal.ReducePartialResultsRequest;
 import org.elasticsearch.search.internal.ShardSearchContextId;
 import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.search.query.QuerySearchRequest;
@@ -158,16 +160,36 @@ public class SearchTransportService {
                 new ConnectionCountingHandler<>(listener, QuerySearchResult::new, clientConnections, connection.getNode().getId()));
     }
 
-    public void sendExecutePersistentQueryFetch(Transport.Connection connection, final AsyncShardSearchRequest request, SearchTask task,
-                                                final ActionListener<TransportResponse.Empty> listener) {
-        transportService.sendChildRequest(connection, ExecutePersistentQueryFetchAction.NAME, request, task,
-            new ConnectionCountingHandler<>(listener, (in) -> TransportResponse.Empty.INSTANCE, clientConnections, connection.getNode().getId()));
+    public void sendExecutePersistentQueryFetchRequest(Transport.Connection connection,
+                                                       final ExecutePersistentQueryFetchRequest request,
+                                                       SearchTask task,
+                                                       final ActionListener<ExecutePersistentQueryFetchResponse> listener) {
+        transportService.sendChildRequest(connection,
+            ExecutePersistentQueryFetchAction.NAME,
+            request,
+            task,
+            new ConnectionCountingHandler<>(listener,
+                ExecutePersistentQueryFetchResponse::new,
+                clientConnections,
+                connection.getNode().getId()
+            )
+        );
     }
 
-    public void sendExecutePartialReduce(Transport.Connection connection, final ReducePartialResultsRequest request, SearchTask task,
-                                         final ActionListener<TransportResponse.Empty> listener) {
-        transportService.sendChildRequest(connection, ReducePersistentSearchAction.NAME, request, task,
-            new ConnectionCountingHandler<>(listener, (in) -> TransportResponse.Empty.INSTANCE, clientConnections, connection.getNode().getId()));
+    public void sendExecutePartialReduceRequest(Transport.Connection connection,
+                                                final ReducePartialPersistentSearchRequest request,
+                                                SearchTask task,
+                                                final ActionListener<ReducePartialPersistentSearchResponse> listener) {
+        transportService.sendChildRequest(connection,
+            ReducePartialPersistentSearchAction.NAME,
+            request,
+            task,
+            new ConnectionCountingHandler<>(listener,
+                ReducePartialPersistentSearchResponse::new,
+                clientConnections,
+                connection.getNode().getId()
+            )
+        );
     }
 
     public void sendExecuteScrollQuery(Transport.Connection connection, final InternalScrollSearchRequest request, SearchTask task,

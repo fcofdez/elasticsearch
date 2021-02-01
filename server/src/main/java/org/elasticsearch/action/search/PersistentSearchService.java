@@ -22,15 +22,12 @@ package org.elasticsearch.action.search;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.StepListener;
-import org.elasticsearch.action.search.persistent.AsyncPersistentSearch;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
-import org.elasticsearch.search.persistent.PersistentSearchResponse;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
 import org.elasticsearch.common.CheckedSupplier;
 import org.elasticsearch.index.shard.ShardId;
-import org.elasticsearch.search.persistent.PersistentSearchStorageService;
 import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.aggregations.InternalAggregation;
@@ -39,6 +36,8 @@ import org.elasticsearch.search.fetch.QueryFetchSearchResult;
 import org.elasticsearch.search.internal.InternalSearchResponse;
 import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.search.internal.ShardSearchRequest;
+import org.elasticsearch.search.persistent.PersistentSearchResponse;
+import org.elasticsearch.search.persistent.PersistentSearchStorageService;
 import org.elasticsearch.transport.TransportService;
 
 import java.util.Collections;
@@ -73,8 +72,8 @@ public class PersistentSearchService {
 
         final ShardSearchRequest shardSearchRequest = request.getShardSearchRequest();
         queryListener.whenComplete(result -> {
-            final SearchResponse searchResponse =
-                convertToSearchResponse((QueryFetchSearchResult) result, searchService.aggReduceContextBuilder(shardSearchRequest.source()));
+            final SearchResponse searchResponse = convertToSearchResponse((QueryFetchSearchResult) result,
+                searchService.aggReduceContextBuilder(shardSearchRequest.source()));
             final ShardId shardId = request.getShardSearchRequest().shardId();
             final String id = PersistentSearchResponse.generatePartialResultIdId(request.getAsyncSearchId(), shardId);
             final PersistentSearchResponse persistentSearchResponse = new PersistentSearchResponse(id, searchResponse);

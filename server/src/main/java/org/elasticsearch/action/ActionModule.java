@@ -216,7 +216,7 @@ import org.elasticsearch.action.search.SearchAction;
 import org.elasticsearch.action.search.SearchScrollAction;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchAction;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchAction;
-import org.elasticsearch.action.search.persistent.ReducePersistentSearchAction;
+import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchAction;
 import org.elasticsearch.action.search.persistent.SubmitPersistentSearchAction;
 import org.elasticsearch.action.search.TransportClearScrollAction;
 import org.elasticsearch.action.search.TransportMultiSearchAction;
@@ -387,7 +387,6 @@ import org.elasticsearch.rest.action.search.RestSearchAction;
 import org.elasticsearch.rest.action.search.RestSearchScrollAction;
 import org.elasticsearch.rest.action.search.persistent.RestGetPersistentSearchAction;
 import org.elasticsearch.rest.action.search.persistent.RestSubmitPersistentSearchAction;
-import org.elasticsearch.search.internal.ReducePartialResultsRequest;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.usage.UsageService;
@@ -628,7 +627,7 @@ public class ActionModule extends AbstractModule {
         actions.register(SubmitPersistentSearchAction.INSTANCE, TransportSubmitPersistentSearchAction.class);
         actions.register(GetPersistentSearchAction.INSTANCE, TransportGetPersistentSearchAction.class);
         actions.register(ExecutePersistentQueryFetchAction.INSTANCE, TransportExecuteQueryFetchAction.class);
-        actions.register(ReducePersistentSearchAction.INSTANCE, TransportReducePartialPersistentSearch.class);
+        actions.register(ReducePartialPersistentSearchAction.INSTANCE, TransportReducePartialPersistentSearch.class);
 
         return unmodifiableMap(actions.getRegistry());
     }

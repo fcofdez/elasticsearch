@@ -34,12 +34,9 @@ import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.internal.AliasFilter;
-import org.elasticsearch.search.internal.AsyncShardSearchRequest;
-import org.elasticsearch.search.internal.ReducePartialResultsRequest;
 import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.Transport;
-import org.elasticsearch.transport.TransportResponse;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -129,9 +126,9 @@ public class AsyncPersistentSearch {
         searchRunning.compareAndSet(false, true);
     }
 
-    void onShardSuccess(SearchShard target) {
+    void onShardSuccess(SearchShard searchShard) {
         runningRequests.decrementAndGet();
-        reducePhaseBatcher.add(target);
+        reducePhaseBatcher.add(searchShard);
         if (shardCount.decrementAndGet() == 0) {
             onAllShardsQueried();
         } else {
@@ -166,12 +163,12 @@ public class AsyncPersistentSearch {
 
     }
 
-    void sendReduceRequest(ReducePartialResultsRequest request, ActionListener<Void> listener) {
+    void sendReduceRequest(ReducePartialPersistentSearchRequest request, ActionListener<Void> listener) {
         // For now, execute reduce requests in the coordinator node
         Transport.Connection connection = getConnection(null, null);
-        searchTransportService.sendExecutePartialReduce(connection, request, task, new ActionListener<>() {
+        searchTransportService.sendExecutePartialReduceRequest(connection, request, task, new ActionListener<>() {
             @Override
-            public void onResponse(TransportResponse.Empty empty) {
+            public void onResponse(ReducePartialPersistentSearchResponse response) {
                 listener.onResponse(null);
             }
 
@@ -185,13 +182,13 @@ public class AsyncPersistentSearch {
     void sendShardSearchRequest(final SearchShardTarget searchShardTarget, ActionListener<Void> listener) {
         ShardSearchRequest querySearchRequest =
             buildShardSearchRequest(searchShardTarget.getOriginalIndices(), searchShardTarget.getShardId());
-        final AsyncShardSearchRequest asyncShardSearchRequest =
-            new AsyncShardSearchRequest(asyncSearchId, querySearchRequest);
+        final ExecutePersistentQueryFetchRequest asyncShardSearchRequest =
+            new ExecutePersistentQueryFetchRequest(asyncSearchId, querySearchRequest);
 
         final Transport.Connection connection = getConnection(searchShardTarget.getClusterAlias(), searchShardTarget.getNodeId());
-        searchTransportService.sendExecutePersistentQueryFetch(connection, asyncShardSearchRequest, task, new ActionListener<>() {
+        searchTransportService.sendExecutePersistentQueryFetchRequest(connection, asyncShardSearchRequest, task, new ActionListener<>() {
             @Override
-            public void onResponse(TransportResponse.Empty empty) {
+            public void onResponse(ExecutePersistentQueryFetchResponse response) {
                 listener.onResponse(null);
             }
 
@@ -233,10 +230,6 @@ public class AsyncPersistentSearch {
         return System.currentTimeMillis();
     }
 
-    interface ShardSearchTargetResolver {
-        SearchShardIterator resolve(SearchShard shardSearchTarget);
-    }
-
     // Takes care of run a QUERY + FETCH for a particular shard
     class AsyncSearchShard implements Comparable<AsyncSearchShard> {
         private final SearchShard searchShard;
@@ -245,7 +238,7 @@ public class AsyncPersistentSearch {
         private ActionListener<SearchShard> listener = null;
         private int retryCount = 0;
 
-        public AsyncSearchShard(SearchShard searchShard) {
+        AsyncSearchShard(SearchShard searchShard) {
             this.searchShard = searchShard;
         }
 
@@ -350,12 +343,12 @@ public class AsyncPersistentSearch {
     class ReducePhaseBatcher {
         private final int SHARDS_PER_REDUCE = 5;
         private final PriorityQueue<SearchShard> pendingShardsToReduce = new PriorityQueue<>();
-        private final AtomicReference<ReducePartialResultsRequest> runningReduce = new AtomicReference<>(null);
+        private final AtomicReference<ReducePartialPersistentSearchRequest> runningReduce = new AtomicReference<>(null);
         private boolean completed = false;
         private final AtomicInteger numberOfShardsToReduce;
         private final Runnable onFinish;
 
-        public ReducePhaseBatcher(int numberOfShardsToReduce, Runnable onFinish) {
+        ReducePhaseBatcher(int numberOfShardsToReduce, Runnable onFinish) {
             this.numberOfShardsToReduce = new AtomicInteger(numberOfShardsToReduce);
             this.onFinish = onFinish;
         }
@@ -390,8 +383,8 @@ public class AsyncPersistentSearch {
                 return;
             }
 
-            final ReducePartialResultsRequest reducePartialResultsRequest =
-                new ReducePartialResultsRequest(asyncSearchId, shards, searchRequest);
+            final ReducePartialPersistentSearchRequest reducePartialResultsRequest =
+                new ReducePartialPersistentSearchRequest(asyncSearchId, shards, searchRequest);
             final boolean exchanged = runningReduce.compareAndSet(null, reducePartialResultsRequest);
             assert exchanged;
 

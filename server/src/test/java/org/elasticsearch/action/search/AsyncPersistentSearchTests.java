@@ -19,11 +19,14 @@
 
 package org.elasticsearch.action.search;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.search.persistent.AsyncPersistentSearch;
+import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
+import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
+import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
+import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
+import org.elasticsearch.action.search.persistent.ShardSearchTargetResolver;
 import org.elasticsearch.cluster.routing.RecoverySource;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.routing.ShardRoutingHelper;
@@ -34,14 +37,11 @@ import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.index.shard.ShardId;
-import org.elasticsearch.search.internal.AsyncShardSearchRequest;
-import org.elasticsearch.search.internal.ReducePartialResultsRequest;
 import org.elasticsearch.tasks.TaskId;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.Transport;
-import org.elasticsearch.transport.TransportResponse;
 import org.junit.After;
 import org.junit.Before;
 
@@ -54,7 +54,6 @@ import java.util.concurrent.TimeUnit;
 import static org.hamcrest.core.IsEqual.equalTo;
 
 public class AsyncPersistentSearchTests extends ESTestCase {
-
     private ThreadPool threadPool;
     private ClusterService clusterService;
 
@@ -64,7 +63,6 @@ public class AsyncPersistentSearchTests extends ESTestCase {
         threadPool = new TestThreadPool(getTestName());
         clusterService = new ClusterService(Settings.EMPTY,
             new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS), null);
-
     }
 
     @After
@@ -75,64 +73,59 @@ public class AsyncPersistentSearchTests extends ESTestCase {
     }
 
     static class FakeSearchTransportService extends SearchTransportService {
-        private final Logger logger = LogManager.getLogger(FakeSearchTransportService.class);
-        final List<ActionListener<TransportResponse.Empty>> pendingQueries = new ArrayList<>();
-        final List<ActionListener<TransportResponse.Empty>> pendingReduces = new ArrayList<>();
+        final List<ActionListener<ExecutePersistentQueryFetchResponse>> pendingQueries = new ArrayList<>();
+        final List<ActionListener<ReducePartialPersistentSearchResponse>> pendingReduces = new ArrayList<>();
         private final Executor executor;
 
-        public FakeSearchTransportService(Executor executor) {
+        FakeSearchTransportService(Executor executor) {
             super(null, null, null);
             this.executor = executor;
         }
 
         @Override
-        public synchronized void sendExecutePersistentQueryFetch(Transport.Connection connection,
-                                                                 AsyncShardSearchRequest request,
-                                                                 SearchTask task,
-                                                                 ActionListener<TransportResponse.Empty> listener) {
+        public void sendExecutePersistentQueryFetchRequest(Transport.Connection connection,
+                                                           ExecutePersistentQueryFetchRequest request,
+                                                           SearchTask task,
+                                                           ActionListener<ExecutePersistentQueryFetchResponse> listener) {
             pendingQueries.add(listener);
         }
 
         void releaseQueryListeners() {
-            List<ActionListener<TransportResponse.Empty>> copy = new ArrayList<>(pendingQueries);
+            List<ActionListener<ExecutePersistentQueryFetchResponse>> copy = new ArrayList<>(pendingQueries);
             pendingQueries.clear();
             executor.execute(() -> {
-                for (ActionListener<TransportResponse.Empty> pendingQuery : copy) {
-                    pendingQuery.onResponse(TransportResponse.Empty.INSTANCE);
+                for (ActionListener<ExecutePersistentQueryFetchResponse> pendingQuery : copy) {
+                    pendingQuery.onResponse(new ExecutePersistentQueryFetchResponse());
                 }
             });
         }
 
         void releaseQueryListenersWithError() {
-            List<ActionListener<TransportResponse.Empty>> copy = new ArrayList<>(pendingQueries);
+            List<ActionListener<ExecutePersistentQueryFetchResponse>> copy = new ArrayList<>(pendingQueries);
             pendingQueries.clear();
             executor.execute(() -> {
-                for (ActionListener<TransportResponse.Empty> pendingQuery : copy) {
+                for (ActionListener<ExecutePersistentQueryFetchResponse> pendingQuery : copy) {
                     pendingQuery.onFailure(new EsRejectedExecutionException());
                 }
             });
         }
 
-
-        void releaseReduceListeners() {
-            List<ActionListener<TransportResponse.Empty>> copy = new ArrayList<>(pendingReduces);
-            pendingReduces.clear();
-            executor.execute(() -> {
-                for (ActionListener<TransportResponse.Empty> pendingReduce : copy) {
-                    pendingReduce.onResponse(TransportResponse.Empty.INSTANCE);
-                }
-            });
+        @Override
+        public void sendExecutePartialReduceRequest(Transport.Connection connection,
+                                                    ReducePartialPersistentSearchRequest request,
+                                                    SearchTask task,
+                                                    ActionListener<ReducePartialPersistentSearchResponse> listener) {
+            pendingReduces.add(listener);
         }
 
-
-
-        @Override
-        public void sendExecutePartialReduce(Transport.Connection connection,
-                                             ReducePartialResultsRequest request,
-                                             SearchTask task,
-                                             ActionListener<TransportResponse.Empty> listener) {
-            pendingReduces.add(listener);
-            //listener.onResponse(TransportResponse.Empty.INSTANCE);
+        void releaseReduceListeners() {
+            List<ActionListener<ReducePartialPersistentSearchResponse>> copy = new ArrayList<>(pendingReduces);
+            pendingReduces.clear();
+            executor.execute(() -> {
+                for (ActionListener<ReducePartialPersistentSearchResponse> pendingReduce : copy) {
+                    pendingReduce.onResponse(new ReducePartialPersistentSearchResponse(List.of()));
+                }
+            });
         }
     }
 
@@ -146,7 +139,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             searchShards.add(new SearchShard(null, new ShardId("index", "_na_", i)));
         }
 
-        AsyncPersistentSearch.ShardSearchTargetResolver resolver = shardSearchTarget -> {
+        ShardSearchTargetResolver resolver = shardSearchTarget -> {
             final ShardId shardId = shardSearchTarget.getShardId();
             ShardRouting shardRouting = ShardRouting.newUnassigned(shardId, true, RecoverySource.EmptyStoreRecoverySource.INSTANCE,
                 new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, ""));
@@ -191,7 +184,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             searchShards.add(new SearchShard(null, new ShardId("index", "_na_", i)));
         }
 
-        AsyncPersistentSearch.ShardSearchTargetResolver resolver = shardSearchTarget -> {
+        ShardSearchTargetResolver resolver = shardSearchTarget -> {
             final ShardId shardId = shardSearchTarget.getShardId();
             ShardRouting shardRouting = ShardRouting.newUnassigned(shardId, true, RecoverySource.EmptyStoreRecoverySource.INSTANCE,
                 new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, ""));
@@ -232,7 +225,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             searchShards.add(new SearchShard(null, new ShardId("index", "_na_", i)));
         }
 
-        AsyncPersistentSearch.ShardSearchTargetResolver resolver = shardSearchTarget -> {
+        ShardSearchTargetResolver resolver = shardSearchTarget -> {
             final ShardId shardId = shardSearchTarget.getShardId();
             ShardRouting shardRouting = ShardRouting.newUnassigned(shardId, true, RecoverySource.EmptyStoreRecoverySource.INSTANCE,
                 new UnassignedInfo(UnassignedInfo.Reason.INDEX_CREATED, ""));

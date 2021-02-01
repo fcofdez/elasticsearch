@@ -19,13 +19,9 @@
 
 package org.elasticsearch.action.search.persistent;
 
-import org.elasticsearch.action.ActionType;
+import org.elasticsearch.action.search.SearchShard;
+import org.elasticsearch.action.search.SearchShardIterator;
 
-public class ReducePersistentSearchAction extends ActionType<ReducePartialPersistentSearchResponse> {
-    public static String NAME = "indices:data/read/persistent_search[phase/reduce]";
-    public static ReducePersistentSearchAction INSTANCE = new ReducePersistentSearchAction();
-
-    public ReducePersistentSearchAction() {
-        super(NAME, ReducePartialPersistentSearchResponse::new);
-    }
+public interface ShardSearchTargetResolver {
+    SearchShardIterator resolve(SearchShard shardSearchTarget);
 }

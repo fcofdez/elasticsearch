@@ -62,7 +62,7 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
     private final ClusterService clusterService;
     private final RemoteClusterService remoteClusterService;
     private final IndexNameExpressionResolver indexNameExpressionResolver;
-    private final AsyncPersistentSearch.ShardSearchTargetResolver shardSearchTargetResolver;
+    private final ShardSearchTargetResolver shardSearchTargetResolver;
     private final SearchTransportService searchTransportService;
 
     @Inject
@@ -75,7 +75,7 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
                                                  ClusterService clusterService,
                                                  RemoteClusterService remoteClusterService,
                                                  IndexNameExpressionResolver indexNameExpressionResolver,
-                                                 AsyncPersistentSearch.ShardSearchTargetResolver shardSearchTargetResolver,
+                                                 ShardSearchTargetResolver shardSearchTargetResolver,
                                                  SearchTransportService searchTransportService) {
         super(actionName, transportService, actionFilters, searchRequestReader);
         this.nodeClient = nodeClient;
