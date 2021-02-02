@@ -21,11 +21,9 @@ package org.elasticsearch.action.search.persistent;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.search.PersistentSearchService;
-import org.elasticsearch.action.search.SearchShardTask;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.transport.TransportService;
 
@@ -46,6 +44,6 @@ public class TransportReducePartialPersistentSearch extends HandledTransportActi
     protected void doExecute(Task task,
                              ReducePartialPersistentSearchRequest request,
                              ActionListener<ReducePartialPersistentSearchResponse> listener) {
-        persistentSearchService.executePartialReduce(request, (SearchShardTask) task, listener);
+        persistentSearchService.executePartialReduce(request, null, listener);
     }
 }

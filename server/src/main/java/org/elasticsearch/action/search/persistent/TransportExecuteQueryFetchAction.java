@@ -25,7 +25,6 @@ import org.elasticsearch.action.search.SearchShardTask;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.transport.TransportService;
 
@@ -47,8 +46,9 @@ public class TransportExecuteQueryFetchAction extends HandledTransportAction<Exe
                              ExecutePersistentQueryFetchRequest request,
                              ActionListener<ExecutePersistentQueryFetchResponse> listener) {
         try {
-            logger.info("Received request");
-            final SearchShardTask searchShardTask = new SearchShardTask(task.getId(), "asd", "asd", "asd", task.getParentTaskId(), task.headers());
+            // TODO: fix this
+            final SearchShardTask searchShardTask =
+                new SearchShardTask(task.getId(), "asd", "asd", "asd", task.getParentTaskId(), task.headers());
             persistentSearchService.executeAsyncQueryPhase(request, searchShardTask, listener);
         } catch (Exception e) {
             logger.info("Error!! ", e);

@@ -39,6 +39,10 @@ public class GetPersistentSearchRequest extends ActionRequest {
         this.id = in.readString();
     }
 
+    public String getId() {
+        return id;
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);

@@ -188,7 +188,6 @@ public class AsyncPersistentSearch {
             new ExecutePersistentQueryFetchRequest(asyncSearchId, querySearchRequest);
 
         final Transport.Connection connection = getConnection(searchShardTarget.getClusterAlias(), searchShardTarget.getNodeId());
-        logger.info("Actually sending the request");
         searchTransportService.sendExecutePersistentQueryFetchRequest(connection, asyncShardSearchRequest, task, new ActionListener<>() {
             @Override
             public void onResponse(ExecutePersistentQueryFetchResponse response) {
@@ -197,7 +196,6 @@ public class AsyncPersistentSearch {
 
             @Override
             public void onFailure(Exception e) {
-                logger.info("Error sending the request", e);
                 listener.onFailure(e);
             }
         });
@@ -253,7 +251,6 @@ public class AsyncPersistentSearch {
         }
 
         void doExecute() {
-            logger.info("Executing query for shard {}", searchShard);
             if (searchRunning.get() == false) {
                 clear();
                 return;
@@ -347,10 +344,12 @@ public class AsyncPersistentSearch {
         private final AtomicReference<ReducePartialPersistentSearchRequest> runningReduce = new AtomicReference<>(null);
         private boolean completed = false;
         private final AtomicInteger numberOfShardsToReduce;
+        private final AtomicInteger shardToReduceCount;
         private final Runnable onFinish;
 
         ReducePhaseBatcher(int numberOfShardsToReduce, Runnable onFinish) {
             this.numberOfShardsToReduce = new AtomicInteger(numberOfShardsToReduce);
+            this.shardToReduceCount = new AtomicInteger(numberOfShardsToReduce);
             this.onFinish = onFinish;
         }
 
@@ -385,7 +384,7 @@ public class AsyncPersistentSearch {
             }
 
             final ReducePartialPersistentSearchRequest reducePartialResultsRequest =
-                new ReducePartialPersistentSearchRequest(asyncSearchId, shards, searchRequest);
+                new ReducePartialPersistentSearchRequest(asyncSearchId, shards, searchRequest, shardToReduceCount.get() == shards.size());
             final boolean exchanged = runningReduce.compareAndSet(null, reducePartialResultsRequest);
             assert exchanged;
 
@@ -393,6 +392,7 @@ public class AsyncPersistentSearch {
                 @Override
                 public void onResponse(Void unused) {
                     runningReduce.compareAndSet(reducePartialResultsRequest, null);
+                    shardToReduceCount.addAndGet(-shards.size());
                     onShardsReduced(shards);
                     // Keep track of reduced shards
                     // TODO: This is executed in a IO thread, we shouldn't block there?
@@ -405,6 +405,7 @@ public class AsyncPersistentSearch {
 
                 @Override
                 public void onFailure(Exception e) {
+                    logger.debug("Reduce failure", e);
                     runningReduce.compareAndSet(reducePartialResultsRequest, null);
                     // TODO: Inspect error and maybe retry somewhere else?
                     // TODO: Store the error somewhere

@@ -384,8 +384,9 @@ final class SearchResponseMerger {
         private final String clusterAlias;
 
         ShardIdAndClusterAlias(ShardId shardId, String clusterAlias) {
+            // TODO: SearchResponseMerger is designed to merge responses from multiple clusters
             this.shardId = shardId;
-            assert clusterAlias != null : "clusterAlias is null";
+//            assert clusterAlias != null : "clusterAlias is null";
             this.clusterAlias = clusterAlias;
         }
 
@@ -409,11 +410,14 @@ final class SearchResponseMerger {
 
         @Override
         public int compareTo(ShardIdAndClusterAlias o) {
-            int shardIdCompareTo = shardId.compareTo(o.shardId);
-            if (shardIdCompareTo != 0) {
-                return shardIdCompareTo;
-            }
-            return clusterAlias.compareTo(o.clusterAlias);
+            // TODO: SearchResponseMerger is designed to merge responses from multiple clusters, we're using it temporarily to merge
+            //       partial results
+            return shardId.compareTo(o.shardId);
+//            int shardIdCompareTo = shardId.compareTo(o.shardId);
+//            if (shardIdCompareTo != 0) {
+//                return shardIdCompareTo;
+//            }
+//            return clusterAlias.compareTo(o.clusterAlias);
         }
     }
 }

@@ -26,9 +26,11 @@ import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.StepListener;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
+import org.elasticsearch.action.search.persistent.GetPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
 import org.elasticsearch.common.CheckedSupplier;
+import org.elasticsearch.common.lucene.search.TopDocsAndMaxScore;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchService;
@@ -40,32 +42,33 @@ import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.search.persistent.PersistentSearchResponse;
 import org.elasticsearch.search.persistent.PersistentSearchStorageService;
-import org.elasticsearch.transport.TransportService;
 
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
 
-import static java.util.Collections.emptyList;
+import static org.elasticsearch.action.search.SearchPhaseController.setShardIndex;
 
 public class PersistentSearchService {
     private final SearchService searchService;
     private final SearchPhaseController searchPhaseController;
     private final PersistentSearchStorageService searchStorageService;
     private final Executor executor;
-    private final TransportService transportService;
     private final Logger logger = LogManager.getLogger(PersistentSearchService.class);
 
     public PersistentSearchService(SearchService searchService,
                                    SearchPhaseController searchPhaseController,
                                    PersistentSearchStorageService searchStorageService,
-                                   Executor executor,
-                                   TransportService transportService) {
+                                   Executor executor) {
         this.searchService = searchService;
         this.searchPhaseController = searchPhaseController;
         this.searchStorageService = searchStorageService;
         this.executor = executor;
-        this.transportService = transportService;
+    }
+
+    public void getPersistentSearchResponse(GetPersistentSearchRequest getPersistentSearchRequest,
+                                            ActionListener<PersistentSearchResponse> listener) {
+        searchStorageService.getPersistentSearchResult(getPersistentSearchRequest.getId(), listener);
     }
 
     public void executeAsyncQueryPhase(ExecutePersistentQueryFetchRequest request,
@@ -77,7 +80,7 @@ public class PersistentSearchService {
         queryListener.whenComplete(result -> {
             final SearchResponse searchResponse = convertToSearchResponse((QueryFetchSearchResult) result,
                 searchService.aggReduceContextBuilder(shardSearchRequest.source()));
-            logger.info("Executed query + fetch request");
+
             final ShardId shardId = request.getShardSearchRequest().shardId();
             final String id = PersistentSearchResponse.generatePartialResultIdId(request.getAsyncSearchId(), shardId);
             final PersistentSearchResponse persistentSearchResponse = new PersistentSearchResponse(id, searchResponse);
@@ -105,7 +108,7 @@ public class PersistentSearchService {
                     SearchService.DEFAULT_FROM,
                     SearchService.DEFAULT_SIZE,
                     SearchContext.DEFAULT_TRACK_TOTAL_HITS_UP_TO,
-                    // TODO: Check why this is important, we might need to pass the values around
+                    // TODO: pass the values around, but... this can be challenging if clocks are out of sync
                     new TransportSearchAction.SearchTimeProvider(0, 0, () -> 1L),
                     searchPhaseController.getReduceContext(request.getOriginalRequest())
                 );
@@ -148,8 +151,10 @@ public class PersistentSearchService {
             try {
                 final SearchResponse partialResult
                     = searchStorageService.getPartialResult(partialResultId);
+
                 searchResponseMerger.add(partialResult);
             } catch (Exception e) {
+                logger.info("ERROR!!", e);
                 // Ignore if not exists for now...
             }
         }
@@ -159,11 +164,15 @@ public class PersistentSearchService {
 
     private SearchResponse convertToSearchResponse(QueryFetchSearchResult result,
                                                    InternalAggregation.ReduceContextBuilder aggReduceContextBuilder) {
-        SearchPhaseController.TopDocsStats topDocsStats = new SearchPhaseController.TopDocsStats(0);
+        SearchPhaseController.TopDocsStats topDocsStats = new SearchPhaseController.TopDocsStats(10);
+        topDocsStats.add(result.queryResult().topDocs(), false, false);
+        TopDocsAndMaxScore topDocs = result.queryResult().consumeTopDocs();
+        setShardIndex(topDocs.topDocs, 0);
+
         final SearchPhaseController.ReducedQueryPhase reducedQueryPhase =
             SearchPhaseController.reducedQueryPhase(Collections.singletonList(result),
-                emptyList(),
-                emptyList(),
+                Collections.singletonList(result.queryResult().aggregations().expand()),
+                Collections.singletonList(topDocs.topDocs),
                 topDocsStats,
                 0,
                 false,

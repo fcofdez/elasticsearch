@@ -19,11 +19,12 @@
 
 package org.elasticsearch.search.persistent;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
+import org.elasticsearch.common.io.stream.NamedWriteableAwareStreamInput;
+import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.ToXContentObject;
@@ -31,9 +32,10 @@ import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.index.shard.ShardId;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.Base64;
 import java.util.Map;
 
-import static org.elasticsearch.search.persistent.PersistentSearchStorageService.EXPIRATION_TIME_FIELD;
 import static org.elasticsearch.search.persistent.PersistentSearchStorageService.ID_FIELD;
 import static org.elasticsearch.search.persistent.PersistentSearchStorageService.RESPONSE_FIELD;
 
@@ -66,17 +68,20 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
         return String.join("/", searchId, index, Integer.toString(shardId.getId()));
     }
 
-    public static PersistentSearchResponse fromXContent(final Map<String, Object> source) throws Exception {
+    public static PersistentSearchResponse fromXContent(final Map<String, Object> source,
+                                                        NamedWriteableRegistry namedWriteableRegistry) throws Exception {
         final String searchId = (String) source.get(ID_FIELD);
         if (searchId == null) {
             throw invalidDoc(ID_FIELD);
         }
 
-        final BytesReference queryResult = (BytesReference) source.get(RESPONSE_FIELD);
-        if (queryResult == null) {
+        final String encodedSearchResponse = (String) source.get(RESPONSE_FIELD);
+        if (encodedSearchResponse == null) {
             throw invalidDoc(RESPONSE_FIELD);
         }
-        SearchResponse searchResponse = decodeSearchResponse(queryResult);
+        final byte[] jsonSearchResponse = Base64.getDecoder().decode(encodedSearchResponse);
+        final BytesReference encodedQuerySearchResult = BytesReference.fromByteBuffer(ByteBuffer.wrap(jsonSearchResponse));
+        SearchResponse searchResponse = decodeSearchResponse(encodedQuerySearchResult, namedWriteableRegistry);
 
         return new PersistentSearchResponse(searchId, searchResponse);
     }
@@ -106,14 +111,14 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
     private BytesReference encodeSearchResponse(SearchResponse searchResponse) throws IOException {
         // TODO: introduce circuit breaker
         try (BytesStreamOutput out = new BytesStreamOutput()) {
-            Version.writeVersion(Version.CURRENT, out);
             searchResponse.writeTo(out);
             return out.bytes();
         }
     }
 
-    private static SearchResponse decodeSearchResponse(BytesReference encodedQuerySearchResult) throws Exception {
-        try (StreamInput in = encodedQuerySearchResult.streamInput()) {
+    private static SearchResponse decodeSearchResponse(BytesReference encodedQuerySearchResult,
+                                                       NamedWriteableRegistry namedWriteableRegistry) throws Exception {
+        try (StreamInput in = new NamedWriteableAwareStreamInput(encodedQuerySearchResult.streamInput(), namedWriteableRegistry)) {
             return new SearchResponse(in);
         }
     }

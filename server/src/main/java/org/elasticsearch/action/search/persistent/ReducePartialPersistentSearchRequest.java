@@ -35,11 +35,14 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
     private final SearchRequest originalRequest;
     private final boolean executeFinalReduce;
 
-    public ReducePartialPersistentSearchRequest(String searchId, List<SearchShard> shardsToReduce, SearchRequest originalRequest) {
+    public ReducePartialPersistentSearchRequest(String searchId,
+                                                List<SearchShard> shardsToReduce,
+                                                SearchRequest originalRequest,
+                                                boolean executeFinalReduce) {
         this.searchId = searchId;
         this.shardsToReduce = shardsToReduce;
         this.originalRequest = originalRequest;
-        this.executeFinalReduce = false;
+        this.executeFinalReduce = executeFinalReduce;
     }
 
     public ReducePartialPersistentSearchRequest(StreamInput in) throws IOException {
@@ -60,6 +63,10 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
 
     public SearchRequest getOriginalRequest() {
         return originalRequest;
+    }
+
+    public boolean isFinalReduce() {
+        return executeFinalReduce;
     }
 
     @Override

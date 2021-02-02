@@ -24,7 +24,6 @@ import org.elasticsearch.action.search.PersistentSearchService;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;
 import org.elasticsearch.common.inject.Inject;
-import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.search.persistent.PersistentSearchResponse;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.transport.TransportService;
@@ -43,6 +42,6 @@ public class TransportGetPersistentSearchAction extends HandledTransportAction<G
 
     @Override
     protected void doExecute(Task task, GetPersistentSearchRequest request, ActionListener<PersistentSearchResponse> listener) {
-
+        persistentSearchService.getPersistentSearchResponse(request, listener);
     }
 }

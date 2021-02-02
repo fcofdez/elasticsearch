@@ -36,6 +36,7 @@ import org.elasticsearch.action.support.TransportActions;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
+import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
@@ -104,10 +105,12 @@ public class PersistentSearchStorageService {
     }
 
     private final Client client;
+    private final NamedWriteableRegistry namedWriteableRegistry;
     private final Logger logger = LogManager.getLogger(PersistentSearchService.class);
 
-    public PersistentSearchStorageService(Client client) {
+    public PersistentSearchStorageService(Client client, NamedWriteableRegistry namedWriteableRegistry) {
         this.client = client;
+        this.namedWriteableRegistry = namedWriteableRegistry;
     }
 
     public void storeResult(PersistentSearchResponse persistentSearchResponse, ActionListener<Void> listener) {
@@ -115,11 +118,9 @@ public class PersistentSearchStorageService {
             final IndexRequest indexRequest = new IndexRequest(INDEX)
                 .id(persistentSearchResponse.getId());
 
-            logger.info("Storing {}", persistentSearchResponse.getSearchResponse());
             try (XContentBuilder builder = jsonBuilder()) {
                 indexRequest.source(persistentSearchResponse.toXContent(builder, ToXContent.EMPTY_PARAMS));
             }
-            logger.info("Response serialized");
             client.index(indexRequest, new ActionListener<>() {
                 @Override
                 public void onResponse(IndexResponse indexResponse) {
@@ -144,13 +145,15 @@ public class PersistentSearchStorageService {
             @Override
             public void onResponse(GetResponse getResponse) {
                 if (getResponse.isSourceEmpty()) {
-                    listener.onFailure(new RuntimeException("Unable to find partial shard result with value"));
+                    // TODO: handle the base case
+                    listener.onResponse(null);
+                    //listener.onFailure(new RuntimeException("Unable to find partial shard result with value"));
                     return;
                 }
 
                 try {
                     final PersistentSearchResponse persistentSearchResponse =
-                        PersistentSearchResponse.fromXContent(getResponse.getSource());
+                        PersistentSearchResponse.fromXContent(getResponse.getSource(), namedWriteableRegistry);
                     listener.onResponse(persistentSearchResponse);
                 } catch (Exception e) {
                     listener.onFailure(e);
