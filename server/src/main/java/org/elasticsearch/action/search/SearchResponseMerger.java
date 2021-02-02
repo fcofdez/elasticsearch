@@ -82,14 +82,21 @@ final class SearchResponseMerger {
     private final SearchTimeProvider searchTimeProvider;
     private final InternalAggregation.ReduceContextBuilder aggReduceContextBuilder;
     private final List<SearchResponse> searchResponses = new CopyOnWriteArrayList<>();
+    private final boolean executeFinalReduce;
 
     SearchResponseMerger(int from, int size, int trackTotalHitsUpTo, SearchTimeProvider searchTimeProvider,
                          InternalAggregation.ReduceContextBuilder aggReduceContextBuilder) {
+        this(from, size, trackTotalHitsUpTo, searchTimeProvider, aggReduceContextBuilder, false);
+    }
+
+    SearchResponseMerger(int from, int size, int trackTotalHitsUpTo, SearchTimeProvider searchTimeProvider,
+                         InternalAggregation.ReduceContextBuilder aggReduceContextBuilder, boolean executeFinalReduce) {
         this.from = from;
         this.size = size;
         this.trackTotalHitsUpTo = trackTotalHitsUpTo;
         this.searchTimeProvider = Objects.requireNonNull(searchTimeProvider);
         this.aggReduceContextBuilder = Objects.requireNonNull(aggReduceContextBuilder);
+        this.executeFinalReduce = executeFinalReduce;
     }
 
     /**
@@ -195,7 +202,8 @@ final class SearchResponseMerger {
         SearchHits mergedSearchHits = topDocsToSearchHits(topDocs, topDocsStats);
         setSuggestShardIndex(shards, groupedSuggestions);
         Suggest suggest = groupedSuggestions.isEmpty() ? null : new Suggest(Suggest.reduce(groupedSuggestions));
-        InternalAggregations reducedAggs = InternalAggregations.topLevelReduce(aggs, aggReduceContextBuilder.forFinalReduction());
+        InternalAggregations reducedAggs = InternalAggregations.topLevelReduce(aggs,
+            executeFinalReduce ? aggReduceContextBuilder.forFinalReduction() : aggReduceContextBuilder.forPartialReduction());
         ShardSearchFailure[] shardFailures = failures.toArray(ShardSearchFailure.EMPTY_ARRAY);
         SearchProfileShardResults profileShardResults = profileResults.isEmpty() ? null : new SearchProfileShardResults(profileResults);
         //make failures ordering consistent between ordinary search and CCS by looking at the shard they come from

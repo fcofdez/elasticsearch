@@ -23,11 +23,16 @@ import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchShard;
+import org.elasticsearch.action.search.SearchShardTask;
+import org.elasticsearch.action.search.SearchTask;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.tasks.Task;
+import org.elasticsearch.tasks.TaskId;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 public class ReducePartialPersistentSearchRequest extends ActionRequest {
     private final String searchId;
@@ -76,6 +81,11 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
         out.writeList(shardsToReduce);
         originalRequest.writeTo(out);
         out.writeBoolean(executeFinalReduce);
+    }
+
+    @Override
+    public Task createTask(long id, String type, String action, TaskId parentTaskId, Map<String, String> headers) {
+        return new SearchTask(id, type, action, this::getDescription, parentTaskId, headers);
     }
 
     @Override

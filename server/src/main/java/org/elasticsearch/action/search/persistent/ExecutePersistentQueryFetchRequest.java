@@ -24,8 +24,11 @@ import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.search.internal.ShardSearchRequest;
+import org.elasticsearch.tasks.Task;
+import org.elasticsearch.tasks.TaskId;
 
 import java.io.IOException;
+import java.util.Map;
 
 public class ExecutePersistentQueryFetchRequest extends ActionRequest {
     private final String asyncSearchId;
@@ -60,5 +63,10 @@ public class ExecutePersistentQueryFetchRequest extends ActionRequest {
         super.writeTo(out);
         out.writeString(asyncSearchId);
         shardSearchRequest.writeTo(out);
+    }
+
+    @Override
+    public Task createTask(long id, String type, String action, TaskId parentTaskId, Map<String, String> headers) {
+        return shardSearchRequest.createTask(id, type, action, parentTaskId, headers);
     }
 }

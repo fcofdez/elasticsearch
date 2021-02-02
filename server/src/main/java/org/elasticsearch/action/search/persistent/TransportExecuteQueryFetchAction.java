@@ -45,13 +45,6 @@ public class TransportExecuteQueryFetchAction extends HandledTransportAction<Exe
     protected void doExecute(Task task,
                              ExecutePersistentQueryFetchRequest request,
                              ActionListener<ExecutePersistentQueryFetchResponse> listener) {
-        try {
-            // TODO: fix this
-            final SearchShardTask searchShardTask =
-                new SearchShardTask(task.getId(), "asd", "asd", "asd", task.getParentTaskId(), task.headers());
-            persistentSearchService.executeAsyncQueryPhase(request, searchShardTask, listener);
-        } catch (Exception e) {
-            logger.info("Error!! ", e);
-        }
+        persistentSearchService.executeAsyncQueryPhase(request, (SearchShardTask) task, listener);
     }
 }

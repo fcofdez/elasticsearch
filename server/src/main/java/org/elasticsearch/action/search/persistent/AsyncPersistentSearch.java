@@ -64,6 +64,7 @@ public class AsyncPersistentSearch {
     private final AtomicBoolean searchRunning = new AtomicBoolean(true);
     private final ReducePhaseBatcher reducePhaseBatcher;
     private final AtomicInteger shardCount;
+    private final int numberOfShards;
     private final Logger logger = LogManager.getLogger(AsyncPersistentSearch.class);
 
     public AsyncPersistentSearch(SearchRequest searchRequest,
@@ -93,8 +94,9 @@ public class AsyncPersistentSearch {
         this.threadPool = threadPool;
         this.connectionProvider = connectionProvider;
         this.shardCount = new AtomicInteger(searchShards.size());
-        this.reducePhaseBatcher = new ReducePhaseBatcher(5, this::onReduceSuccess);
         this.clusterService = clusterService;
+        this.numberOfShards = searchShards.size();
+        this.reducePhaseBatcher = new ReducePhaseBatcher(5, searchShards.size(), this::onReduceSuccess);
     }
 
     public String getId() {
@@ -206,20 +208,21 @@ public class AsyncPersistentSearch {
     }
 
     public final ShardSearchRequest buildShardSearchRequest(OriginalIndices originalIndices, ShardId shardId) {
+        // TODO: Handle AliasFilter
         AliasFilter filter = AliasFilter.EMPTY;
-        float indexBoost = 1.0f;
-        ShardSearchRequest shardRequest =
-            new ShardSearchRequest(originalIndices,
-                searchRequest,
-                shardId,
-                0,
-                1, //Hardcoded so the optimization of query + fetch is triggered
-                filter,
-                indexBoost,
-                getAbsoluteStartMillis(),
-                null,
-                null,
-                null);
+        ShardSearchRequest shardRequest = new ShardSearchRequest(
+            originalIndices,
+            searchRequest,
+            shardId,
+            0,
+            1, //Hardcoded so the optimization of query + fetch is triggered
+            filter,
+            1.0f,
+            getAbsoluteStartMillis(),
+            null,
+            null,
+            null
+        );
         shardRequest.canReturnNullResponseIfMatchNoDocs(false);
         return shardRequest;
     }
@@ -266,6 +269,7 @@ public class AsyncPersistentSearch {
                 @Override
                 public void onResponse(Void unused) {
                     listener.onResponse(searchShard);
+                    clear();
                 }
 
                 @Override
@@ -347,9 +351,9 @@ public class AsyncPersistentSearch {
         private final AtomicInteger shardToReduceCount;
         private final Runnable onFinish;
 
-        ReducePhaseBatcher(int numberOfShardsToReduce, Runnable onFinish) {
+        ReducePhaseBatcher(int numberOfShardsToReduce, int numberOfShards, Runnable onFinish) {
             this.numberOfShardsToReduce = new AtomicInteger(numberOfShardsToReduce);
-            this.shardToReduceCount = new AtomicInteger(numberOfShardsToReduce);
+            this.shardToReduceCount = new AtomicInteger(numberOfShards);
             this.onFinish = onFinish;
         }
 
@@ -384,14 +388,19 @@ public class AsyncPersistentSearch {
             }
 
             final ReducePartialPersistentSearchRequest reducePartialResultsRequest =
-                new ReducePartialPersistentSearchRequest(asyncSearchId, shards, searchRequest, shardToReduceCount.get() == shards.size());
+                new ReducePartialPersistentSearchRequest(asyncSearchId,
+                    shards,
+                    searchRequest,
+                    shardToReduceCount.get() == shards.size()
+                );
             final boolean exchanged = runningReduce.compareAndSet(null, reducePartialResultsRequest);
             assert exchanged;
 
             sendReduceRequest(reducePartialResultsRequest, new ActionListener<>() {
                 @Override
                 public void onResponse(Void unused) {
-                    runningReduce.compareAndSet(reducePartialResultsRequest, null);
+                    final boolean exchanged = runningReduce.compareAndSet(reducePartialResultsRequest, null);
+                    assert exchanged;
                     shardToReduceCount.addAndGet(-shards.size());
                     onShardsReduced(shards);
                     // Keep track of reduced shards
@@ -405,7 +414,6 @@ public class AsyncPersistentSearch {
 
                 @Override
                 public void onFailure(Exception e) {
-                    logger.debug("Reduce failure", e);
                     runningReduce.compareAndSet(reducePartialResultsRequest, null);
                     // TODO: Inspect error and maybe retry somewhere else?
                     // TODO: Store the error somewhere

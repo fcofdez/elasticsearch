@@ -33,11 +33,13 @@ import org.elasticsearch.cluster.routing.ShardRoutingHelper;
 import org.elasticsearch.cluster.routing.UnassignedInfo;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.UUIDs;
+import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.tasks.TaskId;
+import org.elasticsearch.test.ClusterServiceUtils;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
@@ -50,6 +52,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static org.hamcrest.core.IsEqual.equalTo;
 
@@ -61,8 +64,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
     public void setUp() throws Exception {
         super.setUp();
         threadPool = new TestThreadPool(getTestName());
-        clusterService = new ClusterService(Settings.EMPTY,
-            new ClusterSettings(Settings.EMPTY, ClusterSettings.BUILT_IN_CLUSTER_SETTINGS), null);
+        clusterService = ClusterServiceUtils.createClusterService(threadPool);
     }
 
     @After
@@ -74,7 +76,8 @@ public class AsyncPersistentSearchTests extends ESTestCase {
 
     static class FakeSearchTransportService extends SearchTransportService {
         private final List<ActionListener<ExecutePersistentQueryFetchResponse>> pendingQueries = new ArrayList<>();
-        private final List<ActionListener<ReducePartialPersistentSearchResponse>> pendingReduces = new ArrayList<>();
+        private final List<Tuple<ActionListener<ReducePartialPersistentSearchResponse>, ReducePartialPersistentSearchRequest>> pendingReduces =
+            new ArrayList<>();
         private final Executor executor;
 
         FakeSearchTransportService(Executor executor) {
@@ -115,11 +118,12 @@ public class AsyncPersistentSearchTests extends ESTestCase {
                                                     ReducePartialPersistentSearchRequest request,
                                                     SearchTask task,
                                                     ActionListener<ReducePartialPersistentSearchResponse> listener) {
-            pendingReduces.add(listener);
+            pendingReduces.add(Tuple.tuple(listener, request));
         }
 
         void releaseReduceListeners() {
-            List<ActionListener<ReducePartialPersistentSearchResponse>> copy = new ArrayList<>(pendingReduces);
+            List<ActionListener<ReducePartialPersistentSearchResponse>> copy =
+                pendingReduces.stream().map(Tuple::v1).collect(Collectors.toList());
             pendingReduces.clear();
             executor.execute(() -> {
                 for (ActionListener<ReducePartialPersistentSearchResponse> pendingReduce : copy) {
@@ -170,10 +174,12 @@ public class AsyncPersistentSearchTests extends ESTestCase {
 
         searchTransportService.releaseQueryListeners();
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
+        assertThat(searchTransportService.pendingReduces.get(0).v2().isFinalReduce(), equalTo(false));
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
 
         searchTransportService.releaseReduceListeners();
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
+        assertThat(searchTransportService.pendingReduces.get(0).v2().isFinalReduce(), equalTo(true));
 
         searchTransportService.releaseReduceListeners();
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
@@ -240,7 +246,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             shardRouting = ShardRoutingHelper.initialize(shardRouting, "nodeId");
             return new SearchShardIterator(null, shardId, List.of(shardRouting), OriginalIndices.NONE);
         };
-        final SearchTask searchTask = new SearchTask(0, "search", "action", () -> "asd", TaskId.EMPTY_TASK_ID, Collections.emptyMap());
+        final SearchTask searchTask = new SearchTask(0, "search", "action", () -> "test", TaskId.EMPTY_TASK_ID, Collections.emptyMap());
         FakeSearchTransportService searchTransportService = new FakeSearchTransportService(threadPool.executor(ThreadPool.Names.GENERIC));
         new AsyncPersistentSearch(searchRequest,
             persistentSearchId,

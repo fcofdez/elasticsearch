@@ -93,7 +93,7 @@ public class PersistentSearchService {
     }
 
     public void executePartialReduce(ReducePartialPersistentSearchRequest request,
-                                     SearchShardTask task,
+                                     SearchTask task,
                                      ActionListener<ReducePartialPersistentSearchResponse> listener) {
         // we need to use versioning for SearchResponse (so we avoid conflicting operations)
         // store the number of reduced shards (this would allow to run the last reduction)
@@ -110,14 +110,15 @@ public class PersistentSearchService {
                     SearchContext.DEFAULT_TRACK_TOTAL_HITS_UP_TO,
                     // TODO: pass the values around, but... this can be challenging if clocks are out of sync
                     new TransportSearchAction.SearchTimeProvider(0, 0, () -> 1L),
-                    searchPhaseController.getReduceContext(request.getOriginalRequest())
+                    searchPhaseController.getReduceContext(request.getOriginalRequest()),
+                    request.isFinalReduce()
                 );
 
                 if (persistentSearchResponse != null) {
                     searchResponseMerger.add(persistentSearchResponse.getSearchResponse());
                 }
 
-                runAsync(() -> reduce(searchResponseMerger, request), reduceListener);
+                runAsync(() -> reduce(searchResponseMerger, task, request), reduceListener);
             } catch (Exception e) {
                 listener.onFailure(e);
             }
@@ -142,11 +143,15 @@ public class PersistentSearchService {
         searchStorageService.getPersistentSearchResult(searchId, getSearchResultListener);
     }
 
-    private SearchResponse reduce(SearchResponseMerger searchResponseMerger, ReducePartialPersistentSearchRequest request) {
+    private SearchResponse reduce(SearchResponseMerger searchResponseMerger,
+                                  SearchTask searchTask,
+                                  ReducePartialPersistentSearchRequest request) {
         // TODO: Use circuit breaker
         for (SearchShard searchShard : request.getShardsToReduce()) {
             final String partialResultId =
                 PersistentSearchResponse.generatePartialResultIdId(request.getSearchId(), searchShard.getShardId());
+
+            checkForCancellation(searchTask);
 
             try {
                 final SearchResponse partialResult
@@ -159,7 +164,15 @@ public class PersistentSearchService {
             }
         }
 
+        checkForCancellation(searchTask);
+
         return searchResponseMerger.getMergedResponse(SearchResponse.Clusters.EMPTY);
+    }
+
+    private void checkForCancellation(SearchTask searchTask) {
+        if (searchTask.isCancelled()) {
+            throw new RuntimeException("Search has been cancelled");
+        }
     }
 
     private SearchResponse convertToSearchResponse(QueryFetchSearchResult result,
