@@ -16,6 +16,8 @@ import org.elasticsearch.action.search.persistent.GetPersistentSearchAction;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.SubmitPersistentSearchAction;
 import org.elasticsearch.action.search.persistent.SubmitPersistentSearchResponse;
+import org.elasticsearch.cluster.metadata.IndexMetadata;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.aggregations.bucket.terms.StringTerms;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
@@ -32,7 +34,7 @@ import static org.hamcrest.core.IsEqual.equalTo;
 public class PersistentSearchIT extends ESIntegTestCase {
     public void testBasicPersistentSearch() throws Exception {
         final String indexName = randomAlphaOfLength(10).toLowerCase(Locale.ROOT);
-        assertAcked(prepareCreate(indexName));
+        assertAcked(prepareCreate(indexName, Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, randomIntBetween(1, 40))));
         PutMappingRequest request = new PutMappingRequest().indices(indexName).source("key", "type=keyword");
         client().admin().indices().putMapping(request).actionGet();
         ensureGreen(indexName);

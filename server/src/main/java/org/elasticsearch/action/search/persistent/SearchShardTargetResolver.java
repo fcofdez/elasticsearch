@@ -29,7 +29,7 @@ public interface SearchShardTargetResolver {
         @Override
         public SearchShardIterator resolve(SearchShard shardSearchTarget, OriginalIndices originalIndices) {
             final ShardId shardId = shardSearchTarget.getShardId();
-            // TODO: Throw when index does not exist
+            // TODO: Throw when index does not exist?
 
             final IndexRoutingTable indexShardRoutingTable = clusterService.state().getRoutingTable().index(shardId.getIndex());
             final IndexShardRoutingTable shardRoutingTable = indexShardRoutingTable.shard(shardId.getId());

@@ -28,6 +28,10 @@ public class ReducePartialPersistentSearchResponse extends ActionResponse {
         this.reducedShards = in.readList(SearchShard::new);
     }
 
+    public List<SearchShard> getReducedShards() {
+        return reducedShards;
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeList(reducedShards);

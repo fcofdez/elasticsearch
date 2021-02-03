@@ -147,6 +147,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             persistentSearchId,
             searchTask,
             searchShards,
+            Collections.emptyMap(),
             OriginalIndices.NONE,
             5,
             resolver,
@@ -154,7 +155,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             threadPool,
             (cluster, node) -> null,
             clusterService,
-            searchTimeProvider).run();
+            searchTimeProvider, ActionListener.wrap(() -> {})).start();
 
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(5)));
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
@@ -199,6 +200,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             persistentSearchId,
             searchTask,
             searchShards,
+            Collections.emptyMap(),
             OriginalIndices.NONE,
             5,
             resolver,
@@ -206,9 +208,9 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             threadPool,
             (cluster, node) -> null,
             clusterService,
-            searchTimeProvider);
+            searchTimeProvider, ActionListener.wrap(() -> {}));
 
-        asyncPersistentSearch.run();
+        asyncPersistentSearch.start();
 
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(numOfShards)));
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
@@ -244,6 +246,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             persistentSearchId,
             searchTask,
             searchShards,
+            Collections.emptyMap(),
             OriginalIndices.NONE,
             5,
             resolver,
@@ -251,7 +254,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             threadPool,
             (cluster, node) -> null,
             clusterService,
-            searchTimeProvider).run();
+            searchTimeProvider, ActionListener.wrap(() -> {})).start();
 
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(numOfShards)));
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
