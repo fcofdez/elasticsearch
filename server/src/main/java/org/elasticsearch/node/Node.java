@@ -651,7 +651,7 @@ public class Node implements Closeable {
                 new PersistentSearchStorageService(client, namedWriteableRegistry);
 
             final PersistentSearchService persistentSearchService = new PersistentSearchService(searchService, searchPhaseController,
-                persistentSearchStorageService, threadPool.executor(ThreadPool.Names.SEARCH));
+                persistentSearchStorageService, threadPool.executor(ThreadPool.Names.SEARCH), threadPool::relativeTimeInNanos);
 
             modules.add(b -> {
                     b.bind(Node.class).toInstance(this);

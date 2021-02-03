@@ -22,6 +22,7 @@ package org.elasticsearch.search.persistent;
 import org.elasticsearch.action.admin.indices.mapping.put.PutMappingRequest;
 import org.elasticsearch.action.index.IndexRequestBuilder;
 import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchAction;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.SubmitPersistentSearchAction;
@@ -80,6 +81,11 @@ public class PersistentSearchIT extends ESIntegTestCase {
             final StringTerms agg = persistentSearchResponse.getSearchResponse().getAggregations().get("agg");
             assertThat(agg.getBucketByKey("bar").getDocCount(), equalTo((long) docCount));
         });
+
+        final SearchRequest sr = new SearchRequest().allowPartialSearchResults(false).indices(".persistent_search_results");
+        final SearchResponse searchResponse =
+            client().search(sr).actionGet();
+        assertThat(searchResponse.getHits().getTotalHits().value, equalTo(1L));
     }
 
     private void populateIndex(String indexName, int docCount) throws InterruptedException {

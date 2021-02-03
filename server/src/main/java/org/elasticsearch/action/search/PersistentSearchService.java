@@ -24,6 +24,7 @@ import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.StepListener;
+import org.elasticsearch.action.delete.DeleteResponse;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchRequest;
@@ -43,9 +44,12 @@ import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.search.persistent.PersistentSearchResponse;
 import org.elasticsearch.search.persistent.PersistentSearchStorageService;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.function.LongSupplier;
 
 import static org.elasticsearch.action.search.SearchPhaseController.setShardIndex;
 
@@ -54,16 +58,19 @@ public class PersistentSearchService {
     private final SearchPhaseController searchPhaseController;
     private final PersistentSearchStorageService searchStorageService;
     private final Executor executor;
+    private final LongSupplier relativeCurrentNanosProvider;
     private final Logger logger = LogManager.getLogger(PersistentSearchService.class);
 
     public PersistentSearchService(SearchService searchService,
                                    SearchPhaseController searchPhaseController,
                                    PersistentSearchStorageService searchStorageService,
-                                   Executor executor) {
+                                   Executor executor,
+                                   LongSupplier relativeCurrentNanosProvider) {
         this.searchService = searchService;
         this.searchPhaseController = searchPhaseController;
         this.searchStorageService = searchStorageService;
         this.executor = executor;
+        this.relativeCurrentNanosProvider = relativeCurrentNanosProvider;
     }
 
     public void getPersistentSearchResponse(GetPersistentSearchRequest getPersistentSearchRequest,
@@ -96,10 +103,10 @@ public class PersistentSearchService {
                                      SearchTask task,
                                      ActionListener<ReducePartialPersistentSearchResponse> listener) {
         // we need to use versioning for SearchResponse (so we avoid conflicting operations)
-        // store the number of reduced shards (this would allow to run the last reduction)
         final String searchId = request.getSearchId();
         StepListener<PersistentSearchResponse> getSearchResultListener = new StepListener<>();
         StepListener<SearchResponse> reduceListener = new StepListener<>();
+        StepListener<List<SearchShard>> partialResponseStoredListener = new StepListener<>();
 
         getSearchResultListener.whenComplete((persistentSearchResponse -> {
             try {
@@ -108,8 +115,9 @@ public class PersistentSearchService {
                     SearchService.DEFAULT_FROM,
                     SearchService.DEFAULT_SIZE,
                     SearchContext.DEFAULT_TRACK_TOTAL_HITS_UP_TO,
-                    // TODO: pass the values around, but... this can be challenging if clocks are out of sync
-                    new TransportSearchAction.SearchTimeProvider(0, 0, () -> 1L),
+                    // TODO: This doesn't work if the reduce phase is executed in a different node
+                    new TransportSearchAction.SearchTimeProvider(request.getSearchAbsoluteStartMillis(),
+                        request.getSearchRelativeStartNanos(), relativeCurrentNanosProvider),
                     searchPhaseController.getReduceContext(request.getOriginalRequest()),
                     request.isFinalReduce()
                 );
@@ -130,7 +138,7 @@ public class PersistentSearchService {
             searchStorageService.storeResult(persistentSearchResponse, new ActionListener<>() {
                 @Override
                 public void onResponse(Void unused) {
-                    listener.onResponse(new ReducePartialPersistentSearchResponse(request.getShardsToReduce()));
+                    partialResponseStoredListener.onResponse(request.getShardsToReduce());
                 }
 
                 @Override
@@ -140,7 +148,30 @@ public class PersistentSearchService {
             });
         }), listener::onFailure);
 
+        partialResponseStoredListener.whenComplete(reducedShards -> {
+            listener.onResponse(new ReducePartialPersistentSearchResponse(reducedShards));
+            deleteIntermediateResults(searchId, reducedShards);
+        }, listener::onFailure);
+
         searchStorageService.getPersistentSearchResult(searchId, getSearchResultListener);
+    }
+
+    private void deleteIntermediateResults(String searchId, List<SearchShard> shards) {
+        List<String> docsToRemove = new ArrayList<>(shards.size());
+        for (SearchShard shard : shards) {
+            docsToRemove.add(PersistentSearchResponse.generatePartialResultIdId(searchId, shard.getShardId()));
+        }
+        searchStorageService.deletePersistentSearchResults(docsToRemove, new ActionListener<>() {
+            @Override
+            public void onResponse(Collection<DeleteResponse> deleteResponses) {
+                logger.info("DELETED intermediate results");
+            }
+
+            @Override
+            public void onFailure(Exception e) {
+                // TODO: retry?
+            }
+        });
     }
 
     private SearchResponse reduce(SearchResponseMerger searchResponseMerger,

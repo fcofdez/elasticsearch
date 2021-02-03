@@ -23,7 +23,7 @@ import org.elasticsearch.action.ActionType;
 import org.elasticsearch.search.persistent.PersistentSearchResponse;
 
 public class GetPersistentSearchAction extends ActionType<PersistentSearchResponse> {
-    public static final String NAME = "indices:data/read/get_persistent_search";
+    public static final String NAME = "indices:data/read/persistent_search/get";
     public static final GetPersistentSearchAction INSTANCE = new GetPersistentSearchAction();
 
     public GetPersistentSearchAction() {

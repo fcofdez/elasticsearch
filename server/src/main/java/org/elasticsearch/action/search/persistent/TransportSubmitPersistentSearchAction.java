@@ -118,7 +118,9 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
             searchTransportService,
             threadPool,
             connectionProvider(),
-            clusterService).run();
+            clusterService,
+            timeProvider
+            ).run();
 
         listener.onResponse(new SubmitPersistentSearchResponse(persistentSearchId));
     }

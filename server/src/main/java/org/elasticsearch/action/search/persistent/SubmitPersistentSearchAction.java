@@ -23,7 +23,7 @@ import org.elasticsearch.action.ActionType;
 
 public class SubmitPersistentSearchAction extends ActionType<SubmitPersistentSearchResponse> {
     public static final SubmitPersistentSearchAction INSTANCE = new SubmitPersistentSearchAction();
-    public static final String NAME = "indices:data/read/persistent-search";
+    public static final String NAME = "indices:data/read/persistent_search/submit";
 
     public SubmitPersistentSearchAction() {
         super(NAME, SubmitPersistentSearchResponse::new);

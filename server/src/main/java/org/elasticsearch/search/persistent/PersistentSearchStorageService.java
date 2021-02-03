@@ -25,12 +25,15 @@ import org.elasticsearch.ElasticsearchTimeoutException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.delete.DeleteRequest;
+import org.elasticsearch.action.delete.DeleteResponse;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.get.GetResponse;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.action.search.PersistentSearchService;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.support.GroupedActionListener;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.action.support.TransportActions;
 import org.elasticsearch.client.Client;
@@ -46,6 +49,7 @@ import org.elasticsearch.transport.ConnectTransportException;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -186,5 +190,14 @@ public class PersistentSearchStorageService {
         }
         final Throwable cause = ExceptionsHelper.unwrapCause(e);
         return cause instanceof NodeClosedException || cause instanceof ConnectTransportException;
+    }
+
+    public void deletePersistentSearchResults(List<String> persistentSearchResultIds, ActionListener<Collection<DeleteResponse>> listener) {
+        // TODO: is there a more efficient way?
+        GroupedActionListener<DeleteResponse> groupedListener = new GroupedActionListener<>(listener, persistentSearchResultIds.size());
+        for (String persistentSearchResultId : persistentSearchResultIds) {
+            final DeleteRequest deleteRequest = client.prepareDelete(INDEX, persistentSearchResultId).request();
+            client.delete(deleteRequest, groupedListener);
+        }
     }
 }

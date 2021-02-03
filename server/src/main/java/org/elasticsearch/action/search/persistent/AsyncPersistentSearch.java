@@ -28,6 +28,7 @@ import org.elasticsearch.action.search.SearchShard;
 import org.elasticsearch.action.search.SearchShardIterator;
 import org.elasticsearch.action.search.SearchTask;
 import org.elasticsearch.action.search.SearchTransportService;
+import org.elasticsearch.action.search.TransportSearchAction;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.index.IndexNotFoundException;
@@ -38,7 +39,6 @@ import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.Transport;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.PriorityQueue;
@@ -64,7 +64,7 @@ public class AsyncPersistentSearch {
     private final AtomicBoolean searchRunning = new AtomicBoolean(true);
     private final ReducePhaseBatcher reducePhaseBatcher;
     private final AtomicInteger shardCount;
-    private final int numberOfShards;
+    private final TransportSearchAction.SearchTimeProvider searchTimeProvider;
     private final Logger logger = LogManager.getLogger(AsyncPersistentSearch.class);
 
     public AsyncPersistentSearch(SearchRequest searchRequest,
@@ -77,12 +77,13 @@ public class AsyncPersistentSearch {
                                  SearchTransportService searchTransportService,
                                  ThreadPool threadPool,
                                  BiFunction<String, String, Transport.Connection> connectionProvider,
-                                 ClusterService clusterService) {
+                                 ClusterService clusterService,
+                                 TransportSearchAction.SearchTimeProvider searchTimeProvider) {
         this.searchRequest = searchRequest;
         this.asyncSearchId = asyncSearchId;
         this.originalIndices = originalIndices;
-        // Use the same order as provided?
-        Queue<AsyncSearchShard> queue = new ArrayDeque<>();
+        // Try to query by priority
+        Queue<AsyncSearchShard> queue = new PriorityQueue<>();
         for (SearchShard searchShard : searchShards) {
             queue.add(new AsyncSearchShard(searchShard));
         }
@@ -95,8 +96,8 @@ public class AsyncPersistentSearch {
         this.connectionProvider = connectionProvider;
         this.shardCount = new AtomicInteger(searchShards.size());
         this.clusterService = clusterService;
-        this.numberOfShards = searchShards.size();
         this.reducePhaseBatcher = new ReducePhaseBatcher(5, searchShards.size(), this::onReduceSuccess);
+        this.searchTimeProvider = searchTimeProvider;
     }
 
     public String getId() {
@@ -115,12 +116,12 @@ public class AsyncPersistentSearch {
             target.query(new ActionListener<>() {
                 @Override
                 public void onResponse(SearchShard searchShard) {
-                    onShardSuccess(searchShard);
+                    onShardQuerySuccess(searchShard);
                 }
 
                 @Override
                 public void onFailure(Exception e) {
-                    onShardFailure(target.searchShard, e);
+                    onShardQueryFailure(target.searchShard, e);
                 }
             });
         }
@@ -131,7 +132,7 @@ public class AsyncPersistentSearch {
         searchRunning.compareAndSet(false, true);
     }
 
-    void onShardSuccess(SearchShard searchShard) {
+    void onShardQuerySuccess(SearchShard searchShard) {
         runningRequests.decrementAndGet();
         reducePhaseBatcher.add(searchShard);
         if (shardCount.decrementAndGet() == 0) {
@@ -141,7 +142,7 @@ public class AsyncPersistentSearch {
         }
     }
 
-    void onShardFailure(SearchShard searchShard, Exception e) {
+    void onShardQueryFailure(SearchShard searchShard, Exception e) {
         runningRequests.decrementAndGet();
         // Mark shard as failed on the search result? This in theory it's an unrecoverable failure
         if (shardCount.decrementAndGet() == 0) {
@@ -156,14 +157,14 @@ public class AsyncPersistentSearch {
     }
 
     void onShardsReduced(List<SearchShard> reducedShards) {
-        logger.info("Shards {} reduced", reducedShards);
-    }
 
-    void onReduceSuccess() {
-        // Trigger final reduction
     }
 
     void onReduceFailure(Exception e) {
+
+    }
+
+    void onReduceSuccess() {
 
     }
 
@@ -391,7 +392,9 @@ public class AsyncPersistentSearch {
                 new ReducePartialPersistentSearchRequest(asyncSearchId,
                     shards,
                     searchRequest,
-                    shardToReduceCount.get() == shards.size()
+                    shardToReduceCount.get() == shards.size(),
+                    searchTimeProvider.getAbsoluteStartMillis(),
+                    searchTimeProvider.getRelativeStartNanos()
                 );
             final boolean exchanged = runningReduce.compareAndSet(null, reducePartialResultsRequest);
             assert exchanged;
@@ -415,6 +418,7 @@ public class AsyncPersistentSearch {
                 @Override
                 public void onFailure(Exception e) {
                     runningReduce.compareAndSet(reducePartialResultsRequest, null);
+                    onReduceFailure(e);
                     // TODO: Inspect error and maybe retry somewhere else?
                     // TODO: Store the error somewhere
                     pendingShardsToReduce.addAll(shards);

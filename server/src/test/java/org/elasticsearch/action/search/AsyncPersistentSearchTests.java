@@ -34,8 +34,6 @@ import org.elasticsearch.cluster.routing.UnassignedInfo;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.collect.Tuple;
-import org.elasticsearch.common.settings.ClusterSettings;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.tasks.TaskId;
@@ -59,12 +57,15 @@ import static org.hamcrest.core.IsEqual.equalTo;
 public class AsyncPersistentSearchTests extends ESTestCase {
     private ThreadPool threadPool;
     private ClusterService clusterService;
+    private TransportSearchAction.SearchTimeProvider searchTimeProvider;
 
     @Before
     public void setUp() throws Exception {
         super.setUp();
         threadPool = new TestThreadPool(getTestName());
         clusterService = ClusterServiceUtils.createClusterService(threadPool);
+        searchTimeProvider = new TransportSearchAction.SearchTimeProvider(System.currentTimeMillis(),
+            threadPool.relativeTimeInNanos(), threadPool::relativeTimeInNanos);
     }
 
     @After
@@ -76,8 +77,8 @@ public class AsyncPersistentSearchTests extends ESTestCase {
 
     static class FakeSearchTransportService extends SearchTransportService {
         private final List<ActionListener<ExecutePersistentQueryFetchResponse>> pendingQueries = new ArrayList<>();
-        private final List<Tuple<ActionListener<ReducePartialPersistentSearchResponse>, ReducePartialPersistentSearchRequest>> pendingReduces =
-            new ArrayList<>();
+        private final List<Tuple<ActionListener<ReducePartialPersistentSearchResponse>,
+                                 ReducePartialPersistentSearchRequest>> pendingReduces = new ArrayList<>();
         private final Executor executor;
 
         FakeSearchTransportService(Executor executor) {
@@ -163,7 +164,8 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             searchTransportService,
             threadPool,
             (cluster, node) -> null,
-            clusterService).run();
+            clusterService,
+            searchTimeProvider).run();
 
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(5)));
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
@@ -214,7 +216,8 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             searchTransportService,
             threadPool,
             (cluster, node) -> null,
-            clusterService);
+            clusterService,
+            searchTimeProvider);
 
         asyncPersistentSearch.run();
 
@@ -258,7 +261,8 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             searchTransportService,
             threadPool,
             (cluster, node) -> null,
-            clusterService).run();
+            clusterService,
+            searchTimeProvider).run();
 
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(numOfShards)));
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));
