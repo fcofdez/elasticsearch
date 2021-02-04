@@ -15,15 +15,19 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import java.io.IOException;
 
 public class ExecutePersistentQueryFetchResponse extends ActionResponse {
-    public ExecutePersistentQueryFetchResponse() {
+    private final String docId;
+
+    public ExecutePersistentQueryFetchResponse(String docId) {
+        this.docId = docId;
     }
 
     public ExecutePersistentQueryFetchResponse(StreamInput in) throws IOException {
         super(in);
+        this.docId = in.readString();
     }
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-
+        out.writeString(docId);
     }
 }

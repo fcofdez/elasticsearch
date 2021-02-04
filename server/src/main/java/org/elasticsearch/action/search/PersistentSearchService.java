@@ -17,11 +17,12 @@ import org.elasticsearch.action.delete.DeleteResponse;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchRequest;
+import org.elasticsearch.action.search.persistent.PersistentSearchShardId;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
 import org.elasticsearch.common.CheckedSupplier;
+import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.common.lucene.search.TopDocsAndMaxScore;
-import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.aggregations.InternalAggregation;
@@ -39,6 +40,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.function.LongSupplier;
+import java.util.stream.Collectors;
 
 import static org.elasticsearch.action.search.SearchPhaseController.setShardIndex;
 
@@ -70,20 +72,23 @@ public class PersistentSearchService {
     public void executeAsyncQueryPhase(ExecutePersistentQueryFetchRequest request,
                                        SearchShardTask task, ActionListener<ExecutePersistentQueryFetchResponse> listener) {
         StepListener<SearchPhaseResult> queryListener = new StepListener<>();
-        StepListener<Void> storeListener = new StepListener<>();
+        StepListener<String> storeListener = new StepListener<>();
 
         final ShardSearchRequest shardSearchRequest = request.getShardSearchRequest();
         queryListener.whenComplete(result -> {
             final SearchResponse searchResponse = convertToSearchResponse((QueryFetchSearchResult) result,
                 searchService.aggReduceContextBuilder(shardSearchRequest.source()));
 
-            final ShardId shardId = request.getShardSearchRequest().shardId();
-            final String id = PersistentSearchResponse.generatePartialResultIdId(request.getAsyncSearchId(), shardId);
-            final PersistentSearchResponse persistentSearchResponse = new PersistentSearchResponse(id, searchResponse);
+            final String searchId = request.getSearchId();
+            final String docId = request.getResultDocId();
+            final long expireTime = request.getExpireTime();
+            final PersistentSearchResponse persistentSearchResponse =
+                new PersistentSearchResponse(docId, searchId, searchResponse, expireTime, new int[]{});
             searchStorageService.storeResult(persistentSearchResponse, storeListener);
         }, listener::onFailure);
 
-        storeListener.whenComplete(r -> listener.onResponse(new ExecutePersistentQueryFetchResponse()), listener::onFailure);
+        storeListener.whenComplete(partialResultDocId ->
+            listener.onResponse(new ExecutePersistentQueryFetchResponse(partialResultDocId)), listener::onFailure);
 
         searchService.executeQueryPhase(shardSearchRequest, false, task, queryListener);
     }
@@ -94,8 +99,8 @@ public class PersistentSearchService {
         // we need to use versioning for SearchResponse (so we avoid conflicting operations)
         final String searchId = request.getSearchId();
         StepListener<PersistentSearchResponse> getSearchResultListener = new StepListener<>();
-        StepListener<SearchResponse> reduceListener = new StepListener<>();
-        StepListener<List<SearchShard>> partialResponseStoredListener = new StepListener<>();
+        StepListener<Tuple<PersistentSearchResponse, List<PersistentSearchShardId>>> reduceListener = new StepListener<>();
+        StepListener<List<PersistentSearchShardId>> partialResponseStoredListener = new StepListener<>();
 
         getSearchResultListener.whenComplete((persistentSearchResponse -> {
             try {
@@ -121,13 +126,15 @@ public class PersistentSearchService {
             }
         }), listener::onFailure);
 
-        reduceListener.whenComplete((reducedSearchResponse -> {
-            final PersistentSearchResponse persistentSearchResponse =
-                new PersistentSearchResponse(request.getSearchId(), reducedSearchResponse);
-            searchStorageService.storeResult(persistentSearchResponse, new ActionListener<>() {
+        reduceListener.whenComplete((reducedSearchResponseAndShards -> {
+            final PersistentSearchResponse reducedSearchResponse = reducedSearchResponseAndShards.v1();
+            final List<PersistentSearchShardId> reducedShards = reducedSearchResponseAndShards.v2();
+
+            // TODO: Add timeouts
+            searchStorageService.storeResult(reducedSearchResponse, new ActionListener<>() {
                 @Override
-                public void onResponse(Void unused) {
-                    partialResponseStoredListener.onResponse(request.getShardsToReduce());
+                public void onResponse(String docId) {
+                    partialResponseStoredListener.onResponse(reducedShards);
                 }
 
                 @Override
@@ -139,17 +146,17 @@ public class PersistentSearchService {
 
         partialResponseStoredListener.whenComplete(reducedShards -> {
             listener.onResponse(new ReducePartialPersistentSearchResponse(reducedShards));
-            deleteIntermediateResults(searchId, reducedShards);
+            deleteIntermediateResults(reducedShards);
         }, listener::onFailure);
 
         searchStorageService.getPersistentSearchResult(searchId, getSearchResultListener);
     }
 
-    private void deleteIntermediateResults(String searchId, List<SearchShard> shards) {
-        List<String> docsToRemove = new ArrayList<>(shards.size());
-        for (SearchShard shard : shards) {
-            docsToRemove.add(PersistentSearchResponse.generatePartialResultIdId(searchId, shard.getShardId()));
-        }
+    private void deleteIntermediateResults(List<PersistentSearchShardId> shards) {
+        // It might make sense to add a TTL to the records and do a periodic cleanup
+        final List<String> docsToRemove = shards.stream()
+            .map(PersistentSearchShardId::getDocId)
+            .collect(Collectors.toList());
         searchStorageService.deletePersistentSearchResults(docsToRemove, new ActionListener<>() {
             @Override
             public void onResponse(Collection<DeleteResponse> deleteResponses) {
@@ -163,30 +170,38 @@ public class PersistentSearchService {
         });
     }
 
-    private SearchResponse reduce(SearchResponseMerger searchResponseMerger,
-                                  SearchTask searchTask,
-                                  ReducePartialPersistentSearchRequest request) {
+    private Tuple<PersistentSearchResponse, List<PersistentSearchShardId>> reduce(SearchResponseMerger searchResponseMerger,
+                                                                                  SearchTask searchTask,
+                                                                                  ReducePartialPersistentSearchRequest request) {
         // TODO: Use circuit breaker
-        for (SearchShard searchShard : request.getShardsToReduce()) {
-            final String partialResultId =
-                PersistentSearchResponse.generatePartialResultIdId(request.getSearchId(), searchShard.getShardId());
-
+        List<PersistentSearchShardId> reducedShards = new ArrayList<>(request.getShardsToReduce().size());
+        for (PersistentSearchShardId searchShardId : request.getShardsToReduce()) {
             checkForCancellation(searchTask);
 
             try {
                 final SearchResponse partialResult
-                    = searchStorageService.getPartialResult(partialResultId);
+                    = searchStorageService.getPartialResult(searchShardId.getDocId());
 
                 searchResponseMerger.add(partialResult);
             } catch (Exception e) {
                 logger.info("ERROR!!", e);
                 // Ignore if not exists for now...
             }
+            reducedShards.add(searchShardId);
         }
 
         checkForCancellation(searchTask);
 
-        return searchResponseMerger.getMergedResponse(SearchResponse.Clusters.EMPTY);
+        final SearchResponse reducedSearchResponse = searchResponseMerger.getMergedResponse(SearchResponse.Clusters.EMPTY);
+
+        final PersistentSearchResponse persistentSearchResponse = new PersistentSearchResponse(request.getSearchId(),
+            request.getSearchId(),
+            reducedSearchResponse,
+            request.getExpirationTime(),
+            new int[]{}
+        );
+
+        return Tuple.tuple(persistentSearchResponse, reducedShards);
     }
 
     private void checkForCancellation(SearchTask searchTask) {

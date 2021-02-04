@@ -27,6 +27,7 @@ import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.inject.Inject;
+import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchService;
@@ -108,19 +109,21 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
 
         final Map<String, AliasFilter> aliasFilterMap = buildPerIndexAliasFilter(request, clusterState, indices);
 
+        final TimeValue expirationTime = TimeValue.timeValueMinutes(10);
         new AsyncPersistentSearch(request,
             persistentSearchDocId,
             searchTask,
             searchShards,
-            aliasFilterMap,
             localIndices,
+            aliasFilterMap,
+            expirationTime,
             4,
+            timeProvider,
             searchShardTargetResolver,
             searchTransportService,
             threadPool,
             connectionProvider(),
             clusterService,
-            timeProvider,
             new ActionListener<>() {
                 @Override
                 public void onResponse(Void unused) {
@@ -133,6 +136,7 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
                 }
             }
         ).start();
+
 
         listener.onResponse(new SubmitPersistentSearchResponse(persistentSearchId));
     }

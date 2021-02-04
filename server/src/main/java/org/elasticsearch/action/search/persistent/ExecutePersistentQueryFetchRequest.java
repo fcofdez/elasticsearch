@@ -20,22 +20,39 @@ import java.io.IOException;
 import java.util.Map;
 
 public class ExecutePersistentQueryFetchRequest extends ActionRequest {
-    private final String asyncSearchId;
+    private final String searchId;
+    private final String resultDocId;
+    private final long expireTime;
     private final ShardSearchRequest shardSearchRequest;
 
-    public ExecutePersistentQueryFetchRequest(String asyncSearchId, ShardSearchRequest shardSearchRequest) {
-        this.asyncSearchId = asyncSearchId;
+    public ExecutePersistentQueryFetchRequest(String searchId,
+                                              String resultDocId,
+                                              long expireTime,
+                                              ShardSearchRequest shardSearchRequest) {
+        this.searchId = searchId;
+        this.resultDocId = resultDocId;
+        this.expireTime = expireTime;
         this.shardSearchRequest = shardSearchRequest;
     }
 
     public ExecutePersistentQueryFetchRequest(StreamInput in) throws IOException {
         super(in);
-        this.asyncSearchId = in.readString();
+        this.searchId = in.readString();
+        this.resultDocId = in.readString();
+        this.expireTime = in.readLong();
         this.shardSearchRequest = new ShardSearchRequest(in);
     }
 
-    public String getAsyncSearchId() {
-        return asyncSearchId;
+    public String getResultDocId() {
+        return resultDocId;
+    }
+
+    public String getSearchId() {
+        return searchId;
+    }
+
+    public long getExpireTime() {
+        return expireTime;
     }
 
     public ShardSearchRequest getShardSearchRequest() {
@@ -50,7 +67,9 @@ public class ExecutePersistentQueryFetchRequest extends ActionRequest {
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
-        out.writeString(asyncSearchId);
+        out.writeString(searchId);
+        out.writeString(resultDocId);
+        out.writeLong(expireTime);
         shardSearchRequest.writeTo(out);
     }
 

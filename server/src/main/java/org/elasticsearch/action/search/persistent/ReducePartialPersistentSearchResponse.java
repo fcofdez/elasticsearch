@@ -9,7 +9,6 @@
 package org.elasticsearch.action.search.persistent;
 
 import org.elasticsearch.action.ActionResponse;
-import org.elasticsearch.action.search.SearchShard;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 
@@ -17,18 +16,18 @@ import java.io.IOException;
 import java.util.List;
 
 public class ReducePartialPersistentSearchResponse extends ActionResponse {
-    private final List<SearchShard> reducedShards;
+    private final List<PersistentSearchShardId> reducedShards;
 
-    public ReducePartialPersistentSearchResponse(List<SearchShard> reducedShards) {
+    public ReducePartialPersistentSearchResponse(List<PersistentSearchShardId> reducedShards) {
         this.reducedShards = reducedShards;
     }
 
     public ReducePartialPersistentSearchResponse(StreamInput in) throws IOException {
         super(in);
-        this.reducedShards = in.readList(SearchShard::new);
+        this.reducedShards = in.readList(PersistentSearchShardId::new);
     }
 
-    public List<SearchShard> getReducedShards() {
+    public List<PersistentSearchShardId> getReducedShards() {
         return reducedShards;
     }
 

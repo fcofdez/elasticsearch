@@ -11,7 +11,6 @@ package org.elasticsearch.action.search.persistent;
 import org.elasticsearch.action.ActionRequest;
 import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.search.SearchRequest;
-import org.elasticsearch.action.search.SearchShard;
 import org.elasticsearch.action.search.SearchTask;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -24,41 +23,45 @@ import java.util.Map;
 
 public class ReducePartialPersistentSearchRequest extends ActionRequest {
     private final String searchId;
-    private final List<SearchShard> shardsToReduce;
+    private final List<PersistentSearchShardId> shardsToReduce;
     private final SearchRequest originalRequest;
     private final boolean executeFinalReduce;
     private final long searchAbsoluteStartMillis;
     private final long searchRelativeStartNanos;
+    private final long expirationTime;
 
     public ReducePartialPersistentSearchRequest(String searchId,
-                                                List<SearchShard> shardsToReduce,
+                                                List<PersistentSearchShardId> shardsToReduce,
                                                 SearchRequest originalRequest,
                                                 boolean executeFinalReduce,
                                                 long searchAbsoluteStartMillis,
-                                                long searchRelativeStartNanos) {
+                                                long searchRelativeStartNanos,
+                                                long expirationTime) {
         this.searchId = searchId;
         this.shardsToReduce = shardsToReduce;
         this.originalRequest = originalRequest;
         this.executeFinalReduce = executeFinalReduce;
         this.searchAbsoluteStartMillis = searchAbsoluteStartMillis;
         this.searchRelativeStartNanos = searchRelativeStartNanos;
+        this.expirationTime = expirationTime;
     }
 
     public ReducePartialPersistentSearchRequest(StreamInput in) throws IOException {
         super(in);
         this.searchId = in.readString();
-        this.shardsToReduce = in.readList(SearchShard::new);
+        this.shardsToReduce = in.readList(PersistentSearchShardId::new);
         this.originalRequest = new SearchRequest(in);
         this.executeFinalReduce = in.readBoolean();
         this.searchAbsoluteStartMillis = in.readLong();
         this.searchRelativeStartNanos = in.readLong();
+        this.expirationTime = in.readLong();
     }
 
     public String getSearchId() {
         return searchId;
     }
 
-    public List<SearchShard> getShardsToReduce() {
+    public List<PersistentSearchShardId> getShardsToReduce() {
         return shardsToReduce;
     }
 
@@ -68,6 +71,10 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
 
     public long getSearchAbsoluteStartMillis() {
         return searchAbsoluteStartMillis;
+    }
+
+    public long getExpirationTime() {
+        return expirationTime;
     }
 
     public long getSearchRelativeStartNanos() {
@@ -87,6 +94,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
         out.writeBoolean(executeFinalReduce);
         out.writeLong(searchAbsoluteStartMillis);
         out.writeLong(searchRelativeStartNanos);
+        out.writeLong(expirationTime);
     }
 
     @Override

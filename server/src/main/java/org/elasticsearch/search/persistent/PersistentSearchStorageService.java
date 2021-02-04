@@ -48,6 +48,7 @@ import static org.elasticsearch.index.mapper.MapperService.SINGLE_MAPPING_NAME;
 public class PersistentSearchStorageService {
     public static final String INDEX = ".persistent_search_results";
     public static final String ID_FIELD = "id";
+    public static final String SEARCH_ID_FIELD = "search_id";
     public static final String RESPONSE_FIELD = "response";
     public static final String EXPIRATION_TIME_FIELD = "expiration_time";
 
@@ -73,11 +74,17 @@ public class PersistentSearchStorageService {
                             .startObject(ID_FIELD)
                                 .field("type", "keyword")
                             .endObject()
+                            .startObject(SEARCH_ID_FIELD)
+                                .field("type", "keyword")
+                            .endObject()
                             .startObject(RESPONSE_FIELD)
                                 .field("type", "binary")
                             .endObject()
-                        .endObject()
+                            .startObject(EXPIRATION_TIME_FIELD)
+                                .field("type", "long")
+                            .endObject()
                     .endObject()
+                .endObject()
                 .endObject();
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to build mappings for " + INDEX, e);
@@ -106,7 +113,7 @@ public class PersistentSearchStorageService {
         this.namedWriteableRegistry = namedWriteableRegistry;
     }
 
-    public void storeResult(PersistentSearchResponse persistentSearchResponse, ActionListener<Void> listener) {
+    public void storeResult(PersistentSearchResponse persistentSearchResponse, ActionListener<String> listener) {
         try {
             final IndexRequest indexRequest = new IndexRequest(INDEX)
                 .id(persistentSearchResponse.getId());
@@ -117,7 +124,7 @@ public class PersistentSearchStorageService {
             client.index(indexRequest, new ActionListener<>() {
                 @Override
                 public void onResponse(IndexResponse indexResponse) {
-                    listener.onResponse(null);
+                    listener.onResponse(persistentSearchResponse.getId());
                 }
 
                 @Override
@@ -138,9 +145,7 @@ public class PersistentSearchStorageService {
             @Override
             public void onResponse(GetResponse getResponse) {
                 if (getResponse.isSourceEmpty()) {
-                    // TODO: handle the base case
                     listener.onResponse(null);
-                    //listener.onFailure(new RuntimeException("Unable to find partial shard result with value"));
                     return;
                 }
 
