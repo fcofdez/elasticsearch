@@ -108,7 +108,7 @@ public class PersistentSearchService {
                 PersistentSearchResponseMerger searchResponseMerger = new PersistentSearchResponseMerger(
                     request.getSearchId(),
                     request.getExpirationTime(),
-                    // TODO: This doesn't work if the reduce phase is executed in a different node
+                    // TODO: This doesn't work if the reduce phase is executed in a different node than the coordinator
                     new TransportSearchAction.SearchTimeProvider(request.getSearchAbsoluteStartMillis(),
                         request.getSearchRelativeStartNanos(), relativeCurrentNanosProvider),
                     searchPhaseController.getReduceContext(request.getOriginalRequest()),
