@@ -84,7 +84,7 @@ public class PersistentSearchService {
             int shardIndex = request.getShardIndex();
 
             final PersistentSearchResponse persistentSearchResponse =
-                new PersistentSearchResponse(docId, searchId, searchResponse, expireTime, List.of(shardIndex), 0L);
+                new PersistentSearchResponse(docId, searchId, searchResponse, expireTime, List.of(shardIndex), 1);
             searchStorageService.storeResult(persistentSearchResponse, storeListener);
         }, listener::onFailure);
 

@@ -31,6 +31,7 @@ import org.elasticsearch.common.io.stream.NamedWriteableRegistry;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
+import org.elasticsearch.index.VersionType;
 import org.elasticsearch.indices.SystemIndexDescriptor;
 import org.elasticsearch.node.NodeClosedException;
 import org.elasticsearch.transport.ConnectTransportException;
@@ -119,7 +120,9 @@ public class PersistentSearchStorageService {
     public void storeResult(PersistentSearchResponse persistentSearchResponse, ActionListener<String> listener) {
         try {
             final IndexRequest indexRequest = new IndexRequest(INDEX)
-                .id(persistentSearchResponse.getId());
+                .id(persistentSearchResponse.getId())
+                .versionType(VersionType.EXTERNAL)
+                .version(persistentSearchResponse.getVersion());
 
             try (XContentBuilder builder = jsonBuilder()) {
                 indexRequest.source(persistentSearchResponse.toXContent(builder, ToXContent.EMPTY_PARAMS));
