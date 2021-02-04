@@ -170,12 +170,12 @@ public class AsyncPersistentSearchTests extends ESTestCase {
 
         searchTransportService.releaseQueryListeners();
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
-        assertThat(searchTransportService.pendingReduces.get(0).v2().isFinalReduce(), equalTo(false));
+        assertThat(searchTransportService.pendingReduces.get(0).v2().performFinalReduce(), equalTo(false));
         assertBusy(() -> assertThat(searchTransportService.pendingQueries.size(), equalTo(0)));
 
         searchTransportService.releaseReduceListeners();
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(1)));
-        assertThat(searchTransportService.pendingReduces.get(0).v2().isFinalReduce(), equalTo(true));
+        assertThat(searchTransportService.pendingReduces.get(0).v2().performFinalReduce(), equalTo(true));
 
         searchTransportService.releaseReduceListeners();
         assertBusy(() -> assertThat(searchTransportService.pendingReduces.size(), equalTo(0)));

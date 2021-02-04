@@ -82,7 +82,7 @@ public final class SearchShard implements Comparable<SearchShard>, Writeable {
 
     @Override
     public void writeTo(StreamOutput out) throws IOException {
-        out.writeString(clusterAlias);
+        out.writeOptionalString(clusterAlias);
         shardId.writeTo(out);
     }
 }

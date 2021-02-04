@@ -25,7 +25,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
     private final String searchId;
     private final List<PersistentSearchShardId> shardsToReduce;
     private final SearchRequest originalRequest;
-    private final boolean executeFinalReduce;
+    private final boolean performFinalReduce;
     private final long searchAbsoluteStartMillis;
     private final long searchRelativeStartNanos;
     private final long expirationTime;
@@ -33,14 +33,14 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
     public ReducePartialPersistentSearchRequest(String searchId,
                                                 List<PersistentSearchShardId> shardsToReduce,
                                                 SearchRequest originalRequest,
-                                                boolean executeFinalReduce,
+                                                boolean performFinalReduce,
                                                 long searchAbsoluteStartMillis,
                                                 long searchRelativeStartNanos,
                                                 long expirationTime) {
         this.searchId = searchId;
         this.shardsToReduce = shardsToReduce;
         this.originalRequest = originalRequest;
-        this.executeFinalReduce = executeFinalReduce;
+        this.performFinalReduce = performFinalReduce;
         this.searchAbsoluteStartMillis = searchAbsoluteStartMillis;
         this.searchRelativeStartNanos = searchRelativeStartNanos;
         this.expirationTime = expirationTime;
@@ -51,7 +51,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
         this.searchId = in.readString();
         this.shardsToReduce = in.readList(PersistentSearchShardId::new);
         this.originalRequest = new SearchRequest(in);
-        this.executeFinalReduce = in.readBoolean();
+        this.performFinalReduce = in.readBoolean();
         this.searchAbsoluteStartMillis = in.readLong();
         this.searchRelativeStartNanos = in.readLong();
         this.expirationTime = in.readLong();
@@ -81,8 +81,8 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
         return searchRelativeStartNanos;
     }
 
-    public boolean isFinalReduce() {
-        return executeFinalReduce;
+    public boolean performFinalReduce() {
+        return performFinalReduce;
     }
 
     @Override
@@ -91,7 +91,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
         out.writeString(searchId);
         out.writeList(shardsToReduce);
         originalRequest.writeTo(out);
-        out.writeBoolean(executeFinalReduce);
+        out.writeBoolean(performFinalReduce);
         out.writeLong(searchAbsoluteStartMillis);
         out.writeLong(searchRelativeStartNanos);
         out.writeLong(expirationTime);

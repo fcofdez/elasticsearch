@@ -21,7 +21,6 @@ import org.elasticsearch.action.get.GetResponse;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.action.search.PersistentSearchService;
-import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.support.GroupedActionListener;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.action.support.TransportActions;
@@ -51,6 +50,7 @@ public class PersistentSearchStorageService {
     public static final String SEARCH_ID_FIELD = "search_id";
     public static final String RESPONSE_FIELD = "response";
     public static final String EXPIRATION_TIME_FIELD = "expiration_time";
+    public static final String REDUCED_SHARDS_INDEX_FIELD = "reduced_shards_index_field";
 
     static Settings settings() {
         return Settings.builder()
@@ -80,11 +80,14 @@ public class PersistentSearchStorageService {
                             .startObject(RESPONSE_FIELD)
                                 .field("type", "binary")
                             .endObject()
+                            .startObject(REDUCED_SHARDS_INDEX_FIELD)
+                                .field("type", "long")
+                            .endObject()
                             .startObject(EXPIRATION_TIME_FIELD)
                                 .field("type", "long")
                             .endObject()
+                        .endObject()
                     .endObject()
-                .endObject()
                 .endObject();
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to build mappings for " + INDEX, e);
@@ -139,7 +142,7 @@ public class PersistentSearchStorageService {
         }
     }
 
-    public void getPersistentSearchResult(String id, ActionListener<PersistentSearchResponse> listener) {
+    public void getPersistentSearchResponseAsync(String id, ActionListener<PersistentSearchResponse> listener) {
         final GetRequest getRequest = new GetRequest(INDEX).id(id);
         client.get(getRequest, new ActionListener<>() {
             @Override
@@ -151,7 +154,7 @@ public class PersistentSearchStorageService {
 
                 try {
                     final PersistentSearchResponse persistentSearchResponse =
-                        PersistentSearchResponse.fromXContent(getResponse.getSource(), namedWriteableRegistry);
+                        PersistentSearchResponse.fromXContent(getResponse.getSource(), getResponse.getVersion(), namedWriteableRegistry);
                     listener.onResponse(persistentSearchResponse);
                 } catch (Exception e) {
                     listener.onFailure(e);
@@ -165,12 +168,12 @@ public class PersistentSearchStorageService {
         });
     }
 
-    public SearchResponse getPartialResult(String id) {
+    public PersistentSearchResponse getPersistentSearchResponse(String id) {
         PlainActionFuture<PersistentSearchResponse> future = PlainActionFuture.newFuture();
-        getPersistentSearchResult(id, future);
+        getPersistentSearchResponseAsync(id, future);
 
         try {
-            return future.actionGet(5, TimeUnit.SECONDS).getSearchResponse();
+            return future.actionGet(5, TimeUnit.SECONDS);
         } catch (ElasticsearchTimeoutException e) {
             throw new RuntimeException("Unable to get partial search response with id " + id, e);
         }

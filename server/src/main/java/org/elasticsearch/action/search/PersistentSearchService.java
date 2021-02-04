@@ -29,7 +29,6 @@ import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.fetch.FetchSearchResult;
 import org.elasticsearch.search.fetch.QueryFetchSearchResult;
 import org.elasticsearch.search.internal.InternalSearchResponse;
-import org.elasticsearch.search.internal.SearchContext;
 import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.search.persistent.PersistentSearchResponse;
 import org.elasticsearch.search.persistent.PersistentSearchStorageService;
@@ -66,7 +65,7 @@ public class PersistentSearchService {
 
     public void getPersistentSearchResponse(GetPersistentSearchRequest getPersistentSearchRequest,
                                             ActionListener<PersistentSearchResponse> listener) {
-        searchStorageService.getPersistentSearchResult(getPersistentSearchRequest.getId(), listener);
+        searchStorageService.getPersistentSearchResponseAsync(getPersistentSearchRequest.getId(), listener);
     }
 
     public void executeAsyncQueryPhase(ExecutePersistentQueryFetchRequest request,
@@ -79,11 +78,13 @@ public class PersistentSearchService {
             final SearchResponse searchResponse = convertToSearchResponse((QueryFetchSearchResult) result,
                 searchService.aggReduceContextBuilder(shardSearchRequest.source()));
 
-            final String searchId = request.getSearchId();
-            final String docId = request.getResultDocId();
-            final long expireTime = request.getExpireTime();
+            String searchId = request.getSearchId();
+            String docId = request.getResultDocId();
+            long expireTime = request.getExpireTime();
+            int shardIndex = request.getShardIndex();
+
             final PersistentSearchResponse persistentSearchResponse =
-                new PersistentSearchResponse(docId, searchId, searchResponse, expireTime, new int[]{});
+                new PersistentSearchResponse(docId, searchId, searchResponse, expireTime, List.of(shardIndex), 0L);
             searchStorageService.storeResult(persistentSearchResponse, storeListener);
         }, listener::onFailure);
 
@@ -102,29 +103,24 @@ public class PersistentSearchService {
         StepListener<Tuple<PersistentSearchResponse, List<PersistentSearchShardId>>> reduceListener = new StepListener<>();
         StepListener<List<PersistentSearchShardId>> partialResponseStoredListener = new StepListener<>();
 
-        getSearchResultListener.whenComplete((persistentSearchResponse -> {
+        getSearchResultListener.whenComplete(persistentSearchResponse -> {
             try {
-                // TODO: Extract to a class that keeps track of versioning and base search response
-                final SearchResponseMerger searchResponseMerger = new SearchResponseMerger(
-                    SearchService.DEFAULT_FROM,
-                    SearchService.DEFAULT_SIZE,
-                    SearchContext.DEFAULT_TRACK_TOTAL_HITS_UP_TO,
+                PersistentSearchResponseMerger searchResponseMerger = new PersistentSearchResponseMerger(
+                    request.getSearchId(),
+                    request.getExpirationTime(),
                     // TODO: This doesn't work if the reduce phase is executed in a different node
                     new TransportSearchAction.SearchTimeProvider(request.getSearchAbsoluteStartMillis(),
                         request.getSearchRelativeStartNanos(), relativeCurrentNanosProvider),
                     searchPhaseController.getReduceContext(request.getOriginalRequest()),
-                    request.isFinalReduce()
+                    request.performFinalReduce(),
+                    persistentSearchResponse
                 );
-
-                if (persistentSearchResponse != null) {
-                    searchResponseMerger.add(persistentSearchResponse.getSearchResponse());
-                }
 
                 runAsync(() -> reduce(searchResponseMerger, task, request), reduceListener);
             } catch (Exception e) {
                 listener.onFailure(e);
             }
-        }), listener::onFailure);
+        }, listener::onFailure);
 
         reduceListener.whenComplete((reducedSearchResponseAndShards -> {
             final PersistentSearchResponse reducedSearchResponse = reducedSearchResponseAndShards.v1();
@@ -149,7 +145,7 @@ public class PersistentSearchService {
             deleteIntermediateResults(reducedShards);
         }, listener::onFailure);
 
-        searchStorageService.getPersistentSearchResult(searchId, getSearchResultListener);
+        searchStorageService.getPersistentSearchResponseAsync(searchId, getSearchResultListener);
     }
 
     private void deleteIntermediateResults(List<PersistentSearchShardId> shards) {
@@ -170,7 +166,7 @@ public class PersistentSearchService {
         });
     }
 
-    private Tuple<PersistentSearchResponse, List<PersistentSearchShardId>> reduce(SearchResponseMerger searchResponseMerger,
+    private Tuple<PersistentSearchResponse, List<PersistentSearchShardId>> reduce(PersistentSearchResponseMerger searchResponseMerger,
                                                                                   SearchTask searchTask,
                                                                                   ReducePartialPersistentSearchRequest request) {
         // TODO: Use circuit breaker
@@ -179,12 +175,10 @@ public class PersistentSearchService {
             checkForCancellation(searchTask);
 
             try {
-                final SearchResponse partialResult
-                    = searchStorageService.getPartialResult(searchShardId.getDocId());
-
-                searchResponseMerger.add(partialResult);
+                final PersistentSearchResponse partialResult = searchStorageService.getPersistentSearchResponse(searchShardId.getDocId());
+                searchResponseMerger.addResponse(partialResult);
             } catch (Exception e) {
-                logger.info("ERROR!!", e);
+                logger.info("Error getting persistent search response", e);
                 // Ignore if not exists for now...
             }
             reducedShards.add(searchShardId);
@@ -192,16 +186,8 @@ public class PersistentSearchService {
 
         checkForCancellation(searchTask);
 
-        final SearchResponse reducedSearchResponse = searchResponseMerger.getMergedResponse(SearchResponse.Clusters.EMPTY);
-
-        final PersistentSearchResponse persistentSearchResponse = new PersistentSearchResponse(request.getSearchId(),
-            request.getSearchId(),
-            reducedSearchResponse,
-            request.getExpirationTime(),
-            new int[]{}
-        );
-
-        return Tuple.tuple(persistentSearchResponse, reducedShards);
+        final PersistentSearchResponse reducedSearchResponse = searchResponseMerger.getMergedResponse();
+        return Tuple.tuple(reducedSearchResponse, reducedShards);
     }
 
     private void checkForCancellation(SearchTask searchTask) {
@@ -230,15 +216,15 @@ public class PersistentSearchService {
 
         final InternalSearchResponse internalSearchResponse
             = searchPhaseController.merge(false, reducedQueryPhase, fetchResults, fetchResults::get);
-        return
-            new SearchResponse(internalSearchResponse,
-                null,
-                1,
-                1,
-                0,
-                0,
-                ShardSearchFailure.EMPTY_ARRAY,
-                SearchResponse.Clusters.EMPTY);
+        return new SearchResponse(internalSearchResponse,
+            null,
+            1,
+            1,
+            0,
+            0,
+            ShardSearchFailure.EMPTY_ARRAY,
+            SearchResponse.Clusters.EMPTY
+        );
     }
 
     private <T> void runAsync(CheckedSupplier<T, Exception> executable, ActionListener<T> listener) {

@@ -17,18 +17,18 @@ import java.io.IOException;
 
 public class PersistentSearchShardId implements Comparable<PersistentSearchShardId>, Writeable {
     private final SearchShard searchShard;
-    private final String docId;
+    private final String searchId;
     private final int shardIndex;
 
-    PersistentSearchShardId(SearchShard searchShard, String docId, int shardIndex) {
+    PersistentSearchShardId(SearchShard searchShard, String searchId, int shardIndex) {
         this.searchShard = searchShard;
-        this.docId = docId;
+        this.searchId = searchId;
         this.shardIndex = shardIndex;
     }
 
     PersistentSearchShardId(StreamInput in) throws IOException {
         this.searchShard = new SearchShard(in);
-        this.docId = in.readString();
+        this.searchId = in.readString();
         this.shardIndex = in.readInt();
     }
 
@@ -36,8 +36,12 @@ public class PersistentSearchShardId implements Comparable<PersistentSearchShard
         return searchShard;
     }
 
+    public String getSearchId() {
+        return searchId;
+    }
+
     public String getDocId() {
-        return docId;
+        return String.join("/", searchId, Integer.toString(shardIndex));
     }
 
     public int getShardIndex() {
@@ -52,7 +56,7 @@ public class PersistentSearchShardId implements Comparable<PersistentSearchShard
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         searchShard.writeTo(out);
-        out.writeString(docId);
+        out.writeString(searchId);
         out.writeInt(shardIndex);
     }
 }

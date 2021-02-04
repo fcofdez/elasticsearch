@@ -18,15 +18,16 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
-import org.elasticsearch.index.shard.ShardId;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 
 import static org.elasticsearch.search.persistent.PersistentSearchStorageService.EXPIRATION_TIME_FIELD;
 import static org.elasticsearch.search.persistent.PersistentSearchStorageService.ID_FIELD;
+import static org.elasticsearch.search.persistent.PersistentSearchStorageService.REDUCED_SHARDS_INDEX_FIELD;
 import static org.elasticsearch.search.persistent.PersistentSearchStorageService.RESPONSE_FIELD;
 import static org.elasticsearch.search.persistent.PersistentSearchStorageService.SEARCH_ID_FIELD;
 
@@ -35,18 +36,22 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
     private final String searchId;
     private final SearchResponse searchResponse;
     private final long expirationTime;
-    private final int[] reducedShardIndices;
+    // TODO: Optimize this?
+    private final List<Integer> reducedShardsIndex;
+    private final long version;
 
     public PersistentSearchResponse(String id,
                                     String searchId,
                                     SearchResponse searchResponse,
                                     long expirationTime,
-                                    int[] reducedShardIndices) {
+                                    List<Integer> reducedShardsIndex,
+                                    long version) {
         this.id = id;
         this.searchId = searchId;
         this.searchResponse = searchResponse;
         this.expirationTime = expirationTime;
-        this.reducedShardIndices = reducedShardIndices;
+        this.reducedShardsIndex = List.copyOf(reducedShardsIndex);
+        this.version = version;
     }
 
     public PersistentSearchResponse(StreamInput in) throws IOException {
@@ -55,7 +60,8 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
         this.searchId = in.readString();
         this.searchResponse = new SearchResponse(in);
         this.expirationTime = in.readLong();
-        this.reducedShardIndices = in.readIntArray();
+        this.reducedShardsIndex = in.readList(StreamInput::readInt);
+        this.version = in.readLong();
     }
 
     public String getId() {
@@ -70,17 +76,20 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
         return expirationTime;
     }
 
+    public List<Integer> getReducedShardIndices() {
+        return reducedShardsIndex;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
     public SearchResponse getSearchResponse() {
         return searchResponse;
     }
 
-    public static String generatePartialResultIdId(String searchId, ShardId shardId) {
-        // TODO: this might go beyond the max 512 bytes that an id can hold
-        final String index = shardId.getIndex().toString();
-        return String.join("/", searchId, index, Integer.toString(shardId.getId()));
-    }
-
-    public static PersistentSearchResponse fromXContent(final Map<String, Object> source,
+    public static PersistentSearchResponse fromXContent(Map<String, Object> source,
+                                                        long version,
                                                         NamedWriteableRegistry namedWriteableRegistry) throws Exception {
         final String id = (String) source.get(ID_FIELD);
         if (id == null) {
@@ -97,6 +106,11 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
             throw invalidDoc(EXPIRATION_TIME_FIELD);
         }
 
+        final List<Integer> reducedShardIndices = (List<Integer>) source.get(REDUCED_SHARDS_INDEX_FIELD);
+        if (reducedShardIndices == null) {
+            throw invalidDoc(REDUCED_SHARDS_INDEX_FIELD);
+        }
+
         final String encodedSearchResponse = (String) source.get(RESPONSE_FIELD);
         if (encodedSearchResponse == null) {
             throw invalidDoc(RESPONSE_FIELD);
@@ -105,7 +119,7 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
         final BytesReference encodedQuerySearchResult = BytesReference.fromByteBuffer(ByteBuffer.wrap(jsonSearchResponse));
         SearchResponse searchResponse = decodeSearchResponse(encodedQuerySearchResult, namedWriteableRegistry);
 
-        return new PersistentSearchResponse(id, searchId, searchResponse, expirationTime, new int[]{});
+        return new PersistentSearchResponse(id, searchId, searchResponse, expirationTime, reducedShardIndices, version);
     }
 
     private static IllegalArgumentException invalidDoc(String missingField) {
@@ -118,7 +132,8 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
         out.writeString(searchId);
         searchResponse.writeTo(out);
         out.writeLong(expirationTime);
-        out.writeIntArray(reducedShardIndices);
+        out.writeCollection(reducedShardsIndex, StreamOutput::write);
+        out.writeLong(version);
     }
 
     @Override
@@ -129,6 +144,7 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
             builder.field(SEARCH_ID_FIELD, id);
             builder.field(RESPONSE_FIELD, encodeSearchResponse(searchResponse));
             builder.field(EXPIRATION_TIME_FIELD, System.currentTimeMillis());
+            builder.field(REDUCED_SHARDS_INDEX_FIELD, reducedShardsIndex);
         }
         builder.endObject();
         return builder;
