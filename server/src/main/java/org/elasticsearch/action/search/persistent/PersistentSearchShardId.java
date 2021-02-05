@@ -14,6 +14,7 @@ import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
 
 import java.io.IOException;
+import java.util.Objects;
 
 public class PersistentSearchShardId implements Comparable<PersistentSearchShardId>, Writeable {
     private final SearchShard searchShard;
@@ -58,5 +59,20 @@ public class PersistentSearchShardId implements Comparable<PersistentSearchShard
         searchShard.writeTo(out);
         out.writeString(searchId);
         out.writeInt(shardIndex);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        PersistentSearchShardId that = (PersistentSearchShardId) o;
+        return shardIndex == that.shardIndex &&
+            Objects.equals(searchShard, that.searchShard) &&
+            Objects.equals(searchId, that.searchId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(searchShard, searchId, shardIndex);
     }
 }

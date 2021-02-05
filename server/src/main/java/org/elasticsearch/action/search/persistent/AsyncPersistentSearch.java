@@ -70,6 +70,7 @@ public class AsyncPersistentSearch {
                                  Map<String, AliasFilter> aliasFiltersByIndex,
                                  TimeValue expirationTime,
                                  int maxConcurrentQueryRequests,
+                                 int maxShardsPerReduceRequest,
                                  TransportSearchAction.SearchTimeProvider searchTimeProvider,
                                  SearchShardTargetResolver searchShardTargetResolver,
                                  SearchTransportService searchTransportService,
@@ -91,7 +92,7 @@ public class AsyncPersistentSearch {
         this.clusterService = clusterService;
         this.onCompletionListener = onCompletionListener;
         this.pendingShardsToQueryCount = new AtomicInteger(searchShards.size());
-        this.shardQueryResultsReducer = new ShardQueryResultsReducer(searchShards.size(), searchShards.size());
+        this.shardQueryResultsReducer = new ShardQueryResultsReducer(searchShards.size(), maxShardsPerReduceRequest);
         // Query and reduce ordering by shard id
         final List<SearchShard> searchShardsCopy = new ArrayList<>(searchShards);
         Collections.sort(searchShardsCopy);
@@ -172,8 +173,7 @@ public class AsyncPersistentSearch {
     }
 
     private void onSearchSuccess() {
-        // TODO: Materialize possible shard failures
-        // TODO: handle failure mode
+        // TODO: Materialize shard failures in the search response
         onCompletionListener.onResponse(null);
     }
 
@@ -228,7 +228,21 @@ public class AsyncPersistentSearch {
         }
 
         void run() {
-            searchShardIterator = searchShardTargetResolver.resolve(searchShardId.getSearchShard(), originalIndices);
+            searchShardTargetResolver.resolve(searchShardId.getSearchShard(), originalIndices, new ActionListener<>() {
+                @Override
+                public void onResponse(SearchShardIterator searchShardIterator) {
+                    doRun(searchShardIterator);
+                }
+
+                @Override
+                public void onFailure(Exception e) {
+                    // TODO: Handle this
+                }
+            });
+        }
+
+        void doRun(SearchShardIterator searchShardIterator) {
+            this.searchShardIterator = searchShardIterator;
             sendRequestToNextShardCopy();
         }
 
@@ -374,15 +388,17 @@ public class AsyncPersistentSearch {
                     public void onResponse(ReducePartialPersistentSearchResponse response) {
                         final boolean exchanged = runningReduce.compareAndSet(reducePartialPersistentSearchRequest, null);
                         assert exchanged;
+                        final List<PersistentSearchShardId> shardsToReduce = reducePartialPersistentSearchRequest.getShardsToReduce();
                         final List<PersistentSearchShardId> reducedShards = response.getReducedShards();
 
-                        // Retry failed shards
-                        // TODO: In some cases we might need to query the shard again?
-                        final List<PersistentSearchShardId> pendingShardsToReduce =
-                            reducePartialPersistentSearchRequest.getShardsToReduce();
-                        pendingShardsToReduce.removeAll(reducedShards);
-                        if (pendingShardsToReduce.isEmpty() == false) {
-                            reduceAll(pendingShardsToReduce);
+                        if (reducedShards.size() != shardsToReduce.size()) {
+                            final List<PersistentSearchShardId> pendingShardsToReduce = new ArrayList<>(shardsToReduce);
+                            pendingShardsToReduce.removeAll(reducedShards);
+                            // TODO: In some cases we might need to query the shard again?
+                            // Retry failed shards
+                            if (pendingShardsToReduce.isEmpty() == false) {
+                                reduceAll(pendingShardsToReduce);
+                            }
                         }
 
                         if (numberOfShardsToReduce.addAndGet(-reducedShards.size()) == 0) {

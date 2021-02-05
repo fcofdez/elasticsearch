@@ -639,7 +639,7 @@ public class Node implements Closeable {
                 namedWriteableRegistry, searchService::aggReduceContextBuilder);
 
             final PersistentSearchStorageService persistentSearchStorageService =
-                new PersistentSearchStorageService(client, namedWriteableRegistry);
+                new PersistentSearchStorageService(client, threadPool, namedWriteableRegistry, settings);
 
             final PersistentSearchService persistentSearchService = new PersistentSearchService(searchService, searchPhaseController,
                 persistentSearchStorageService, threadPool.executor(ThreadPool.Names.SEARCH), System::nanoTime);

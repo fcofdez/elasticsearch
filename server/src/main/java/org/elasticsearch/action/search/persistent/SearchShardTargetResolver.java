@@ -8,6 +8,7 @@
 
 package org.elasticsearch.action.search.persistent;
 
+import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.search.SearchShard;
 import org.elasticsearch.action.search.SearchShardIterator;
@@ -16,8 +17,10 @@ import org.elasticsearch.cluster.routing.IndexShardRoutingTable;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.index.shard.ShardId;
 
+import java.util.Collections;
+
 public interface SearchShardTargetResolver {
-    SearchShardIterator resolve(SearchShard shardSearchTarget, OriginalIndices originalIndices);
+    void resolve(SearchShard shardSearchTarget, OriginalIndices originalIndices, ActionListener<SearchShardIterator> listener);
 
     class DefaultSearchShardTargetResolver implements SearchShardTargetResolver {
         private final ClusterService clusterService;
@@ -27,14 +30,18 @@ public interface SearchShardTargetResolver {
         }
 
         @Override
-        public SearchShardIterator resolve(SearchShard shardSearchTarget, OriginalIndices originalIndices) {
+        public void resolve(SearchShard shardSearchTarget, OriginalIndices originalIndices, ActionListener<SearchShardIterator> listener) {
             final ShardId shardId = shardSearchTarget.getShardId();
-            // TODO: Throw when index does not exist?
 
             final IndexRoutingTable indexShardRoutingTable = clusterService.state().getRoutingTable().index(shardId.getIndex());
-            final IndexShardRoutingTable shardRoutingTable = indexShardRoutingTable.shard(shardId.getId());
+            if (indexShardRoutingTable == null) {
+                // It will be retried
+                listener.onResponse(new SearchShardIterator(null, shardId, Collections.emptyList(), originalIndices));
+                return;
+            }
 
-            return new SearchShardIterator(null, shardId, shardRoutingTable.activeShards(), originalIndices);
+            final IndexShardRoutingTable shardRoutingTable = indexShardRoutingTable.shard(shardId.getId());
+            listener.onResponse(new SearchShardIterator(null, shardId, shardRoutingTable.activeShards(), originalIndices));
         }
     }
 }

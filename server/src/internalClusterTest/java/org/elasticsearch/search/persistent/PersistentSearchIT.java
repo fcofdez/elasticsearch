@@ -16,8 +16,6 @@ import org.elasticsearch.action.search.persistent.GetPersistentSearchAction;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.SubmitPersistentSearchAction;
 import org.elasticsearch.action.search.persistent.SubmitPersistentSearchResponse;
-import org.elasticsearch.cluster.metadata.IndexMetadata;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.aggregations.bucket.terms.StringTerms;
 import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
@@ -34,7 +32,7 @@ import static org.hamcrest.core.IsEqual.equalTo;
 public class PersistentSearchIT extends ESIntegTestCase {
     public void testBasicPersistentSearch() throws Exception {
         final String indexName = randomAlphaOfLength(10).toLowerCase(Locale.ROOT);
-        assertAcked(prepareCreate(indexName, Settings.builder().put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, randomIntBetween(1, 40))));
+        assertAcked(prepareCreate(indexName));
         PutMappingRequest request = new PutMappingRequest().indices(indexName).source("key", "type=keyword");
         client().admin().indices().putMapping(request).actionGet();
         ensureGreen(indexName);
@@ -58,7 +56,6 @@ public class PersistentSearchIT extends ESIntegTestCase {
         final GetPersistentSearchRequest getReq =
             new GetPersistentSearchRequest(submitPersistentSearchResponse.getSearchId().getSearchId());
 
-        Thread.sleep(3_000);
         assertBusy(() -> {
             final PersistentSearchResponse persistentSearchResponse =
                 client().execute(GetPersistentSearchAction.INSTANCE, getReq).actionGet();
@@ -73,17 +70,21 @@ public class PersistentSearchIT extends ESIntegTestCase {
             assertThat(agg.getBucketByKey("bar").getDocCount(), equalTo((long) docCount));
         });
 
-        final SearchRequest sr = new SearchRequest().allowPartialSearchResults(false).indices(".persistent_search_results");
-        final SearchResponse searchResponse =
-            client().search(sr).actionGet();
-        assertThat(searchResponse.getHits().getTotalHits().value, equalTo(1L));
+        assertBusy(() -> {
+            final SearchRequest getPersistentSearchResultDocs
+                = new SearchRequest().allowPartialSearchResults(false).indices(PersistentSearchStorageService.INDEX);
+            final SearchResponse searchResponse =
+                client().search(getPersistentSearchResultDocs).actionGet();
+            // Only the final reduced result is kept around
+            assertThat(searchResponse.getHits().getTotalHits().value, equalTo(1L));
+        });
     }
 
     private void populateIndex(String indexName, int docCount) throws InterruptedException {
         final List<IndexRequestBuilder> indexRequestBuilders = new ArrayList<>();
         final String key = "key";
         for (int i = 0; i < docCount; i++) {
-            indexRequestBuilders.add(client().prepareIndex(indexName).setSource(key, "bar", "hola", randomAlphaOfLength(4)));
+            indexRequestBuilders.add(client().prepareIndex(indexName).setSource(key, "bar", "data", randomAlphaOfLength(4)));
         }
         indexRandom(true, true, indexRequestBuilders);
         refresh(indexName);

@@ -38,7 +38,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
                                                 long searchRelativeStartNanos,
                                                 long expirationTime) {
         this.searchId = searchId;
-        this.shardsToReduce = shardsToReduce;
+        this.shardsToReduce = List.copyOf(shardsToReduce);
         this.originalRequest = originalRequest;
         this.performFinalReduce = performFinalReduce;
         this.searchAbsoluteStartMillis = searchAbsoluteStartMillis;

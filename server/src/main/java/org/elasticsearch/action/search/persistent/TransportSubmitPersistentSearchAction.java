@@ -118,6 +118,7 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
             aliasFilterMap,
             expirationTime,
             4,
+            searchShards.size(),
             timeProvider,
             searchShardTargetResolver,
             searchTransportService,
