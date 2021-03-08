@@ -17,22 +17,30 @@ import java.util.List;
 
 public class ReducePartialPersistentSearchResponse extends ActionResponse {
     private final List<PersistentSearchShardId> reducedShards;
+    private final List<PersistentSearchShardFetchFailure> failedToFetchShards;
 
-    public ReducePartialPersistentSearchResponse(List<PersistentSearchShardId> reducedShards) {
+    public ReducePartialPersistentSearchResponse(List<PersistentSearchShardId> reducedShards,
+                                                 List<PersistentSearchShardFetchFailure> failedToFetchShards) {
         this.reducedShards = reducedShards;
+        this.failedToFetchShards = failedToFetchShards;
     }
 
     public ReducePartialPersistentSearchResponse(StreamInput in) throws IOException {
-        super(in);
         this.reducedShards = in.readList(PersistentSearchShardId::new);
+        this.failedToFetchShards = in.readList(PersistentSearchShardFetchFailure::new);
     }
 
     public List<PersistentSearchShardId> getReducedShards() {
         return reducedShards;
     }
 
+    public List<PersistentSearchShardFetchFailure> getFailedToFetchShards() {
+        return failedToFetchShards;
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeList(reducedShards);
+        out.writeList(failedToFetchShards);
     }
 }

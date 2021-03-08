@@ -266,6 +266,7 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
                         persistentSearchShard.setCanBeSkipped(true);
                     }
                 }
+                // TODO: sort shards
                 listener.onResponse(Collections.unmodifiableList(persistentSearchShards));
             }
         }

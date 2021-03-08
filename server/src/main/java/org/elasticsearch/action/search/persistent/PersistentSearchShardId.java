@@ -51,7 +51,7 @@ public class PersistentSearchShardId implements Comparable<PersistentSearchShard
 
     @Override
     public int compareTo(PersistentSearchShardId o) {
-        return searchShard.compareTo(o.searchShard);
+        return Integer.compare(shardIndex, o.shardIndex);
     }
 
     @Override

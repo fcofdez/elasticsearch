@@ -14,9 +14,11 @@ import org.elasticsearch.action.search.persistent.AsyncPersistentSearch;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
 import org.elasticsearch.action.search.persistent.PersistentSearchShard;
+import org.elasticsearch.action.search.persistent.PersistentSearchShardId;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
 import org.elasticsearch.action.search.persistent.SearchShardTargetResolver;
+import org.elasticsearch.action.search.persistent.ShardQueryResultInfo;
 import org.elasticsearch.cluster.routing.RecoverySource;
 import org.elasticsearch.cluster.routing.ShardRouting;
 import org.elasticsearch.cluster.routing.ShardRoutingHelper;
@@ -43,6 +45,7 @@ import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static org.hamcrest.core.IsEqual.equalTo;
 import static org.mockito.Mockito.mock;
@@ -93,7 +96,9 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             inFlightQueries.clear();
             executor.execute(() -> {
                 for (ActionListener<ExecutePersistentQueryFetchResponse> pendingQuery : inFlightQueriesCopy) {
-                    pendingQuery.onResponse(new ExecutePersistentQueryFetchResponse("search" + docIdGenerator.incrementAndGet()));
+                    final ExecutePersistentQueryFetchResponse response =
+                        new ExecutePersistentQueryFetchResponse("search" + docIdGenerator.incrementAndGet(), "node-id");
+                    pendingQuery.onResponse(response);
                 }
             });
         }
@@ -126,7 +131,9 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             executor.execute(() -> {
                 for (Tuple<ActionListener<ReducePartialPersistentSearchResponse>, ReducePartialPersistentSearchRequest> pendingReduce :
                     inFlightReducesCopy) {
-                    pendingReduce.v1().onResponse(new ReducePartialPersistentSearchResponse(pendingReduce.v2().getShardsToReduce()));
+                    final List<PersistentSearchShardId> shardsToReduce =
+                        pendingReduce.v2().getShardsToReduce().stream().map(ShardQueryResultInfo::getShardId).collect(Collectors.toList());
+                    pendingReduce.v1().onResponse(new ReducePartialPersistentSearchResponse(shardsToReduce, List.of()));
                 }
             });
         }
