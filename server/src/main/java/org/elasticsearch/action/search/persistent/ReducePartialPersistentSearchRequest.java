@@ -28,6 +28,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
     private final long searchAbsoluteStartMillis;
     private final long searchRelativeStartNanos;
     private final long expirationTime;
+    private final int reductionRound;
     private final boolean performFinalReduce;
 
     public ReducePartialPersistentSearchRequest(String searchId,
@@ -36,6 +37,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
                                                 long searchAbsoluteStartMillis,
                                                 long searchRelativeStartNanos,
                                                 long expirationTime,
+                                                int reductionRound,
                                                 boolean performFinalReduce) {
         this.searchId = searchId;
         this.shardsToReduce = List.copyOf(shardsToReduce);
@@ -43,6 +45,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
         this.searchAbsoluteStartMillis = searchAbsoluteStartMillis;
         this.searchRelativeStartNanos = searchRelativeStartNanos;
         this.expirationTime = expirationTime;
+        this.reductionRound = reductionRound;
         this.performFinalReduce = performFinalReduce;
     }
 
@@ -54,6 +57,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
         this.searchAbsoluteStartMillis = in.readLong();
         this.searchRelativeStartNanos = in.readLong();
         this.expirationTime = in.readLong();
+        this.reductionRound = in.readInt();
         this.performFinalReduce = in.readBoolean();
     }
 
@@ -81,6 +85,10 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
         return searchRelativeStartNanos;
     }
 
+    public int getReductionRound() {
+        return reductionRound;
+    }
+
     public boolean performFinalReduce() {
         return performFinalReduce;
     }
@@ -94,6 +102,7 @@ public class ReducePartialPersistentSearchRequest extends ActionRequest {
         out.writeLong(searchAbsoluteStartMillis);
         out.writeLong(searchRelativeStartNanos);
         out.writeLong(expirationTime);
+        out.writeInt(reductionRound);
         out.writeBoolean(performFinalReduce);
     }
 

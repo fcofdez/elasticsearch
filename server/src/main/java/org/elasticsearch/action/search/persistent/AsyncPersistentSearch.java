@@ -153,14 +153,12 @@ public class AsyncPersistentSearch {
     }
 
     private void onShardQuerySuccess(PersistentSearchShardId searchShard, String nodeIdHoldingData) {
-        logger.info("Shard success!");
         runningShardQueries.decrementAndGet();
         shardQueryResultsReducer.reduce(new ShardQueryResultInfo(searchShard, nodeIdHoldingData));
         decrementPendingShardsToQuery();
     }
 
     private void onShardQueryFailure(AsyncShardQueryAndFetch searchShard, Exception e) {
-        logger.info("Shard failure!", e);
         runningShardQueries.decrementAndGet();
 
         if (searchShard.canBeRetried() && isCancelled() == false) {
@@ -329,6 +327,7 @@ public class AsyncPersistentSearch {
         private final AtomicReference<ReducePartialPersistentSearchRequest> runningReduce = new AtomicReference<>(null);
         private final AtomicInteger numberOfShardsToReduce;
         private final int maxShardsPerReduceBatch;
+        private final AtomicInteger reductionRound = new AtomicInteger(0);
 
         private ShardQueryResultsReducer(int numberOfShards, int maxShardsPerReduceRequest) {
             this.numberOfShardsToReduce = new AtomicInteger(numberOfShards);
@@ -341,13 +340,6 @@ public class AsyncPersistentSearch {
                 pendingShardsToReduce.add(searchShard);
             }
 
-            maybeRun();
-        }
-
-        void reduceAll(Collection<ShardQueryResultInfo> shards) {
-            synchronized (pendingShardsToReduce) {
-                pendingShardsToReduce.addAll(shards);
-            }
             maybeRun();
         }
 
@@ -377,13 +369,15 @@ public class AsyncPersistentSearch {
                         performFinalReduce
                     );
 
-                    logger.info("Sending reduce!!");
+                    final int reductionRound = this.reductionRound.incrementAndGet();
+
                     reducePartialPersistentSearchRequest = new ReducePartialPersistentSearchRequest(asyncSearchId,
                         shardsToReduce,
                         updatedRequest,
                         searchTimeProvider.getAbsoluteStartMillis(),
                         searchTimeProvider.getRelativeStartNanos(),
                         expirationTime.millis() + searchTimeProvider.getAbsoluteStartMillis(),
+                        reductionRound,
                         performFinalReduce
                     );
                     runningReduce.compareAndSet(null, reducePartialPersistentSearchRequest);

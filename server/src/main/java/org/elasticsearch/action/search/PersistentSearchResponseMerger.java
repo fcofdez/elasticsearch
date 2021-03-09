@@ -64,6 +64,7 @@ class PersistentSearchResponseMerger implements Releasable {
         this.searchId = searchId;
         this.expirationTime = expirationTime;
         this.baseResponse = baseResponse;
+        this.searchTimeProvider = searchTimeProvider;
 
         this.queryPhaseResultConsumer = searchPhaseController.newSearchPhaseResults(threadPool.executor(ThreadPool.Names.SAME),
             circuitBreaker,
@@ -78,7 +79,6 @@ class PersistentSearchResponseMerger implements Releasable {
         this.searchPhaseController = searchPhaseController;
         this.reducedShards = new ArrayList<>(shardsToReduce.size());
         this.fetchResults = new ArrayList<>(shardsToReduce.size());
-        this.searchTimeProvider = searchTimeProvider;
         this.pendingShards = new HashSet<>(shardsToReduce);
 
         if (baseResponse != null) {
@@ -100,7 +100,7 @@ class PersistentSearchResponseMerger implements Releasable {
 
     void addResponse(PersistentSearchShardId searchShardId, ShardSearchResult shardSearchResult) {
         assert Thread.currentThread().getName().contains("[" + ThreadPool.Names.SEARCH + "]")
-            : "Expected current thread [" + Thread.currentThread() + "] to be the search.";
+            : "Expected current thread [" + Thread.currentThread() + "] to be the a search thread.";
 
         if (pendingShards.remove(searchShardId) == false) {
             throw new IllegalArgumentException("Unknown shard " + searchShardId);
@@ -163,17 +163,21 @@ class PersistentSearchResponseMerger implements Releasable {
 
         final SearchResponse mergedResponse = searchResponseMerger.getMergedResponse(SearchResponse.Clusters.EMPTY);
 
-        return new PartialReducedResponse(new PersistentSearchResponse(searchId,
-            searchId,
-            mergedResponse,
-            expirationTime,
-            reducedShardIndices.toArray(),
-            baseResponse == null ? 0 : baseResponse.getVersion() + 1
-        ), reducedShards, fetchErrors);
+        return new PartialReducedResponse(
+            new PersistentSearchResponse(searchId,
+                searchId,
+                mergedResponse,
+                expirationTime,
+                reducedShardIndices.toArray(),
+                baseResponse == null ? 0 : baseResponse.getVersion() + 1
+            ),
+            reducedShards,
+            fetchErrors
+        );
     }
 
     private void onReductionError(Exception e) {
-
+        throw new RuntimeException("Error reducing", e);
     }
 
     private void addReducedShardIndices(PersistentSearchResponse baseResponse) {

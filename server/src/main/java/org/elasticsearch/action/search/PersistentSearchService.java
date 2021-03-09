@@ -8,8 +8,6 @@
 
 package org.elasticsearch.action.search;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.StepListener;
@@ -17,11 +15,11 @@ import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchReq
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.PartialReducedResponse;
-import org.elasticsearch.action.search.persistent.ShardQueryResultInfo;
 import org.elasticsearch.action.search.persistent.PersistentSearchShardId;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
 import org.elasticsearch.action.search.persistent.ShardQueryResultFetcher;
+import org.elasticsearch.action.search.persistent.ShardQueryResultInfo;
 import org.elasticsearch.action.search.persistent.ShardSearchResult;
 import org.elasticsearch.common.CheckedSupplier;
 import org.elasticsearch.common.breaker.CircuitBreaker;
@@ -40,8 +38,6 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 public class PersistentSearchService {
-    private final Logger logger = LogManager.getLogger(PersistentSearchService.class);
-
     private final SearchService searchService;
     private final SearchPhaseController searchPhaseController;
     private final PersistentSearchStorageService searchStorageService;
@@ -138,7 +134,6 @@ public class PersistentSearchService {
 
                 runAsync(() -> reduce(searchResponseMerger, task, request), reduceListener);
             } catch (Exception e) {
-                logger.info("Error reducing!!", e);
                 listener.onFailure(e);
             }
         }, listener::onFailure);
@@ -163,15 +158,19 @@ public class PersistentSearchService {
             });
         }), listener::onFailure);
 
-        searchStorageService.getPersistentSearchResponseAsync(searchId,
-            ActionListener.delegateResponse(getSearchResultListener, (delegate, e) -> {
-                if (e instanceof IndexNotFoundException) {
-                    delegate.onResponse(null);
-                    return;
-                }
-                delegate.onFailure(e);
-            })
-        );
+        if (request.getReductionRound() == 1) {
+            getSearchResultListener.onResponse(null);
+        } else {
+            searchStorageService.getPersistentSearchResponseAsync(searchId,
+                ActionListener.delegateResponse(getSearchResultListener, (delegate, e) -> {
+                    if (e instanceof IndexNotFoundException) {
+                        delegate.onResponse(null);
+                        return;
+                    }
+                    delegate.onFailure(e);
+                })
+            );
+        }
     }
 
     private PartialReducedResponse reduce(PersistentSearchResponseMerger searchResponseMerger,
