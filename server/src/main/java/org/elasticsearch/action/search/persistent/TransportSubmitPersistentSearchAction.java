@@ -8,6 +8,8 @@
 
 package org.elasticsearch.action.search.persistent;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.StepListener;
@@ -66,6 +68,8 @@ import java.util.stream.IntStream;
 import static org.elasticsearch.transport.RemoteClusterAware.LOCAL_CLUSTER_GROUP_KEY;
 
 public class TransportSubmitPersistentSearchAction extends HandledTransportAction<SearchRequest, SubmitPersistentSearchResponse> {
+    private final Logger logger = LogManager.getLogger(TransportSubmitPersistentSearchAction.class);
+
     private final NodeClient nodeClient;
     private final ThreadPool threadPool;
     private final ClusterService clusterService;
@@ -208,6 +212,8 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
     }
 
     private static class CanMatchPhase {
+        private final Logger logger = LogManager.getLogger(CanMatchPhase.class);
+
         private final SearchRequest searchRequest;
         private final SearchTransportService searchTransportService;
         private final SearchTask searchTask;
@@ -280,6 +286,7 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
         void onShardExecuted() {
             if (shardExecutions.countDown()) {
                 final List<PersistentSearchShard> sortedShards = getSortedAndSkippedShards();
+                logger.info("Can match finished");
                 listener.onResponse(sortedShards);
             }
         }
@@ -293,16 +300,19 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
                     canBeSkippedCount++;
                 }
             }
+            logger.info("Can be skipped {} / {}", canBeSkippedCount, persistentSearchShards.size());
 
             if (canBeSkippedCount == persistentSearchShards.size()) {
                 persistentSearchShards.get(0).setCanBeSkipped(false);
             }
 
             if (shouldSortShards(minMaxValues) == false) {
+                logger.info("Sort shards false");
                 return Collections.unmodifiableList(persistentSearchShards);
             }
 
             FieldSortBuilder fieldSort = FieldSortBuilder.getPrimaryFieldSortOrNull(searchRequest.source());
+            logger.info("Sort shards true");
             return sortShards(persistentSearchShards, minMaxValues, fieldSort.order());
         }
 
