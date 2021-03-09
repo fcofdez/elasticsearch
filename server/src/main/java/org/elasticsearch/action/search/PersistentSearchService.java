@@ -8,6 +8,8 @@
 
 package org.elasticsearch.action.search;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.StepListener;
@@ -38,6 +40,8 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 public class PersistentSearchService {
+    private final Logger logger = LogManager.getLogger(PersistentSearchService.class);
+
     private final SearchService searchService;
     private final SearchPhaseController searchPhaseController;
     private final PersistentSearchStorageService searchStorageService;
@@ -82,6 +86,8 @@ public class PersistentSearchService {
         StepListener<SearchPhaseResult> queryListener = new StepListener<>();
         StepListener<String> storeListener = new StepListener<>();
 
+        logger.info("Execute query!");
+
         final ShardSearchRequest shardSearchRequest = request.getShardSearchRequest();
         queryListener.whenComplete(result -> {
 
@@ -92,12 +98,14 @@ public class PersistentSearchService {
 
             final ShardSearchResult shardSearchResult =
                 new ShardSearchResult(docId, searchId, shardIndex, expireTime, (QueryFetchSearchResult) result);
-
+            logger.info("Query executed!!");
             searchStorageService.storeShardResult(shardSearchResult, storeListener);
         }, listener::onFailure);
 
-        storeListener.whenComplete(partialResultDocId ->
-                listener.onResponse(new ExecutePersistentQueryFetchResponse(partialResultDocId, localNodeIdSupplier.get())),
+        storeListener.whenComplete(partialResultDocId -> {
+                logger.info("Query stored!");
+                listener.onResponse(new ExecutePersistentQueryFetchResponse(partialResultDocId, localNodeIdSupplier.get()));
+            },
             listener::onFailure);
 
         searchService.executeQueryAndFetch(shardSearchRequest, false, task, queryListener);
