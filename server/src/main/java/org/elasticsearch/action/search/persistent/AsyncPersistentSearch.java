@@ -106,7 +106,8 @@ public class AsyncPersistentSearch {
         if (shardsToSearch.isEmpty()) {
             shardsToSearch.add(searchShards.iterator().next());
         }
-        Collections.sort(shardsToSearch);
+        logger.info("Shards to search {}/{}", shardsToSearch.size(), shardsToSearch);
+        //Collections.sort(shardsToSearch);
         // Query and reduce ordering by index name
 
         this.searchShards = new ArrayList<>(shardsToSearch);
@@ -205,6 +206,7 @@ public class AsyncPersistentSearch {
     private void sendShardSearchRequest(SearchShardTarget searchShardTarget,
                                         ExecutePersistentQueryFetchRequest asyncShardSearchRequest,
                                         ActionListener<ExecutePersistentQueryFetchResponse> listener) {
+        logger.info("Sending shard request!");
         final Transport.Connection connection = getConnection(searchShardTarget.getClusterAlias(), searchShardTarget.getNodeId());
         searchTransportService.sendExecutePersistentQueryFetchRequest(connection,
             asyncShardSearchRequest,
@@ -387,6 +389,7 @@ public class AsyncPersistentSearch {
             }
 
             if (reducePartialPersistentSearchRequest != null) {
+                logger.info("Sending reduce!!");
                 sendReduceRequest(reducePartialPersistentSearchRequest, new ActionListener<>() {
                     @Override
                     public void onResponse(ReducePartialPersistentSearchResponse response) {

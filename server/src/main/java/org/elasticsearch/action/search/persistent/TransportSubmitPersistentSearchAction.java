@@ -292,27 +292,18 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
         }
 
         private List<PersistentSearchShard> getSortedAndSkippedShards() {
-            int canBeSkippedCount = 0;
             for (int i = 0; i < persistentSearchShards.size(); i++) {
                 PersistentSearchShard persistentSearchShard = persistentSearchShards.get(i);
                 if (canMatchShard.get(i) == false) {
                     persistentSearchShard.setCanBeSkipped(true);
-                    canBeSkippedCount++;
                 }
-            }
-            logger.info("Can be skipped {} / {}", canBeSkippedCount, persistentSearchShards.size());
-
-            if (canBeSkippedCount == persistentSearchShards.size()) {
-                persistentSearchShards.get(0).setCanBeSkipped(false);
             }
 
             if (shouldSortShards(minMaxValues) == false) {
-                logger.info("Sort shards false");
                 return Collections.unmodifiableList(persistentSearchShards);
             }
 
             FieldSortBuilder fieldSort = FieldSortBuilder.getPrimaryFieldSortOrNull(searchRequest.source());
-            logger.info("Sort shards true");
             return sortShards(persistentSearchShards, minMaxValues, fieldSort.order());
         }
 
