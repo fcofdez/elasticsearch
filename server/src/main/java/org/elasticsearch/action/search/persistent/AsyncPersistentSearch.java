@@ -154,6 +154,7 @@ public class AsyncPersistentSearch {
     }
 
     private void onShardQuerySuccess(PersistentSearchShardId searchShard, String nodeIdHoldingData) {
+        logger.info("Shard query success");
         runningShardQueries.decrementAndGet();
         shardQueryResultsReducer.reduce(new ShardQueryResultInfo(searchShard, nodeIdHoldingData));
         decrementPendingShardsToQuery();
