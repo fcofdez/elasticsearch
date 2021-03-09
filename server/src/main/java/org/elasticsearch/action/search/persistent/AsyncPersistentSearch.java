@@ -341,6 +341,7 @@ public class AsyncPersistentSearch {
             // assert pending shards to reduce
             synchronized (pendingShardsToReduce) {
                 pendingShardsToReduce.add(searchShard);
+                logger.info("REDUCE {} / {}", pendingShardsToReduce.size(), maxShardsPerReduceBatch);
             }
 
             maybeRun();

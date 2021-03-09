@@ -459,7 +459,7 @@ public class SearchService extends AbstractLifecycleComponent implements IndexEv
                 e = (e.getCause() == null || e.getCause() instanceof Exception) ?
                     (Exception) e.getCause() : new ElasticsearchException(e.getCause());
             }
-            logger.info("Query phase failed", e);
+            logger.trace("Query phase failed", e);
             processFailure(readerContext, e);
             throw e;
         }
