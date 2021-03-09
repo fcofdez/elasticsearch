@@ -286,7 +286,6 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
         void onShardExecuted() {
             if (shardExecutions.countDown()) {
                 final List<PersistentSearchShard> sortedShards = getSortedAndSkippedShards();
-                logger.info("Can match finished");
                 listener.onResponse(sortedShards);
             }
         }

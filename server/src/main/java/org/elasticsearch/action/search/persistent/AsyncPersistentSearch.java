@@ -95,7 +95,6 @@ public class AsyncPersistentSearch {
         this.connectionProvider = connectionProvider;
         this.clusterService = clusterService;
         this.onCompletionListener = onCompletionListener;
-        this.shardQueryResultsReducer = new ShardQueryResultsReducer(searchShards.size(), maxShardsPerReduceRequest);
         this.startTime = System.nanoTime();
 
         List<PersistentSearchShard> shardsToSearch = searchShards.stream()
@@ -106,12 +105,12 @@ public class AsyncPersistentSearch {
         if (shardsToSearch.isEmpty()) {
             shardsToSearch.add(searchShards.iterator().next());
         }
-        logger.info("Shards to search {}/{}", shardsToSearch.size(), shardsToSearch);
         //Collections.sort(shardsToSearch);
         // Query and reduce ordering by index name
 
-        this.searchShards = new ArrayList<>(shardsToSearch);
+        this.searchShards = shardsToSearch;
         this.pendingShardsToQueryCount = new AtomicInteger(shardsToSearch.size());
+        this.shardQueryResultsReducer = new ShardQueryResultsReducer(this.searchShards.size(), maxShardsPerReduceRequest);
         Queue<AsyncShardQueryAndFetch> pendingShardQueries = new PriorityQueue<>();
         final long expireAbsoluteTime = expirationTime.millis() + searchTimeProvider.getAbsoluteStartMillis();
         for (int i = 0; i < this.searchShards.size(); i++) {
