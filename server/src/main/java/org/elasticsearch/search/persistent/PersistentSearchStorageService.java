@@ -10,21 +10,9 @@ package org.elasticsearch.search.persistent;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.elasticsearch.ElasticsearchTimeoutException;
-import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.search.PersistentSearchService;
 import org.elasticsearch.action.search.persistent.ShardSearchResult;
-import org.elasticsearch.action.support.PlainActionFuture;
-import org.elasticsearch.action.support.RetryableAction;
-import org.elasticsearch.action.support.TransportActions;
-import org.elasticsearch.cluster.block.ClusterBlockException;
-import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.node.NodeClosedException;
-import org.elasticsearch.threadpool.ThreadPool;
-import org.elasticsearch.transport.ConnectTransportException;
-
-import java.util.concurrent.TimeUnit;
 
 public class PersistentSearchStorageService {
     private final Logger logger = LogManager.getLogger(PersistentSearchService.class);

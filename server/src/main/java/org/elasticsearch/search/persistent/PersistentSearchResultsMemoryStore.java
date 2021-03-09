@@ -56,7 +56,7 @@ public class PersistentSearchResultsMemoryStore {
             return null;
         }
         try (StreamInput in = new NamedWriteableAwareStreamInput(encodedResponse.streamInput(), namedWriteableRegistry)) {
-            in.setVersion(Version.fromId(in.readInt()));
+            in.setVersion(Version.readVersion(in));
             final ShardSearchResult shardSearchResult = new ShardSearchResult(in);
 
             memoryController.removedFromCache(encodedResponse.ramBytesUsed());

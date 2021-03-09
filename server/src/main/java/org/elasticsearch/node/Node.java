@@ -673,7 +673,7 @@ public class Node implements Closeable {
                 System::nanoTime,
                 () -> clusterService.localNode().getId(),
                 shardResultFetcher,
-                circuitBreakerService.getBreaker("persistent-search")
+                circuitBreakerService.getBreaker(CircuitBreaker.REQUEST)
             );
 
             modules.add(b -> {

@@ -47,10 +47,8 @@ public class GetShardResultAction extends ActionType<GetShardResultAction.Respon
         protected void doExecute(Task task,
                                  Request request,
                                  ActionListener<Response> listener) {
-            persistentSearchStorageService.getShardResult(request.shardResultId,
-                ActionListener.delegateFailure(listener, (delegate, response) -> new Response(response)));
+            persistentSearchStorageService.getShardResult(request.shardResultId, listener.map(Response::new));
         }
-
     }
 
     public static class Request extends ActionRequest {

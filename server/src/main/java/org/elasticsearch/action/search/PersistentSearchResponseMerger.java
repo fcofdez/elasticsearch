@@ -9,15 +9,19 @@
 package org.elasticsearch.action.search;
 
 import com.carrotsearch.hppc.IntArrayList;
+import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.search.persistent.PartialReducedResponse;
-import org.elasticsearch.action.search.persistent.ShardQueryResultInfo;
 import org.elasticsearch.action.search.persistent.PersistentSearchShardFetchFailure;
 import org.elasticsearch.action.search.persistent.PersistentSearchShardId;
+import org.elasticsearch.action.search.persistent.ShardQueryResultInfo;
 import org.elasticsearch.action.search.persistent.ShardSearchResult;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.breaker.CircuitBreaker;
+import org.elasticsearch.common.lease.Releasable;
+import org.elasticsearch.common.lease.Releasables;
 import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchService;
+import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.fetch.QueryFetchSearchResult;
@@ -31,7 +35,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-class PersistentSearchResponseMerger {
+class PersistentSearchResponseMerger implements Releasable {
     private final String searchId;
     private final long expirationTime;
     private final QueryPhaseResultConsumer queryPhaseResultConsumer;
@@ -103,6 +107,10 @@ class PersistentSearchResponseMerger {
         }
 
         final QueryFetchSearchResult shardSearchResultResult = shardSearchResult.getResult();
+        shardSearchResultResult.setShardIndex(searchShardId.getShardIndex());
+        final SearchShardTarget shardTarget =
+            new SearchShardTarget("node", searchShardId.getSearchShard().getShardId(), null, OriginalIndices.NONE);
+        shardSearchResultResult.setSearchShardTarget(shardTarget);
         queryPhaseResultConsumer.consumeResult(shardSearchResultResult, () -> {
             // This is empty on purpose, since queryPhaseResultConsumer executor is SAME if we trigger a reduction,
             // this reduction runs in the same thread
@@ -172,5 +180,10 @@ class PersistentSearchResponseMerger {
         for (Integer reducedShardIndex : baseResponse.getReducedShardIndices()) {
             reducedShardIndices.add(reducedShardIndex);
         }
+    }
+
+    @Override
+    public void close() {
+        Releasables.close(queryPhaseResultConsumer);
     }
 }

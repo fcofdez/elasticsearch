@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 
 import static org.elasticsearch.search.persistent.PersistentSearchResultsIndexStore.EXPIRATION_TIME_FIELD;
@@ -106,7 +107,7 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
             throw invalidDoc(EXPIRATION_TIME_FIELD);
         }
 
-        final int[] reducedShardIndices = (int[]) source.get(REDUCED_SHARDS_INDEX_FIELD);
+        final List<Integer> reducedShardIndices = (List<Integer>) source.get(REDUCED_SHARDS_INDEX_FIELD);
         if (reducedShardIndices == null) {
             throw invalidDoc(REDUCED_SHARDS_INDEX_FIELD);
         }
@@ -119,7 +120,8 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
         final BytesReference encodedQuerySearchResult = BytesReference.fromByteBuffer(ByteBuffer.wrap(jsonSearchResponse));
         SearchResponse searchResponse = decodeSearchResponse(encodedQuerySearchResult, namedWriteableRegistry);
 
-        return new PersistentSearchResponse(id, searchId, searchResponse, expirationTime, reducedShardIndices, version);
+        final int[] reducedShardIndicesArray = reducedShardIndices.stream().mapToInt(i -> i).toArray();
+        return new PersistentSearchResponse(id, searchId, searchResponse, expirationTime, reducedShardIndicesArray, version);
     }
 
     private static IllegalArgumentException invalidDoc(String missingField) {
@@ -162,7 +164,7 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
     private static SearchResponse decodeSearchResponse(BytesReference encodedQuerySearchResult,
                                                        NamedWriteableRegistry namedWriteableRegistry) throws Exception {
         try (StreamInput in = new NamedWriteableAwareStreamInput(encodedQuerySearchResult.streamInput(), namedWriteableRegistry)) {
-            in.setVersion(Version.fromId(in.readInt()));
+            in.setVersion(Version.readVersion(in));
             return new SearchResponse(in);
         }
     }

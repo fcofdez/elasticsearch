@@ -191,16 +191,16 @@ public class PersistentSearchService {
                     searchTask,
                     timeout
                 );
-                logger.info("IZUU Fetch result {}", searchShardResult.getPersistentSearchId());
                 searchResponseMerger.addResponse(shardId, searchShardResult);
             } catch (Exception e) {
-                logger.info("IZUU Fetch result ERROR" + shardId, e);
                 searchResponseMerger.onShardResponseFetchFailure(shardQueryResultInfo, e);
             }
         }
 
         checkForCancellation(searchTask);
-        return searchResponseMerger.getMergedResponse();
+        try (searchResponseMerger) {
+            return searchResponseMerger.getMergedResponse();
+        }
     }
 
     private void checkForCancellation(SearchTask searchTask) {

@@ -23,7 +23,7 @@ public class PartialReducedResponse {
                                   List<PersistentSearchShardFetchFailure> failedShards) {
         this.searchResponse = searchResponse;
         this.reducedShards = Collections.unmodifiableList(reducedShards);
-        this.failedToFetchShards = Collections.unmodifiableList(failedShards);
+        this.failedToFetchShards = failedShards == null ? Collections.emptyList() : Collections.unmodifiableList(failedShards);
     }
 
     public PersistentSearchResponse getSearchResponse() {
