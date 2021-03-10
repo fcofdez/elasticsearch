@@ -371,11 +371,17 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
         }
 
         private List<CanMatchShardIterator> getSortedAndSkippedShards() {
+            int skippedShards = 0;
             for (int i = 0; i < shardIterators.size(); i++) {
                 final CanMatchShardIterator searchShardIterator = shardIterators.get(i);
                 if (canMatchShard.get(i) == false) {
                     searchShardIterator.setCanBeSkipped(true);
+                    skippedShards++;
                 }
+            }
+
+            if (skippedShards == shardIterators.size()) {
+                shardIterators.get(0).setCanBeSkipped(false);
             }
 
             if (shouldSortShards(minMaxValues) == false) {
