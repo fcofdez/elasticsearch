@@ -37,6 +37,7 @@ import org.elasticsearch.index.Index;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.SearchShardTarget;
+import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.internal.AliasFilter;
 import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.search.persistent.PersistentSearchId;
@@ -124,6 +125,10 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
             new PersistentSearchId(persistentSearchDocId, new TaskId(nodeClient.getLocalNodeId(), task.getId()));
 
         final List<PersistentSearchShard> resolvedShards = resolveShards(persistentSearchDocId, clusterState, indices);
+        final Map<String, Float> indicesBoost = resolveIndexBoosts(request, clusterState);
+
+        ShardSearchRequestProvider shardSearchRequestProvider =
+            new ShardSearchRequestProvider(request, localIndices, timeProvider, aliasFilterMap, indicesBoost);
 
         final boolean canRewriteToMatchNone = SearchService.canRewriteToMatchNone(request.source());
 
@@ -146,8 +151,7 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
                     persistentSearchDocId,
                     searchTask,
                     localIndices,
-                    (shardId, shardIndex) -> buildShardSearchRequest(request, localIndices, timeProvider, aliasFilterMap,
-                        persistentSearchShards.size(), shardIndex, shardId),
+                    shardSearchRequestProvider,
                     timeProvider
                 );
             }, listener::onFailure);
@@ -161,14 +165,8 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
                 searchShardTargetResolver.resolve(searchShard.getSearchShard(), localIndices, new ActionListener<>() {
                     @Override
                     public void onResponse(SearchShardIterator searchShardIterator) {
-                        ShardSearchRequest shardSearchRequest = buildShardSearchRequest(request,
-                            localIndices,
-                            timeProvider,
-                            aliasFilterMap,
-                            resolvedShards.size(),
-                            shardIndex,
-                            searchShard.getShardId()
-                        );
+                        ShardSearchRequest shardSearchRequest =
+                            shardSearchRequestProvider.createRequest(searchShard.getShardId(), shardIndex, resolvedShards.size());
                         CanMatchShardIterator canMatchShardIterator =
                             new CanMatchShardIterator(searchShard, shardSearchRequest, searchShardIterator);
                         canMatchShardIteratorsListener.onResponse(canMatchShardIterator);
@@ -179,19 +177,8 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
                         canMatchShardIteratorsListener.onFailure(e);
                     }
                 });
-
             }
         } else {
-            final BiFunction<ShardId, Integer, ShardSearchRequest> shardSearchRequestProvider =
-                (shardId, shardIndex) -> buildShardSearchRequest(request,
-                    localIndices,
-                    timeProvider,
-                    aliasFilterMap,
-                    resolvedShards.size(),
-                    shardIndex,
-                    shardId
-                );
-
             runAsyncPersistentSearch(resolvedShards,
                 request,
                 persistentSearchDocId,
@@ -210,7 +197,7 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
                                           String persistentSearchId,
                                           SearchTask searchTask,
                                           OriginalIndices localIndices,
-                                          BiFunction<ShardId, Integer, ShardSearchRequest> shardSearchRequestProvider,
+                                          ShardSearchRequestProvider shardSearchRequestProvider,
                                           TransportSearchAction.SearchTimeProvider timeProvider) {
         final TimeValue expirationTime = TimeValue.timeValueMinutes(10);
         new AsyncPersistentSearch(
@@ -268,29 +255,26 @@ public class TransportSubmitPersistentSearchAction extends HandledTransportActio
         return Collections.unmodifiableList(searchShards);
     }
 
-    private ShardSearchRequest buildShardSearchRequest(SearchRequest searchRequest,
-                                                       OriginalIndices originalIndices,
-                                                       TransportSearchAction.SearchTimeProvider searchTimeProvider,
-                                                       Map<String, AliasFilter> aliasFiltersByIndex,
-                                                       int shardCount,
-                                                       int shardIndex,
-                                                       ShardId shardId) {
-        AliasFilter filter = aliasFiltersByIndex.getOrDefault(shardId.getIndexName(), AliasFilter.EMPTY);
-        ShardSearchRequest shardRequest = new ShardSearchRequest(
-            originalIndices,
-            searchRequest,
-            shardId,
-            shardIndex,
-            shardCount,
-            filter,
-            1.0f, // TODO: Take into account provided index boost
-            searchTimeProvider.getAbsoluteStartMillis(),
-            null,
-            null,
-            null
-        );
-        shardRequest.canReturnNullResponseIfMatchNoDocs(false);
-        return shardRequest;
+    private Map<String, Float> resolveIndexBoosts(SearchRequest searchRequest, ClusterState clusterState) {
+        if (searchRequest.source() == null) {
+            return Collections.emptyMap();
+        }
+
+        SearchSourceBuilder source = searchRequest.source();
+        if (source.indexBoosts() == null) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, Float> concreteIndexBoosts = new HashMap<>();
+        for (SearchSourceBuilder.IndexBoost ib : source.indexBoosts()) {
+            Index[] concreteIndices =
+                indexNameExpressionResolver.concreteIndices(clusterState, searchRequest.indicesOptions(), ib.getIndex());
+
+            for (Index concreteIndex : concreteIndices) {
+                concreteIndexBoosts.putIfAbsent(concreteIndex.getUUID(), ib.getBoost());
+            }
+        }
+        return Collections.unmodifiableMap(concreteIndexBoosts);
     }
 
     private static class CanMatchPhase {

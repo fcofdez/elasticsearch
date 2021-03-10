@@ -21,7 +21,6 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.index.IndexNotFoundException;
-import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.tasks.TaskId;
@@ -73,7 +72,7 @@ public class AsyncPersistentSearch {
                                  TimeValue expirationTime,
                                  int maxConcurrentQueryRequests,
                                  int maxShardsPerReduceRequest,
-                                 BiFunction<ShardId, Integer, ShardSearchRequest> shardSearchRequestProvider,
+                                 ShardSearchRequestProvider shardSearchRequestProvider,
                                  TransportSearchAction.SearchTimeProvider searchTimeProvider,
                                  SearchShardTargetResolver searchShardTargetResolver,
                                  SearchTransportService searchTransportService,
@@ -109,7 +108,10 @@ public class AsyncPersistentSearch {
             if (searchShard.canBeSkipped()) {
                 continue;
             }
-            ShardSearchRequest shardSearchRequest = shardSearchRequestProvider.apply(searchShard.getShardId(), shardIndex);
+
+            ShardSearchRequest shardSearchRequest =
+                shardSearchRequestProvider.createRequest(searchShard.getShardId(), shardIndex, searchShards.size());
+
             ExecutePersistentQueryFetchRequest request = new ExecutePersistentQueryFetchRequest(searchShard,
                 shardIndex,
                 expireAbsoluteTime,
