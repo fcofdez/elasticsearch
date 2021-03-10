@@ -15,20 +15,20 @@ import org.elasticsearch.common.io.stream.Writeable;
 import java.io.IOException;
 
 public class ShardQueryResultInfo implements Writeable, Comparable<ShardQueryResultInfo> {
-    private final PersistentSearchShardId shardId;
+    private final PersistentSearchShard shardId;
     private final String nodeId;
 
-    ShardQueryResultInfo(PersistentSearchShardId shardId, String nodeId) {
+    ShardQueryResultInfo(PersistentSearchShard shardId, String nodeId) {
         this.shardId = shardId;
         this.nodeId = nodeId;
     }
 
     ShardQueryResultInfo(StreamInput in) throws IOException {
-        this.shardId = new PersistentSearchShardId(in);
+        this.shardId = new PersistentSearchShard(in);
         this.nodeId = in.readString();
     }
 
-    public PersistentSearchShardId getShardId() {
+    public PersistentSearchShard getShardId() {
         return shardId;
     }
 

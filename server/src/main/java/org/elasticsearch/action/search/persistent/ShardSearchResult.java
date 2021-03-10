@@ -46,6 +46,10 @@ public class ShardSearchResult implements Writeable {
         return id;
     }
 
+    public int getShardIndex() {
+        return shardIndex;
+    }
+
     public QueryFetchSearchResult getResult() {
         return result;
     }

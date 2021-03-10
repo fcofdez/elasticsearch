@@ -17,7 +17,7 @@ import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchReq
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.PartialReducedResponse;
-import org.elasticsearch.action.search.persistent.PersistentSearchShardId;
+import org.elasticsearch.action.search.persistent.PersistentSearchShard;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
 import org.elasticsearch.action.search.persistent.ShardQueryResultFetcher;
@@ -35,6 +35,7 @@ import org.elasticsearch.search.persistent.PersistentSearchResponse;
 import org.elasticsearch.search.persistent.PersistentSearchStorageService;
 import org.elasticsearch.threadpool.ThreadPool;
 
+import java.util.List;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -86,8 +87,6 @@ public class PersistentSearchService {
         StepListener<SearchPhaseResult> queryListener = new StepListener<>();
         StepListener<String> storeListener = new StepListener<>();
 
-        logger.info("Execute query!");
-
         final ShardSearchRequest shardSearchRequest = request.getShardSearchRequest();
         queryListener.whenComplete(result -> {
 
@@ -98,12 +97,10 @@ public class PersistentSearchService {
 
             final ShardSearchResult shardSearchResult =
                 new ShardSearchResult(docId, searchId, shardIndex, expireTime, (QueryFetchSearchResult) result);
-            logger.info("Query executed!!");
             searchStorageService.storeShardResult(shardSearchResult, storeListener);
         }, listener::onFailure);
 
         storeListener.whenComplete(partialResultDocId -> {
-                logger.info("Query stored!");
                 listener.onResponse(new ExecutePersistentQueryFetchResponse(partialResultDocId, localNodeIdSupplier.get()));
             },
             listener::onFailure);
@@ -184,21 +181,23 @@ public class PersistentSearchService {
     private PartialReducedResponse reduce(PersistentSearchResponseMerger searchResponseMerger,
                                           SearchTask searchTask,
                                           ReducePartialPersistentSearchRequest request) throws Exception {
-        for (ShardQueryResultInfo shardQueryResultInfo : request.getShardsToReduce()) {
+        final List<ShardQueryResultInfo> shardsToReduce = request.getShardsToReduce();
+        for (int shardIdx = 0; shardIdx < shardsToReduce.size(); shardIdx++) {
+            ShardQueryResultInfo shardQueryResultInfo = shardsToReduce.get(shardIdx);
             checkForCancellation(searchTask);
 
-            final PersistentSearchShardId shardId = shardQueryResultInfo.getShardId();
+            final PersistentSearchShard shardId = shardQueryResultInfo.getShardId();
             // TODO: Extract as a parameter
             final TimeValue timeout = TimeValue.timeValueSeconds(1);
 
             try {
                 // Since we want to bound the amount of used memory to the number of search threads, we fetch the results blocking
-                final ShardSearchResult searchShardResult = shardQueryResultFetcher.getSearchShardResultBlocking(shardId.getDocId(),
+                final ShardSearchResult searchShardResult = shardQueryResultFetcher.getSearchShardResultBlocking(shardId.getId(),
                     shardQueryResultInfo.getNodeId(),
                     searchTask,
                     timeout
                 );
-                searchResponseMerger.addResponse(shardId, searchShardResult);
+                searchResponseMerger.addResponse(shardId, shardIdx, searchShardResult);
             } catch (Exception e) {
                 searchResponseMerger.onShardResponseFetchFailure(shardQueryResultInfo, e);
             }

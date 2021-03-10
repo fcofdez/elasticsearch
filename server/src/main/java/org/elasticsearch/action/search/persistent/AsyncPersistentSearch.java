@@ -21,6 +21,7 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.index.IndexNotFoundException;
+import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.search.SearchShardTarget;
 import org.elasticsearch.search.internal.ShardSearchRequest;
 import org.elasticsearch.tasks.TaskId;
@@ -28,9 +29,8 @@ import org.elasticsearch.threadpool.Scheduler;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.Transport;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Queue;
@@ -39,13 +39,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
-import java.util.stream.Collectors;
 
 public class AsyncPersistentSearch {
     private final Logger logger = LogManager.getLogger(AsyncPersistentSearch.class);
 
+    private final String id;
     private final SearchRequest searchRequest;
-    private final String asyncSearchId;
     private final SearchTask task;
     private final OriginalIndices originalIndices;
     private final TimeValue expirationTime;
@@ -56,34 +55,34 @@ public class AsyncPersistentSearch {
     private final ThreadPool threadPool;
     private final BiFunction<String, String, Transport.Connection> connectionProvider;
     private final ClusterService clusterService;
-    private final ActionListener<Void> onCompletionListener;
+    private final ActionListener<Void> listener;
     private final AtomicInteger pendingShardsToQueryCount;
     private final ShardQueryResultsReducer shardQueryResultsReducer;
     private final Queue<AsyncShardQueryAndFetch> pendingShardsToQuery;
     private final List<PersistentSearchShard> searchShards;
-    private final long startTime;
-
+    private final int skippedShards;
     private final AtomicInteger runningShardQueries = new AtomicInteger(0);
     private final AtomicBoolean isRunning = new AtomicBoolean(true);
     private final Set<Scheduler.ScheduledCancellable> pendingTasks = ConcurrentCollections.newConcurrentSet();
 
-    public AsyncPersistentSearch(SearchRequest searchRequest,
-                                 String asyncSearchId,
+    public AsyncPersistentSearch(String id,
+                                 SearchRequest searchRequest,
                                  SearchTask task,
                                  List<PersistentSearchShard> searchShards,
                                  OriginalIndices originalIndices,
                                  TimeValue expirationTime,
                                  int maxConcurrentQueryRequests,
                                  int maxShardsPerReduceRequest,
+                                 BiFunction<ShardId, Integer, ShardSearchRequest> shardSearchRequestProvider,
                                  TransportSearchAction.SearchTimeProvider searchTimeProvider,
                                  SearchShardTargetResolver searchShardTargetResolver,
                                  SearchTransportService searchTransportService,
                                  ThreadPool threadPool,
                                  BiFunction<String, String, Transport.Connection> connectionProvider,
                                  ClusterService clusterService,
-                                 ActionListener<Void> onCompletionListener) {
+                                 ActionListener<Void> listener) {
         this.searchRequest = searchRequest;
-        this.asyncSearchId = asyncSearchId;
+        this.id = id;
         this.task = task;
         this.originalIndices = originalIndices;
         this.expirationTime = expirationTime;
@@ -94,39 +93,34 @@ public class AsyncPersistentSearch {
         this.threadPool = threadPool;
         this.connectionProvider = connectionProvider;
         this.clusterService = clusterService;
-        this.onCompletionListener = onCompletionListener;
-        this.startTime = System.nanoTime();
+        this.listener = listener;
+        this.searchShards = searchShards;
+        this.skippedShards = (int) searchShards.stream().filter(PersistentSearchShard::canBeSkipped).count();
+        final int shardsToQueryCount = searchShards.size() - skippedShards;
+        this.pendingShardsToQueryCount = new AtomicInteger(shardsToQueryCount);
+        this.shardQueryResultsReducer = new ShardQueryResultsReducer(shardsToQueryCount, maxShardsPerReduceRequest);
 
-        List<PersistentSearchShard> shardsToSearch = searchShards.stream()
-        .filter(searchShard -> searchShard.canBeSkipped() == false)
-        .collect(Collectors.toList());
+        assert shardsToQueryCount > 0 : "Expected at least 1 shard to query";
 
-        // We need to search at least 1 shard to generate an empty response
-        if (shardsToSearch.isEmpty()) {
-            shardsToSearch.add(searchShards.iterator().next());
-        }
-        //Collections.sort(shardsToSearch);
-        // Query and reduce ordering by index name
-
-        this.searchShards = shardsToSearch;
-        this.pendingShardsToQueryCount = new AtomicInteger(shardsToSearch.size());
-        this.shardQueryResultsReducer = new ShardQueryResultsReducer(this.searchShards.size(), maxShardsPerReduceRequest);
-        Queue<AsyncShardQueryAndFetch> pendingShardQueries = new PriorityQueue<>();
         final long expireAbsoluteTime = expirationTime.millis() + searchTimeProvider.getAbsoluteStartMillis();
-        for (int i = 0; i < this.searchShards.size(); i++) {
-            PersistentSearchShard searchShard = this.searchShards.get(i);
-            PersistentSearchShardId persistentSearchShardId = new PersistentSearchShardId(searchShard.getSearchShard(), asyncSearchId, i);
-            ShardSearchRequest shardSearchRequest = searchShard.getRequest();
-            ExecutePersistentQueryFetchRequest request = new ExecutePersistentQueryFetchRequest(persistentSearchShardId,
+        Queue<AsyncShardQueryAndFetch> pendingShardQueries = new ArrayDeque<>(shardsToQueryCount);
+        for (int shardIndex = 0; shardIndex < searchShards.size(); shardIndex++) {
+            PersistentSearchShard searchShard = searchShards.get(shardIndex);
+            if (searchShard.canBeSkipped()) {
+                continue;
+            }
+            ShardSearchRequest shardSearchRequest = shardSearchRequestProvider.apply(searchShard.getShardId(), shardIndex);
+            ExecutePersistentQueryFetchRequest request = new ExecutePersistentQueryFetchRequest(searchShard,
+                shardIndex,
                 expireAbsoluteTime,
                 shardSearchRequest);
-            pendingShardQueries.add(new AsyncShardQueryAndFetch(persistentSearchShardId, request));
+            pendingShardQueries.add(new AsyncShardQueryAndFetch(searchShard, request));
         }
         this.pendingShardsToQuery = pendingShardQueries;
     }
 
     public String getId() {
-        return asyncSearchId;
+        return id;
     }
 
     public void start() {
@@ -152,8 +146,7 @@ public class AsyncPersistentSearch {
         }
     }
 
-    private void onShardQuerySuccess(PersistentSearchShardId searchShard, String nodeIdHoldingData) {
-        logger.info("Shard query success");
+    private void onShardQuerySuccess(PersistentSearchShard searchShard, String nodeIdHoldingData) {
         runningShardQueries.decrementAndGet();
         shardQueryResultsReducer.reduce(new ShardQueryResultInfo(searchShard, nodeIdHoldingData));
         decrementPendingShardsToQuery();
@@ -200,13 +193,12 @@ public class AsyncPersistentSearch {
 
     private void onSearchSuccess() {
         // TODO: Materialize shard failures in the search response
-        onCompletionListener.onResponse(null);
+        listener.onResponse(null);
     }
 
     private void sendShardSearchRequest(SearchShardTarget searchShardTarget,
                                         ExecutePersistentQueryFetchRequest asyncShardSearchRequest,
                                         ActionListener<ExecutePersistentQueryFetchResponse> listener) {
-        logger.info("Sending shard request!");
         final Transport.Connection connection = getConnection(searchShardTarget.getClusterAlias(), searchShardTarget.getNodeId());
         searchTransportService.sendExecutePersistentQueryFetchRequest(connection,
             asyncShardSearchRequest,
@@ -219,21 +211,21 @@ public class AsyncPersistentSearch {
         return connectionProvider.apply(clusterAlias, nodeId);
     }
 
-    private class AsyncShardQueryAndFetch implements Comparable<AsyncShardQueryAndFetch>,
-                                                     ActionListener<ExecutePersistentQueryFetchResponse> {
-        private final PersistentSearchShardId searchShardId;
+    private class AsyncShardQueryAndFetch implements ActionListener<ExecutePersistentQueryFetchResponse> {
+        private final PersistentSearchShard searchShard;
         private final ExecutePersistentQueryFetchRequest shardSearchRequest;
         private volatile SearchShardIterator searchShardIterator = null;
         private volatile List<Throwable> failures = null;
         private int retryCount = 0;
 
-        private AsyncShardQueryAndFetch(PersistentSearchShardId searchShardId, ExecutePersistentQueryFetchRequest shardSearchRequest) {
-            this.searchShardId = searchShardId;
+        private AsyncShardQueryAndFetch(PersistentSearchShard searchShard, ExecutePersistentQueryFetchRequest shardSearchRequest) {
+            assert searchShard.canBeSkipped() == false : "Expected a shard that should be queried";
+            this.searchShard = searchShard;
             this.shardSearchRequest = shardSearchRequest;
         }
 
         void run() {
-            searchShardTargetResolver.resolve(searchShardId.getSearchShard(), originalIndices, new ActionListener<>() {
+            searchShardTargetResolver.resolve(searchShard.getSearchShard(), originalIndices, new ActionListener<>() {
                 @Override
                 public void onResponse(SearchShardIterator searchShardIterator) {
                     doRun(searchShardIterator);
@@ -270,7 +262,7 @@ public class AsyncPersistentSearch {
 
         @Override
         public void onResponse(ExecutePersistentQueryFetchResponse response) {
-            onShardQuerySuccess(searchShardId, response.getNodeId());
+            onShardQuerySuccess(searchShard, response.getNodeId());
             clear();
         }
 
@@ -309,18 +301,13 @@ public class AsyncPersistentSearch {
         }
 
         RuntimeException buildException() {
-            RuntimeException e = new RuntimeException("Unable to execute search on shard " + searchShardId);
+            RuntimeException e = new RuntimeException("Unable to execute search on shard " + searchShard);
             if (failures != null) {
                 for (Throwable failure : failures) {
                     e.addSuppressed(failure);
                 }
             }
             return e;
-        }
-
-        @Override
-        public int compareTo(AsyncShardQueryAndFetch o) {
-            return searchShardId.compareTo(o.searchShardId);
         }
     }
 
@@ -340,7 +327,6 @@ public class AsyncPersistentSearch {
             // assert pending shards to reduce
             synchronized (pendingShardsToReduce) {
                 pendingShardsToReduce.add(searchShard);
-                logger.info("REDUCE {} / {}", pendingShardsToReduce.size(), maxShardsPerReduceBatch);
             }
 
             maybeRun();
@@ -361,6 +347,8 @@ public class AsyncPersistentSearch {
                     }
 
                     final TaskId parentTaskId = task.taskInfo(clusterService.localNode().getId(), false).getTaskId();
+
+                    // TODO: Include shard failures and skipped shard count to produce the last response
                     boolean performFinalReduce = numberOfShardsToReduce.get() == shardsToReduce.size();
 
                     // Transform the original search request to include the final reduce flag when it applies
@@ -374,7 +362,7 @@ public class AsyncPersistentSearch {
 
                     final int reductionRound = this.reductionRound.incrementAndGet();
 
-                    reducePartialPersistentSearchRequest = new ReducePartialPersistentSearchRequest(asyncSearchId,
+                    reducePartialPersistentSearchRequest = new ReducePartialPersistentSearchRequest(id,
                         shardsToReduce,
                         updatedRequest,
                         searchTimeProvider.getAbsoluteStartMillis(),
@@ -390,7 +378,6 @@ public class AsyncPersistentSearch {
             }
 
             if (reducePartialPersistentSearchRequest != null) {
-                logger.info("Sending reduce!!");
                 sendReduceRequest(reducePartialPersistentSearchRequest, new ActionListener<>() {
                     @Override
                     public void onResponse(ReducePartialPersistentSearchResponse response) {

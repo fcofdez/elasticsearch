@@ -11,8 +11,8 @@ package org.elasticsearch.action.search;
 import com.carrotsearch.hppc.IntArrayList;
 import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.search.persistent.PartialReducedResponse;
+import org.elasticsearch.action.search.persistent.PersistentSearchShard;
 import org.elasticsearch.action.search.persistent.PersistentSearchShardFetchFailure;
-import org.elasticsearch.action.search.persistent.PersistentSearchShardId;
 import org.elasticsearch.action.search.persistent.ShardQueryResultInfo;
 import org.elasticsearch.action.search.persistent.ShardSearchResult;
 import org.elasticsearch.common.Nullable;
@@ -43,12 +43,12 @@ class PersistentSearchResponseMerger implements Releasable {
     private final SearchResponseMerger searchResponseMerger;
     @Nullable
     private final PersistentSearchResponse baseResponse;
-    private final List<PersistentSearchShardId> reducedShards;
+    private final List<PersistentSearchShard> reducedShards;
     private final List<SearchPhaseResult> fetchResults;
     private final TransportSearchAction.SearchTimeProvider searchTimeProvider;
 
     private final IntArrayList reducedShardIndices = new IntArrayList();
-    private final Set<PersistentSearchShardId> pendingShards;
+    private final Set<PersistentSearchShard> pendingShards;
     private List<PersistentSearchShardFetchFailure> fetchErrors;
 
     PersistentSearchResponseMerger(String searchId,
@@ -60,7 +60,7 @@ class PersistentSearchResponseMerger implements Releasable {
                                    InternalAggregation.ReduceContextBuilder aggReduceContextBuilder,
                                    PersistentSearchResponse baseResponse,
                                    SearchPhaseController searchPhaseController,
-                                   List<PersistentSearchShardId> shardsToReduce) {
+                                   List<PersistentSearchShard> shardsToReduce) {
         this.searchId = searchId;
         this.expirationTime = expirationTime;
         this.baseResponse = baseResponse;
@@ -98,7 +98,7 @@ class PersistentSearchResponseMerger implements Releasable {
         return new SearchResponseMerger(from, size, trackTotalHitsUpTo, timeProvider, aggReduceContextBuilder, performFinalReduce);
     }
 
-    void addResponse(PersistentSearchShardId searchShardId, ShardSearchResult shardSearchResult) {
+    void addResponse(PersistentSearchShard searchShardId, int shardIdx, ShardSearchResult shardSearchResult) {
         assert Thread.currentThread().getName().contains("[" + ThreadPool.Names.SEARCH + "]")
             : "Expected current thread [" + Thread.currentThread() + "] to be the a search thread.";
 
@@ -107,7 +107,7 @@ class PersistentSearchResponseMerger implements Releasable {
         }
 
         final QueryFetchSearchResult shardSearchResultResult = shardSearchResult.getResult();
-        shardSearchResultResult.setShardIndex(searchShardId.getShardIndex());
+        shardSearchResultResult.setShardIndex(shardIdx);
         final SearchShardTarget shardTarget =
             new SearchShardTarget("node", searchShardId.getSearchShard().getShardId(), null, OriginalIndices.NONE);
         shardSearchResultResult.setSearchShardTarget(shardTarget);
@@ -117,7 +117,8 @@ class PersistentSearchResponseMerger implements Releasable {
         });
 
         reducedShards.add(searchShardId);
-        reducedShardIndices.add(searchShardId.getShardIndex());
+        // TODO: clarify this
+        reducedShardIndices.add(shardSearchResult.getShardIndex());
         // TODO: Keep track of fetch size as now we're storing all the results
         fetchResults.add(shardSearchResultResult.fetchResult());
     }

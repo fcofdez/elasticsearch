@@ -14,7 +14,6 @@ import org.elasticsearch.action.search.persistent.AsyncPersistentSearch;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
 import org.elasticsearch.action.search.persistent.PersistentSearchShard;
-import org.elasticsearch.action.search.persistent.PersistentSearchShardId;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
 import org.elasticsearch.action.search.persistent.SearchShardTargetResolver;
@@ -131,7 +130,7 @@ public class AsyncPersistentSearchTests extends ESTestCase {
             executor.execute(() -> {
                 for (Tuple<ActionListener<ReducePartialPersistentSearchResponse>, ReducePartialPersistentSearchRequest> pendingReduce :
                     inFlightReducesCopy) {
-                    final List<PersistentSearchShardId> shardsToReduce =
+                    final List<PersistentSearchShard> shardsToReduce =
                         pendingReduce.v2().getShardsToReduce().stream().map(ShardQueryResultInfo::getShardId).collect(Collectors.toList());
                     pendingReduce.v1().onResponse(new ReducePartialPersistentSearchResponse(shardsToReduce, List.of()));
                 }
@@ -239,30 +238,31 @@ public class AsyncPersistentSearchTests extends ESTestCase {
         final SearchTask searchTask = new SearchTask(0, "search", "action", () -> "persistent search", TaskId.EMPTY_TASK_ID,
             Collections.emptyMap());
 
-        return new AsyncPersistentSearch(searchRequest,
-            persistentSearchId,
-            searchTask,
-            searchShards,
-            OriginalIndices.NONE,
-            TimeValue.timeValueHours(1),
-            maxConcurrentQueryRequests,
-            maxShardsPerReduceRequest,
-            searchTimeProvider,
-            resolver,
-            searchTransportService,
-            threadPool,
-            (cluster, node) -> null,
-            clusterService,
-            ActionListener.wrap(() -> {
-            }));
+        return null;
+//        return new AsyncPersistentSearch(searchRequest,
+//            persistentSearchId,
+//            searchTask,
+//            searchShards,
+//            OriginalIndices.NONE,
+//            TimeValue.timeValueHours(1),
+//            maxConcurrentQueryRequests,
+//            maxShardsPerReduceRequest,
+//            searchTimeProvider,
+//            resolver,
+//            searchTransportService,
+//            threadPool,
+//            (cluster, node) -> null,
+//            clusterService,
+//            ActionListener.wrap(() -> {
+//            }));
     }
 
     private List<PersistentSearchShard> createSearchShards(int numShards) {
         List<PersistentSearchShard> searchShards = new ArrayList<>(numShards);
-        for (int i = 0; i < numShards; i++) {
-            final SearchShard searchShard = new SearchShard(null, new ShardId("index", "_na_", i));
-            searchShards.add(new PersistentSearchShard(searchShard, mock(ShardSearchRequest.class), false));
-        }
+//        for (int i = 0; i < numShards; i++) {
+//            final SearchShard searchShard = new SearchShard(null, new ShardId("index", "_na_", i));
+//            searchShards.add(new PersistentSearchShard(searchShard, mock(ShardSearchRequest.class), false));
+//        }
         return searchShards;
     }
 }

@@ -9,19 +9,46 @@
 package org.elasticsearch.action.search.persistent;
 
 import org.elasticsearch.action.search.SearchShard;
-import org.elasticsearch.index.Index;
+import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.index.shard.ShardId;
-import org.elasticsearch.search.internal.ShardSearchRequest;
 
-public class PersistentSearchShard implements Comparable<PersistentSearchShard> {
+import java.io.IOException;
+
+public class PersistentSearchShard implements Writeable, Comparable<PersistentSearchShard> {
+    private final String id;
+    private final String searchId;
     private final SearchShard searchShard;
-    private final ShardSearchRequest shardSearchRequest;
-    private volatile boolean canBeSkipped;
+    private volatile boolean canBeSkipped = false;
 
-    public PersistentSearchShard(SearchShard searchShard, ShardSearchRequest shardSearchRequest, boolean canBeSkipped) {
+    PersistentSearchShard(String id, String searchId, SearchShard searchShard) {
+        this.id = id;
+        this.searchId = searchId;
         this.searchShard = searchShard;
-        this.shardSearchRequest = shardSearchRequest;
-        this.canBeSkipped = canBeSkipped;
+    }
+
+    PersistentSearchShard(StreamInput in) throws IOException {
+        this.id = in.readString();
+        this.searchId = in.readString();
+        this.searchShard = new SearchShard(in);
+        this.canBeSkipped = in.readBoolean();
+    }
+
+    public SearchShard getSearchShard() {
+        return searchShard;
+    }
+
+    public ShardId getShardId() {
+        return searchShard.getShardId();
+    }
+
+    public String getSearchId() {
+        return searchId;
+    }
+
+    public String getId() {
+        return id;
     }
 
     public boolean canBeSkipped() {
@@ -32,23 +59,16 @@ public class PersistentSearchShard implements Comparable<PersistentSearchShard> 
         this.canBeSkipped = canBeSkipped;
     }
 
-    public SearchShard getSearchShard() {
-        return searchShard;
+    @Override
+    public void writeTo(StreamOutput out) throws IOException {
+        out.writeString(id);
+        out.writeString(searchId);
+        searchShard.writeTo(out);
+        out.writeBoolean(canBeSkipped);
     }
 
     @Override
     public int compareTo(PersistentSearchShard o) {
-        Index index = getShardId().getIndex();
-        Index otherIndex = o.getShardId().getIndex();
-        int cmp = index.getName().compareTo(otherIndex.getName());
-        return cmp != 0 ? cmp : index.getUUID().compareTo(otherIndex.getUUID());
-    }
-
-    public ShardId getShardId() {
-        return searchShard.getShardId();
-    }
-
-    public ShardSearchRequest getRequest() {
-        return shardSearchRequest;
+        return searchShard.compareTo(o.searchShard);
     }
 }

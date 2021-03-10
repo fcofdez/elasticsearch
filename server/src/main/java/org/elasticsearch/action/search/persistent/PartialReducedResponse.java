@@ -15,11 +15,11 @@ import java.util.List;
 
 public class PartialReducedResponse {
     private final PersistentSearchResponse searchResponse;
-    private final List<PersistentSearchShardId> reducedShards;
+    private final List<PersistentSearchShard> reducedShards;
     private final List<PersistentSearchShardFetchFailure> failedToFetchShards;
 
     public PartialReducedResponse(PersistentSearchResponse searchResponse,
-                                  List<PersistentSearchShardId> reducedShards,
+                                  List<PersistentSearchShard> reducedShards,
                                   List<PersistentSearchShardFetchFailure> failedShards) {
         this.searchResponse = searchResponse;
         this.reducedShards = Collections.unmodifiableList(reducedShards);
@@ -30,7 +30,7 @@ public class PartialReducedResponse {
         return searchResponse;
     }
 
-    public List<PersistentSearchShardId> getReducedShards() {
+    public List<PersistentSearchShard> getReducedShards() {
         return reducedShards;
     }
 
