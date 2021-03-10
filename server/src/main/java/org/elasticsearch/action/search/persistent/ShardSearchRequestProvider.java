@@ -17,18 +17,18 @@ import org.elasticsearch.search.internal.ShardSearchRequest;
 
 import java.util.Map;
 
-class ShardSearchRequestProvider {
+public class ShardSearchRequestProvider {
     private final SearchRequest searchRequest;
     private final OriginalIndices originalIndices;
     private final TransportSearchAction.SearchTimeProvider searchTimeProvider;
     private final Map<String, AliasFilter> aliasFiltersByIndex;
     private final Map<String, Float> indicesBoost;
 
-    ShardSearchRequestProvider(SearchRequest searchRequest,
-                               OriginalIndices originalIndices,
-                               TransportSearchAction.SearchTimeProvider searchTimeProvider,
-                               Map<String, AliasFilter> aliasFiltersByIndex,
-                               Map<String, Float> indicesBoost) {
+    public ShardSearchRequestProvider(SearchRequest searchRequest,
+                                      OriginalIndices originalIndices,
+                                      TransportSearchAction.SearchTimeProvider searchTimeProvider,
+                                      Map<String, AliasFilter> aliasFiltersByIndex,
+                                      Map<String, Float> indicesBoost) {
         this.searchRequest = searchRequest;
         this.originalIndices = originalIndices;
         this.searchTimeProvider = searchTimeProvider;
@@ -36,7 +36,7 @@ class ShardSearchRequestProvider {
         this.indicesBoost = indicesBoost;
     }
 
-    ShardSearchRequest createRequest(ShardId shardId, int shardIndex, int shardCount) {
+    public ShardSearchRequest createRequest(ShardId shardId, int shardIndex, int shardCount) {
         AliasFilter filter = aliasFiltersByIndex.getOrDefault(shardId.getIndexName(), AliasFilter.EMPTY);
         float indexBoost = indicesBoost.getOrDefault(shardId.getIndex().getUUID(), 1.0f);
         ShardSearchRequest shardRequest = new ShardSearchRequest(
