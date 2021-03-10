@@ -10,7 +10,7 @@ package org.elasticsearch.action.search.persistent;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionType;
-import org.elasticsearch.action.search.PersistentSearchService;
+import org.elasticsearch.search.persistent.PersistentSearchService;
 import org.elasticsearch.action.search.SearchShardTask;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.HandledTransportAction;

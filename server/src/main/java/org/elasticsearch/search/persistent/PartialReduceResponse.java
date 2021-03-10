@@ -6,21 +6,19 @@
  * Side Public License, v 1.
  */
 
-package org.elasticsearch.action.search.persistent;
-
-import org.elasticsearch.search.persistent.PersistentSearchResponse;
+package org.elasticsearch.search.persistent;
 
 import java.util.Collections;
 import java.util.List;
 
-public class PartialReducedResponse {
+public class PartialReduceResponse {
     private final PersistentSearchResponse searchResponse;
     private final List<PersistentSearchShard> reducedShards;
     private final List<PersistentSearchShardFetchFailure> failedToFetchShards;
 
-    public PartialReducedResponse(PersistentSearchResponse searchResponse,
-                                  List<PersistentSearchShard> reducedShards,
-                                  List<PersistentSearchShardFetchFailure> failedShards) {
+    public PartialReduceResponse(PersistentSearchResponse searchResponse,
+                                 List<PersistentSearchShard> reducedShards,
+                                 List<PersistentSearchShardFetchFailure> failedShards) {
         this.searchResponse = searchResponse;
         this.reducedShards = Collections.unmodifiableList(reducedShards);
         this.failedToFetchShards = failedShards == null ? Collections.emptyList() : Collections.unmodifiableList(failedShards);

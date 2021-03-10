@@ -6,10 +6,11 @@
  * Side Public License, v 1.
  */
 
-package org.elasticsearch.action.search.persistent;
+package org.elasticsearch.search.persistent;
 
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionListenerResponseHandler;
+import org.elasticsearch.action.search.persistent.GetShardResultAction;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.tasks.Task;

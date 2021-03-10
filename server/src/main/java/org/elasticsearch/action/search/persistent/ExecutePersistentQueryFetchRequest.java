@@ -13,6 +13,7 @@ import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.search.internal.ShardSearchRequest;
+import org.elasticsearch.search.persistent.PersistentSearchShard;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.tasks.TaskId;
 

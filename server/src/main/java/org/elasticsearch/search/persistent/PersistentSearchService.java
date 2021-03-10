@@ -6,23 +6,21 @@
  * Side Public License, v 1.
  */
 
-package org.elasticsearch.action.search;
+package org.elasticsearch.search.persistent;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.ActionRunnable;
 import org.elasticsearch.action.StepListener;
+import org.elasticsearch.action.search.SearchPhaseController;
+import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.action.search.SearchShardTask;
+import org.elasticsearch.action.search.SearchTask;
+import org.elasticsearch.action.search.TransportSearchAction;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchRequest;
 import org.elasticsearch.action.search.persistent.ExecutePersistentQueryFetchResponse;
 import org.elasticsearch.action.search.persistent.GetPersistentSearchRequest;
-import org.elasticsearch.action.search.persistent.PartialReducedResponse;
-import org.elasticsearch.action.search.persistent.PersistentSearchShard;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchRequest;
 import org.elasticsearch.action.search.persistent.ReducePartialPersistentSearchResponse;
-import org.elasticsearch.action.search.persistent.ShardQueryResultFetcher;
-import org.elasticsearch.action.search.persistent.ShardQueryResultInfo;
-import org.elasticsearch.action.search.persistent.ShardSearchResult;
 import org.elasticsearch.common.CheckedSupplier;
 import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.unit.TimeValue;
@@ -31,8 +29,6 @@ import org.elasticsearch.search.SearchPhaseResult;
 import org.elasticsearch.search.SearchService;
 import org.elasticsearch.search.fetch.QueryFetchSearchResult;
 import org.elasticsearch.search.internal.ShardSearchRequest;
-import org.elasticsearch.search.persistent.PersistentSearchResponse;
-import org.elasticsearch.search.persistent.PersistentSearchStorageService;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.util.List;
@@ -41,8 +37,6 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 public class PersistentSearchService {
-    private final Logger logger = LogManager.getLogger(PersistentSearchService.class);
-
     private final SearchService searchService;
     private final SearchPhaseController searchPhaseController;
     private final PersistentSearchStorageService searchStorageService;
@@ -114,7 +108,7 @@ public class PersistentSearchService {
         // we need to use versioning for SearchResponse (so we avoid conflicting operations)
         final String searchId = request.getSearchId();
         StepListener<PersistentSearchResponse> getSearchResultListener = new StepListener<>();
-        StepListener<PartialReducedResponse> reduceListener = new StepListener<>();
+        StepListener<PartialReduceResponse> reduceListener = new StepListener<>();
 
         getSearchResultListener.whenComplete(persistentSearchResponse -> {
             try {
@@ -143,11 +137,11 @@ public class PersistentSearchService {
             }
         }, listener::onFailure);
 
-        reduceListener.whenComplete((partialReducedResponse -> {
-            final PersistentSearchResponse reducedSearchResponse = partialReducedResponse.getSearchResponse();
+        reduceListener.whenComplete((partialReduceResponse -> {
+            final PersistentSearchResponse reducedSearchResponse = partialReduceResponse.getSearchResponse();
             final ReducePartialPersistentSearchResponse reducePartialPersistentSearchResponse =
-                new ReducePartialPersistentSearchResponse(partialReducedResponse.getReducedShards(),
-                    partialReducedResponse.getFailedToFetchShards());
+                new ReducePartialPersistentSearchResponse(partialReduceResponse.getReducedShards(),
+                    partialReduceResponse.getFailedToFetchShards());
 
             // TODO: Add timeouts
             searchStorageService.storeResult(reducedSearchResponse, new ActionListener<>() {
@@ -178,9 +172,9 @@ public class PersistentSearchService {
         }
     }
 
-    private PartialReducedResponse reduce(PersistentSearchResponseMerger searchResponseMerger,
-                                          SearchTask searchTask,
-                                          ReducePartialPersistentSearchRequest request) throws Exception {
+    private PartialReduceResponse reduce(PersistentSearchResponseMerger searchResponseMerger,
+                                         SearchTask searchTask,
+                                         ReducePartialPersistentSearchRequest request) throws Exception {
         final List<ShardQueryResultInfo> shardsToReduce = request.getShardsToReduce();
         for (int shardIdx = 0; shardIdx < shardsToReduce.size(); shardIdx++) {
             ShardQueryResultInfo shardQueryResultInfo = shardsToReduce.get(shardIdx);

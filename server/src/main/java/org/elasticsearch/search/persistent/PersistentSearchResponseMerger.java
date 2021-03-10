@@ -6,15 +6,18 @@
  * Side Public License, v 1.
  */
 
-package org.elasticsearch.action.search;
+package org.elasticsearch.search.persistent;
 
 import com.carrotsearch.hppc.IntArrayList;
 import org.elasticsearch.action.OriginalIndices;
-import org.elasticsearch.action.search.persistent.PartialReducedResponse;
-import org.elasticsearch.action.search.persistent.PersistentSearchShard;
-import org.elasticsearch.action.search.persistent.PersistentSearchShardFetchFailure;
-import org.elasticsearch.action.search.persistent.ShardQueryResultInfo;
-import org.elasticsearch.action.search.persistent.ShardSearchResult;
+import org.elasticsearch.action.search.QueryPhaseResultConsumer;
+import org.elasticsearch.action.search.SearchPhaseController;
+import org.elasticsearch.action.search.SearchProgressListener;
+import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.search.SearchResponseMerger;
+import org.elasticsearch.action.search.ShardSearchFailure;
+import org.elasticsearch.action.search.TransportSearchAction;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.lease.Releasable;
@@ -27,8 +30,8 @@ import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.search.fetch.QueryFetchSearchResult;
 import org.elasticsearch.search.internal.InternalSearchResponse;
 import org.elasticsearch.search.internal.SearchContext;
-import org.elasticsearch.search.persistent.PersistentSearchResponse;
 import org.elasticsearch.threadpool.ThreadPool;
+import org.elasticsearch.transport.RemoteClusterAware;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -108,8 +111,13 @@ class PersistentSearchResponseMerger implements Releasable {
 
         final QueryFetchSearchResult shardSearchResultResult = shardSearchResult.getResult();
         shardSearchResultResult.setShardIndex(shardIdx);
+        // TODO: reuse this
         final SearchShardTarget shardTarget =
-            new SearchShardTarget("node", searchShardId.getSearchShard().getShardId(), null, OriginalIndices.NONE);
+            new SearchShardTarget("node",
+                searchShardId.getSearchShard().getShardId(),
+                RemoteClusterAware.LOCAL_CLUSTER_GROUP_KEY,
+                OriginalIndices.NONE
+            );
         shardSearchResultResult.setSearchShardTarget(shardTarget);
         queryPhaseResultConsumer.consumeResult(shardSearchResultResult, () -> {
             // This is empty on purpose, since queryPhaseResultConsumer executor is SAME if we trigger a reduction,
@@ -136,13 +144,13 @@ class PersistentSearchResponseMerger implements Releasable {
     }
 
     @Nullable
-    PartialReducedResponse getMergedResponse() throws Exception {
+    PartialReduceResponse getMergedResponse() throws Exception {
         if (pendingShards.isEmpty() == false) {
             throw new IllegalStateException("Pending shards to be added " + pendingShards);
         }
 
         if (reducedShards.size() == 0) {
-            return new PartialReducedResponse(baseResponse, reducedShards, fetchErrors);
+            return new PartialReduceResponse(baseResponse, reducedShards, fetchErrors);
         }
 
         final SearchPhaseController.ReducedQueryPhase reducedQueryPhase = queryPhaseResultConsumer.reduce();
@@ -164,9 +172,8 @@ class PersistentSearchResponseMerger implements Releasable {
 
         final SearchResponse mergedResponse = searchResponseMerger.getMergedResponse(SearchResponse.Clusters.EMPTY);
 
-        return new PartialReducedResponse(
+        return new PartialReduceResponse(
             new PersistentSearchResponse(searchId,
-                searchId,
                 mergedResponse,
                 expirationTime,
                 reducedShardIndices.toArray(),

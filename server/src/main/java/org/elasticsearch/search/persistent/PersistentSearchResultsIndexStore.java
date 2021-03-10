@@ -17,8 +17,6 @@ import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.action.delete.DeleteResponse;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.action.search.PersistentSearchService;
-import org.elasticsearch.action.search.persistent.ShardSearchResult;
 import org.elasticsearch.action.support.GroupedActionListener;
 import org.elasticsearch.action.support.RetryableAction;
 import org.elasticsearch.action.support.TransportActions;
@@ -48,7 +46,6 @@ import static org.elasticsearch.index.mapper.MapperService.SINGLE_MAPPING_NAME;
 public class PersistentSearchResultsIndexStore {
     public static final String INDEX = ".persistent_search_results";
     public static final String ID_FIELD = "id";
-    public static final String SEARCH_ID_FIELD = "search_id";
     public static final String RESPONSE_FIELD = "response";
     public static final String EXPIRATION_TIME_FIELD = "expiration_time";
     public static final String REDUCED_SHARDS_INDEX_FIELD = "reduced_shards_index_field";
@@ -78,9 +75,6 @@ public class PersistentSearchResultsIndexStore {
                         .field("dynamic", "strict")
                         .startObject("properties")
                             .startObject(ID_FIELD)
-                                .field("type", "keyword")
-                            .endObject()
-                            .startObject(SEARCH_ID_FIELD)
                                 .field("type", "keyword")
                             .endObject()
                             .startObject(RESPONSE_FIELD)

@@ -19,6 +19,7 @@ import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.search.persistent.PersistentSearchStorageService;
+import org.elasticsearch.search.persistent.ShardSearchResult;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.transport.TransportService;
 

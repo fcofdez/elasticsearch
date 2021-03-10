@@ -6,7 +6,7 @@
  * Side Public License, v 1.
  */
 
-package org.elasticsearch.action.search.persistent;
+package org.elasticsearch.search.persistent;
 
 import org.elasticsearch.action.search.SearchShard;
 import org.elasticsearch.common.io.stream.StreamInput;
@@ -22,13 +22,13 @@ public class PersistentSearchShard implements Writeable, Comparable<PersistentSe
     private final SearchShard searchShard;
     private volatile boolean canBeSkipped = false;
 
-    PersistentSearchShard(String id, String searchId, SearchShard searchShard) {
+    public PersistentSearchShard(String id, String searchId, SearchShard searchShard) {
         this.id = id;
         this.searchId = searchId;
         this.searchShard = searchShard;
     }
 
-    PersistentSearchShard(StreamInput in) throws IOException {
+    public PersistentSearchShard(StreamInput in) throws IOException {
         this.id = in.readString();
         this.searchId = in.readString();
         this.searchShard = new SearchShard(in);

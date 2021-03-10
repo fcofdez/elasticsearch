@@ -11,6 +11,8 @@ package org.elasticsearch.action.search.persistent;
 import org.elasticsearch.action.ActionResponse;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.search.persistent.PersistentSearchShard;
+import org.elasticsearch.search.persistent.PersistentSearchShardFetchFailure;
 
 import java.io.IOException;
 import java.util.List;

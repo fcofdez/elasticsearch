@@ -332,7 +332,7 @@ public class SearchRequest extends ActionRequest implements IndicesRequest.Repla
     /**
      * Returns whether the reduction phase that will be performed needs to be final or not.
      */
-    boolean isFinalReduce() {
+    public boolean isFinalReduce() {
         return finalReduce;
     }
 

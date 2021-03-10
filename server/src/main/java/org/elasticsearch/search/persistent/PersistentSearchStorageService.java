@@ -11,8 +11,6 @@ package org.elasticsearch.search.persistent;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.action.ActionListener;
-import org.elasticsearch.action.search.PersistentSearchService;
-import org.elasticsearch.action.search.persistent.ShardSearchResult;
 
 public class PersistentSearchStorageService {
     private final Logger logger = LogManager.getLogger(PersistentSearchService.class);

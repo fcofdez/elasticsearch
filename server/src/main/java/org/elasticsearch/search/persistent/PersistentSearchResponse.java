@@ -31,24 +31,20 @@ import static org.elasticsearch.search.persistent.PersistentSearchResultsIndexSt
 import static org.elasticsearch.search.persistent.PersistentSearchResultsIndexStore.ID_FIELD;
 import static org.elasticsearch.search.persistent.PersistentSearchResultsIndexStore.REDUCED_SHARDS_INDEX_FIELD;
 import static org.elasticsearch.search.persistent.PersistentSearchResultsIndexStore.RESPONSE_FIELD;
-import static org.elasticsearch.search.persistent.PersistentSearchResultsIndexStore.SEARCH_ID_FIELD;
 
 public class PersistentSearchResponse extends ActionResponse implements ToXContentObject {
     private final String id;
-    private final String searchId;
     private final SearchResponse searchResponse;
     private final long expirationTime;
     private final int[] reducedShardsIndex;
     private final long version;
 
     public PersistentSearchResponse(String id,
-                                    String searchId,
                                     SearchResponse searchResponse,
                                     long expirationTime,
                                     int[] reducedShardsIndex,
                                     long version) {
         this.id = id;
-        this.searchId = searchId;
         this.searchResponse = searchResponse;
         this.expirationTime = expirationTime;
         this.reducedShardsIndex = Arrays.copyOf(reducedShardsIndex, reducedShardsIndex.length);
@@ -58,7 +54,6 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
     public PersistentSearchResponse(StreamInput in) throws IOException {
         super(in);
         this.id = in.readString();
-        this.searchId = in.readString();
         this.searchResponse = new SearchResponse(in);
         this.expirationTime = in.readLong();
         this.reducedShardsIndex = in.readIntArray();
@@ -67,10 +62,6 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
 
     public String getId() {
         return id;
-    }
-
-    public String getSearchId() {
-        return searchId;
     }
 
     public long getExpirationTime() {
@@ -97,11 +88,6 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
             throw invalidDoc(ID_FIELD);
         }
 
-        final String searchId = (String) source.get(SEARCH_ID_FIELD);
-        if (searchId == null) {
-            throw invalidDoc(SEARCH_ID_FIELD);
-        }
-
         final Long expirationTime = (Long) source.get(EXPIRATION_TIME_FIELD);
         if (expirationTime == null) {
             throw invalidDoc(EXPIRATION_TIME_FIELD);
@@ -121,7 +107,7 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
         SearchResponse searchResponse = decodeSearchResponse(encodedQuerySearchResult, namedWriteableRegistry);
 
         final int[] reducedShardIndicesArray = reducedShardIndices.stream().mapToInt(i -> i).toArray();
-        return new PersistentSearchResponse(id, searchId, searchResponse, expirationTime, reducedShardIndicesArray, version);
+        return new PersistentSearchResponse(id, searchResponse, expirationTime, reducedShardIndicesArray, version);
     }
 
     private static IllegalArgumentException invalidDoc(String missingField) {
@@ -131,7 +117,6 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         out.writeString(id);
-        out.writeString(searchId);
         searchResponse.writeTo(out);
         out.writeLong(expirationTime);
         out.writeIntArray(reducedShardsIndex);
@@ -143,7 +128,6 @@ public class PersistentSearchResponse extends ActionResponse implements ToXConte
         builder.startObject();
         {
             builder.field(ID_FIELD, id);
-            builder.field(SEARCH_ID_FIELD, id);
             builder.field(RESPONSE_FIELD, encodeSearchResponse(searchResponse));
             builder.field(EXPIRATION_TIME_FIELD, System.currentTimeMillis());
             builder.field(REDUCED_SHARDS_INDEX_FIELD, reducedShardsIndex);

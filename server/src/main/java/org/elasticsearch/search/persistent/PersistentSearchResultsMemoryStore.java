@@ -9,7 +9,6 @@
 package org.elasticsearch.search.persistent;
 
 import org.elasticsearch.Version;
-import org.elasticsearch.action.search.persistent.ShardSearchResult;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.NamedWriteableAwareStreamInput;
