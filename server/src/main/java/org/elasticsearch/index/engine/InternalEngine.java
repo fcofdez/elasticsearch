@@ -895,6 +895,13 @@ public class InternalEngine extends Engine {
 
                         final boolean toAppend = plan.indexIntoLucene && plan.useLuceneUpdateDocument == false;
                         if (toAppend == false) {
+                            if (index.id().equals("1")) {
+                                try {
+                                    Thread.sleep(200);
+                                } catch (Exception e) {
+
+                                }
+                            }
                             advanceMaxSeqNoOfUpdatesOrDeletesOnPrimary(index.seqNo());
                         }
                     } else {
