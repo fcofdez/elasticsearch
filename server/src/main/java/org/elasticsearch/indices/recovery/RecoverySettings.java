@@ -136,7 +136,7 @@ public class RecoverySettings {
      * defaults to `false`
      */
     public static final Setting<Boolean> INDICES_RECOVERY_USE_SNAPSHOTS_SETTING =
-        Setting.boolSetting("indices.recovery.use_snapshots", false, Property.Dynamic, Property.NodeScope);
+        Setting.boolSetting("indices.recovery.use_snapshots", true, Property.Dynamic, Property.NodeScope);
 
     /**
      * repository to use during peer recovery to recover files from a snapshot instead of sending them from
@@ -144,6 +144,14 @@ public class RecoverySettings {
      */
     public static final Setting<String> INDICES_RECOVERY_REPOSITORY_SETTING =
         Setting.simpleString("indices.recovery.repository", Property.Dynamic, Property.NodeScope);
+
+    public static final Setting<Integer> INDICES_RECOVERY_MAX_CONCURRENT_SNAPSHOT_FILE_DOWNLOADS =
+        Setting.intSetting("indices.recovery.max_concurrent_snapshot_file_downloads",
+            5,
+            1,
+            Property.Dynamic,
+            Property.NodeScope
+        );
 
     public static final ByteSizeValue DEFAULT_CHUNK_SIZE = new ByteSizeValue(512, ByteSizeUnit.KB);
 
@@ -159,6 +167,7 @@ public class RecoverySettings {
     private volatile TimeValue internalActionLongTimeout;
     private volatile boolean useSnapshotsDuringRecovery;
     private volatile String repository;
+    private volatile int maxConcurrentSnapshotFileDownloads;
 
     private volatile ByteSizeValue chunkSize = DEFAULT_CHUNK_SIZE;
 
@@ -183,6 +192,7 @@ public class RecoverySettings {
         }
         this.useSnapshotsDuringRecovery = INDICES_RECOVERY_USE_SNAPSHOTS_SETTING.get(settings);
         this.repository = INDICES_RECOVERY_REPOSITORY_SETTING.get(settings);
+        this.maxConcurrentSnapshotFileDownloads = INDICES_RECOVERY_MAX_CONCURRENT_SNAPSHOT_FILE_DOWNLOADS.get(settings);
 
         logger.debug("using max_bytes_per_sec[{}]", maxBytesPerSec);
 
@@ -198,6 +208,8 @@ public class RecoverySettings {
         clusterSettings.addSettingsUpdateConsumer(INDICES_RECOVERY_ACTIVITY_TIMEOUT_SETTING, this::setActivityTimeout);
         clusterSettings.addSettingsUpdateConsumer(INDICES_RECOVERY_USE_SNAPSHOTS_SETTING, this::setUseSnapshotsDuringRecovery);
         clusterSettings.addSettingsUpdateConsumer(INDICES_RECOVERY_REPOSITORY_SETTING, this::setRepository);
+        clusterSettings.addSettingsUpdateConsumer(INDICES_RECOVERY_MAX_CONCURRENT_SNAPSHOT_FILE_DOWNLOADS,
+            this::setMaxConcurrentSnapshotFileDownloads);
     }
 
     public RateLimiter rateLimiter() {
@@ -298,5 +310,13 @@ public class RecoverySettings {
 
     private void setRepository(String repository) {
         this.repository = repository;
+    }
+
+    public int getMaxConcurrentSnapshotFileDownloads() {
+        return maxConcurrentSnapshotFileDownloads;
+    }
+
+    public void setMaxConcurrentSnapshotFileDownloads(int maxConcurrentSnapshotFileDownloads) {
+        this.maxConcurrentSnapshotFileDownloads = maxConcurrentSnapshotFileDownloads;
     }
 }

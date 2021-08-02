@@ -325,6 +325,7 @@ public class PeerRecoverySourceService extends AbstractLifecycleComponent implem
                     Math.toIntExact(recoverySettings.getChunkSize().getBytes()),
                     recoverySettings.getMaxConcurrentFileChunks(),
                     recoverySettings.getMaxConcurrentOperations(),
+                    recoverySettings.getMaxConcurrentSnapshotFileDownloads(),
                     recoveryPlannerService);
                 return Tuple.tuple(handler, recoveryTarget);
             }
