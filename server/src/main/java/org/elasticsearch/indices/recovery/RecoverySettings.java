@@ -136,11 +136,19 @@ public class RecoverySettings {
      * defaults to `false`
      */
     public static final Setting<Boolean> INDICES_RECOVERY_USE_SNAPSHOTS_SETTING =
-        Setting.boolSetting("indices.recovery.use_snapshots", false, Property.Dynamic, Property.NodeScope);
+        Setting.boolSetting("indices.recovery.use_snapshots", true, Property.Dynamic, Property.NodeScope);
 
     // TODO: Find a better name, and is this the right place for this setting?
     public static final Setting<Boolean> REPOSITORY_SNAPSHOT_BASED_RECOVERY_SETTING =
         Setting.boolSetting("snapshot_based_recoveries_enabled", false);
+
+    public static final Setting<Integer> INDICES_RECOVERY_MAX_CONCURRENT_SNAPSHOT_FILE_DOWNLOADS =
+        Setting.intSetting("indices.recovery.max_concurrent_snapshot_file_downloads",
+            5,
+            1,
+            Property.Dynamic,
+            Property.NodeScope
+        );
 
     public static final ByteSizeValue DEFAULT_CHUNK_SIZE = new ByteSizeValue(512, ByteSizeUnit.KB);
 
@@ -156,6 +164,7 @@ public class RecoverySettings {
     private volatile TimeValue internalActionLongTimeout;
     private volatile boolean useSnapshotsDuringRecovery;
     private volatile String repository;
+    private volatile int maxConcurrentSnapshotFileDownloads;
 
     private volatile ByteSizeValue chunkSize = DEFAULT_CHUNK_SIZE;
 
@@ -179,6 +188,7 @@ public class RecoverySettings {
             rateLimiter = new SimpleRateLimiter(maxBytesPerSec.getMbFrac());
         }
         this.useSnapshotsDuringRecovery = INDICES_RECOVERY_USE_SNAPSHOTS_SETTING.get(settings);
+        this.maxConcurrentSnapshotFileDownloads = INDICES_RECOVERY_MAX_CONCURRENT_SNAPSHOT_FILE_DOWNLOADS.get(settings);
 
         logger.debug("using max_bytes_per_sec[{}]", maxBytesPerSec);
 
@@ -193,6 +203,8 @@ public class RecoverySettings {
             this::setInternalActionLongTimeout);
         clusterSettings.addSettingsUpdateConsumer(INDICES_RECOVERY_ACTIVITY_TIMEOUT_SETTING, this::setActivityTimeout);
         clusterSettings.addSettingsUpdateConsumer(INDICES_RECOVERY_USE_SNAPSHOTS_SETTING, this::setUseSnapshotsDuringRecovery);
+        clusterSettings.addSettingsUpdateConsumer(INDICES_RECOVERY_MAX_CONCURRENT_SNAPSHOT_FILE_DOWNLOADS,
+            this::setMaxConcurrentSnapshotFileDownloads);
     }
 
     public RateLimiter rateLimiter() {
@@ -285,5 +297,13 @@ public class RecoverySettings {
 
     private void setUseSnapshotsDuringRecovery(boolean useSnapshotsDuringRecovery) {
         this.useSnapshotsDuringRecovery = useSnapshotsDuringRecovery;
+    }
+
+    public int getMaxConcurrentSnapshotFileDownloads() {
+        return maxConcurrentSnapshotFileDownloads;
+    }
+
+    public void setMaxConcurrentSnapshotFileDownloads(int maxConcurrentSnapshotFileDownloads) {
+        this.maxConcurrentSnapshotFileDownloads = maxConcurrentSnapshotFileDownloads;
     }
 }
