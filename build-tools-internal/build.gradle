@@ -126,6 +126,10 @@ gradlePlugin {
       id = 'elasticsearch.rest-test'
       implementationClass = 'org.elasticsearch.gradle.internal.test.RestTestPlugin'
     }
+    s3IntegrationTest {
+      id = 'elasticsearch.s3-integration-test'
+      implementationClass = 'org.elasticsearch.gradle.internal.test.S3IntegrationTestPlugin'
+    }
     standaloneRestTest {
       id = 'elasticsearch.standalone-rest-test'
       implementationClass = 'org.elasticsearch.gradle.internal.test.StandaloneRestTestPlugin'
