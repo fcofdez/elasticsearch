@@ -10,13 +10,16 @@ package org.elasticsearch.index.engine;
 
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.message.ParameterizedMessage;
+import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.document.LongPoint;
 import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexCommit;
+import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.LiveIndexWriterConfig;
 import org.apache.lucene.index.MergePolicy;
@@ -992,6 +995,8 @@ public class InternalEngine extends Engine {
 
                     assert index.seqNo() >= 0 : "ops should have an assigned seq no.; origin: " + index.origin();
 
+                    analyze(index.docs());
+
                     if (plan.indexIntoLucene || plan.addStaleOpToLucene) {
                         indexResult = indexIntoLucene(index, plan);
                     } else {
@@ -1267,6 +1272,25 @@ public class InternalEngine extends Engine {
             indexWriter.addDocuments(docs);
         } else {
             indexWriter.addDocument(docs.get(0));
+        }
+    }
+
+    private void analyze(final List<LuceneDocument> docs) throws IOException {
+        TokenStream tokenStream = null;
+        for (LuceneDocument doc : docs) {
+            var analyzer = indexWriter.getAnalyzer();
+            for (IndexableField indexableField : doc) {
+                var fieldType = indexableField.fieldType();
+                if (fieldType.indexOptions() != IndexOptions.NONE) {
+                    try (TokenStream stream = tokenStream = indexableField.tokenStream(analyzer, tokenStream)) {
+                        stream.reset();
+                        while (stream.incrementToken()) {
+                            // we're interested in knowing if the field is analyzable
+                        }
+                        stream.end();
+                    }
+                }
+            }
         }
     }
 
