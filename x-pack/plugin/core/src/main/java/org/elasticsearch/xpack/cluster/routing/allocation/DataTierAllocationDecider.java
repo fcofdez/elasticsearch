@@ -194,7 +194,7 @@ public final class DataTierAllocationDecider extends AllocationDecider {
     private static boolean isDesiredNodeWithinTierJoining(String tier, DiscoveryNodes discoveryNodes, DesiredNodes desiredNodes) {
         assert tierNodesPresent(tier, desiredNodes.actualized()) == false;
         // Take into account the case when the desired nodes have been updated and the node in the tier would be replaced by
-        // a new one. In that case the desired node in the tier won't be a member as it has to join, but we still need to ensure
+        // a new one. In that case the desired node in the tier won't be actualized as it has to join, but we still need to ensure
         // that at least one cluster member has the requested tier as we would prefer to minimize the shard movements in these cases.
         return tierNodesPresent(tier, desiredNodes.pending()) && tierNodesPresent(tier, discoveryNodes);
     }

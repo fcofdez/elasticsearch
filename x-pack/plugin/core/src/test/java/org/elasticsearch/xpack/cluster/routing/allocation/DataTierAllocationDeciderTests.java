@@ -14,6 +14,7 @@ import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.ESAllocationTestCase;
 import org.elasticsearch.cluster.metadata.DesiredNode;
+import org.elasticsearch.cluster.metadata.DesiredNodeWithStatus;
 import org.elasticsearch.cluster.metadata.DesiredNodes;
 import org.elasticsearch.cluster.metadata.DesiredNodesMetadata;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
@@ -437,12 +438,12 @@ public class DataTierAllocationDeciderTests extends ESAllocationTestCase {
         }
     }
 
-    private DesiredNodes.DesiredNodeWithStatus actualized(DesiredNode desiredNode) {
-        return new DesiredNodes.DesiredNodeWithStatus(desiredNode, DesiredNodes.Status.ACTUALIZED);
+    private DesiredNodeWithStatus actualized(DesiredNode desiredNode) {
+        return new DesiredNodeWithStatus(desiredNode, DesiredNodeWithStatus.Status.ACTUALIZED);
     }
 
-    private DesiredNodes.DesiredNodeWithStatus pending(DesiredNode desiredNode) {
-        return new DesiredNodes.DesiredNodeWithStatus(desiredNode, DesiredNodes.Status.PENDING);
+    private DesiredNodeWithStatus pending(DesiredNode desiredNode) {
+        return new DesiredNodeWithStatus(desiredNode, DesiredNodeWithStatus.Status.PENDING);
     }
 
     public void testFrozenIllegalForRegularIndices() {
@@ -579,7 +580,7 @@ public class DataTierAllocationDeciderTests extends ESAllocationTestCase {
             randomAlphaOfLength(10),
             1,
             Arrays.stream(nodes)
-                .map(desiredNode -> new DesiredNodes.DesiredNodeWithStatus(desiredNode, DesiredNodes.Status.ACTUALIZED))
+                .map(desiredNode -> new DesiredNodeWithStatus(desiredNode, DesiredNodeWithStatus.Status.ACTUALIZED))
                 .toList()
         );
     }

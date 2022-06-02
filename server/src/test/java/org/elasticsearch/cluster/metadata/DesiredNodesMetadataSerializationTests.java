@@ -57,7 +57,7 @@ public class DesiredNodesMetadataSerializationTests extends SimpleDiffableSerial
         return randomDesiredNodesMetadata();
     }
 
-    public static DesiredNodesMetadata randomDesiredNodesMetadata() {
+    private static DesiredNodesMetadata randomDesiredNodesMetadata() {
         return new DesiredNodesMetadata(randomDesiredNodes());
     }
 

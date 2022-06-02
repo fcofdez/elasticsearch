@@ -19,6 +19,7 @@ import org.elasticsearch.common.unit.ByteSizeValue;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.elasticsearch.node.Node.NODE_EXTERNAL_ID_SETTING;
 import static org.hamcrest.Matchers.containsString;
@@ -39,12 +40,12 @@ public class DesiredNodesTests extends DesiredNodesTestCase {
                 randomList(
                     2,
                     10,
-                    () -> new DesiredNodes.DesiredNodeWithStatus(
+                    () -> new DesiredNodeWithStatus(
                         randomDesiredNode(
                             Version.CURRENT,
                             (settings) -> settings.put(NODE_EXTERNAL_ID_SETTING.getKey(), duplicatedExternalID)
                         ),
-                        randomFrom(DesiredNodes.Status.values())
+                        randomFrom(DesiredNodeWithStatus.Status.values())
                     )
                 )
             )
@@ -104,21 +105,21 @@ public class DesiredNodesTests extends DesiredNodesTestCase {
 
     public void testDesiredNodesMembershipIsUpdatedUsingCurrentClusterNodes() {
         final var actualizedDesiredNodes = randomList(0, 5, this::createActualizedDesiredNode);
-        final var unknownDesiredNodes = randomList(0, 5, this::createPendingDesiredNode);
-        final var pendingDesiredNodes = randomList(1, 5, this::createPendingDesiredNode);
+        final var pendingDesiredNodes = randomList(0, 5, this::createPendingDesiredNode);
+        final var joiningDesiredNodes = randomList(1, 5, this::createPendingDesiredNode);
 
         final var discoveryNodes = DiscoveryNodes.builder();
 
-        for (DesiredNodes.DesiredNodeWithStatus actualizedDesiredNode : actualizedDesiredNodes) {
+        for (DesiredNodeWithStatus actualizedDesiredNode : actualizedDesiredNodes) {
             assertThat(actualizedDesiredNode.actualized(), is(equalTo(true)));
 
             discoveryNodes.add(newDiscoveryNode(actualizedDesiredNode.externalId()));
         }
 
-        for (DesiredNodes.DesiredNodeWithStatus pendingDesiredNode : pendingDesiredNodes) {
-            assertThat(pendingDesiredNode.pending(), is(equalTo(true)));
+        for (DesiredNodeWithStatus joiningDesiredNode : joiningDesiredNodes) {
+            assertThat(joiningDesiredNode.pending(), is(equalTo(true)));
 
-            discoveryNodes.add(newDiscoveryNode(pendingDesiredNode.externalId()));
+            discoveryNodes.add(newDiscoveryNode(joiningDesiredNode.externalId()));
         }
 
         // Add some nodes in the cluster that are not part of the desired nodes
@@ -126,7 +127,7 @@ public class DesiredNodesTests extends DesiredNodesTestCase {
             discoveryNodes.add(newDiscoveryNode(UUIDs.randomBase64UUID(random())));
         }
 
-        final var desiredNodes = createDesiredNodes(actualizedDesiredNodes, unknownDesiredNodes, pendingDesiredNodes);
+        final var desiredNodes = createDesiredNodes(actualizedDesiredNodes, pendingDesiredNodes, joiningDesiredNodes);
 
         final var clusterState = ClusterState.builder(new ClusterName("test"))
             .nodes(discoveryNodes)
@@ -136,11 +137,11 @@ public class DesiredNodesTests extends DesiredNodesTestCase {
         final var updatedClusterState = DesiredNodes.updateDesiredNodesMembershipIfNeeded(clusterState);
         assertThat(updatedClusterState, is(not(sameInstance(clusterState))));
 
-//        assertDesiredNodesMembershipIsCorrect(
-//            updatedClusterState,
-//            Stream.concat(actualizedDesiredNodes.stream(), pendingDesiredNodes.stream()).toList(),
-//            unknownDesiredNodes
-//        );
+        // assertDesiredNodesMembershipIsCorrect(
+        // updatedClusterState,
+        // Stream.concat(actualizedDesiredNodes.stream(), joiningDesiredNodes.stream()).toList(),
+        // pendingDesiredNodes
+        // );
     }
 
     public void testClusterStateIsNotChangedWhenDesiredNodesMembershipDoNotChange() {
@@ -148,7 +149,7 @@ public class DesiredNodesTests extends DesiredNodesTestCase {
         final var pendingDesiredNodes = randomList(0, 5, this::createPendingDesiredNode);
 
         final var discoveryNodes = DiscoveryNodes.builder();
-        for (DesiredNodes.DesiredNodeWithStatus actualizedDesiredNode : actualizedDesiredNodes) {
+        for (DesiredNodeWithStatus actualizedDesiredNode : actualizedDesiredNodes) {
             assertThat(actualizedDesiredNode.actualized(), is(equalTo(true)));
 
             discoveryNodes.add(newDiscoveryNode(actualizedDesiredNode.externalId()));
@@ -189,7 +190,7 @@ public class DesiredNodesTests extends DesiredNodesTestCase {
         final var newDesiredNodes = createDesiredNodes(
             // Reuse the same nodes from the previous desired nodes or create new ones
             desiredNodesInClusterState && randomBoolean()
-                ? List.of() //previousDesiredNodes.nodes().stream().map(DesiredNode::withUnknownMembershipStatus).toList()
+                ? List.of() // previousDesiredNodes.nodes().stream().map(DesiredNode::withUnknownMembershipStatus).toList()
                 : randomList(1, 10, this::createPendingDesiredNode)
         );
 
@@ -197,48 +198,47 @@ public class DesiredNodesTests extends DesiredNodesTestCase {
 
         assertThat(updatedClusterState, is(not(sameInstance(clusterState))));
         assertThat(DesiredNodes.latestFromClusterState(updatedClusterState), is(equalTo(newDesiredNodes)));
-        for (DesiredNodes.DesiredNodeWithStatus desiredNode : DesiredNodes.latestFromClusterState(updatedClusterState)) {
+        for (DesiredNodeWithStatus desiredNode : DesiredNodes.latestFromClusterState(updatedClusterState)) {
             assertThat(desiredNode.actualized(), is(equalTo(false)));
         }
     }
 
-//    public void testMembershipInformationIsCarriedOverInNewVersions() {
-//        final var knownDesiredNodes = randomList(1, 5, this::createMemberDesiredNode);
-//        final var unknownDesiredNodes = randomList(0, 5, this::createDesiredNode);
-//
-//        final var desiredNodes = createDesiredNodes(knownDesiredNodes, unknownDesiredNodes);
-//
-//        final var newKnownDesiredNodes = randomSubsetOf(desiredNodes.nodes()).stream().map(desiredNode -> {
-//            if (randomBoolean()) {
-//                return desiredNodeWithDifferentSpecsAndSameExternalId(desiredNode);
-//            } else {
-//                return desiredNode.withUnknownMembershipStatus();
-//            }
-//        }).toList();
-//        final List<DesiredNode> newUnknownDesiredNodes = randomList(newKnownDesiredNodes.isEmpty() ? 1 : 0, 5, this::createDesiredNode);
-//
-//        final boolean withNewHistoryId = randomBoolean();
-//        final var newDesiredNodes = createDesiredNodes(
-//            withNewHistoryId ? UUIDs.randomBase64UUID(random()) : desiredNodes.historyID(),
-//            desiredNodes.version() + 1,
-//            newKnownDesiredNodes,
-//            newUnknownDesiredNodes
-//        );
-//
-//        final var newDesiredNodesWithMembershipInformation = newDesiredNodes.withMembershipInformationFrom(desiredNodes);
-//
-//        if (withNewHistoryId) {
-//            for (DesiredNode desiredNode : newDesiredNodesWithMembershipInformation) {
-//                assertThat(desiredNode.isMember(), is(equalTo(false)));
-//            }
-//        } else {
-//            assertDesiredNodesMembershipIsCorrect(
-//                newDesiredNodesWithMembershipInformation,
-//                newKnownDesiredNodes,
-//                Stream.concat(unknownDesiredNodes.stream(), newUnknownDesiredNodes.stream()).toList()
-//            );
-//        }
-//    }
+    public void testMembershipInformationIsCarriedOverInNewVersions() {
+        final var actualizedDesiredNodes = randomList(1, 5, this::createActualizedDesiredNode);
+        final var pendingDesiredNodes = randomList(0, 5, this::createPendingDesiredNode);
+
+        final var desiredNodes = createDesiredNodes(actualizedDesiredNodes, pendingDesiredNodes);
+
+        final var actualizedKnownDesiredNodes = randomSubsetOf(desiredNodes.actualized()).stream()
+            .map(desiredNode -> randomBoolean() ? desiredNode : desiredNodeWithDifferentSpecsAndSameExternalId(desiredNode))
+            .toList();
+        final var newPendingDesiredNodes = randomList(actualizedKnownDesiredNodes.isEmpty() ? 1 : 0, 5, this::createPendingDesiredNode);
+
+        final boolean withNewHistoryId = randomBoolean();
+        final var newDesiredNodesWithMembershipInformation = DesiredNodes.transferStatusInformation(
+            withNewHistoryId ? UUIDs.randomBase64UUID(random()) : desiredNodes.historyID(),
+            desiredNodes.version() + 1,
+            Stream.concat(
+                actualizedKnownDesiredNodes.stream(),
+                Stream.concat(pendingDesiredNodes.stream(), newPendingDesiredNodes.stream()).map(DesiredNodeWithStatus::desiredNode)
+            ).toList(),
+            desiredNodes
+        );
+
+        if (withNewHistoryId) {
+            for (DesiredNodeWithStatus desiredNode : newDesiredNodesWithMembershipInformation) {
+                assertThat(desiredNode.pending(), is(equalTo(true)));
+            }
+        } else {
+            // assertDesiredNodesMembershipIsCorrect(
+            // newDesiredNodesWithMembershipInformation,
+            // actualizedKnownDesiredNodes.stream()
+            // .map(dn -> new DesiredNodeWithStatus(dn, DesiredNodeWithStatus.Status.ACTUALIZED))
+            // .toList(),
+            // Stream.concat(pendingDesiredNodes.stream(), newPendingDesiredNodes.stream()).toList()
+            // );
+        }
+    }
 
     private DiscoveryNode newDiscoveryNode(String nodeName) {
         return new DiscoveryNode(
@@ -251,17 +251,17 @@ public class DesiredNodesTests extends DesiredNodesTestCase {
         );
     }
 
-    private DesiredNodes.DesiredNodeWithStatus createActualizedDesiredNode() {
-        return new DesiredNodes.DesiredNodeWithStatus(
+    private DesiredNodeWithStatus createActualizedDesiredNode() {
+        return new DesiredNodeWithStatus(
             randomDesiredNodeWithExternalId(UUIDs.randomBase64UUID(random())),
-            DesiredNodes.Status.ACTUALIZED
+            DesiredNodeWithStatus.Status.ACTUALIZED
         );
     }
 
-    private DesiredNodes.DesiredNodeWithStatus createPendingDesiredNode() {
-        return new DesiredNodes.DesiredNodeWithStatus(
+    private DesiredNodeWithStatus createPendingDesiredNode() {
+        return new DesiredNodeWithStatus(
             randomDesiredNodeWithExternalId(UUIDs.randomBase64UUID(random())),
-            DesiredNodes.Status.PENDING
+            DesiredNodeWithStatus.Status.PENDING
         );
     }
 

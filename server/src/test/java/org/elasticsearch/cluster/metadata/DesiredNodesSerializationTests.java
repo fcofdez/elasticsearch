@@ -44,9 +44,9 @@ public class DesiredNodesSerializationTests extends AbstractSerializingTestCase<
                     instance.nodes()
                         .stream()
                         .map(
-                            desiredNodeWithStatus -> new DesiredNodes.DesiredNodeWithStatus(
+                            desiredNodeWithStatus -> new DesiredNodeWithStatus(
                                 desiredNodeWithStatus.desiredNode(),
-                                DesiredNodes.Status.ACTUALIZED
+                                DesiredNodeWithStatus.Status.ACTUALIZED
                             )
                         )
                         .toList()

@@ -21,7 +21,6 @@ import org.elasticsearch.cluster.block.ClusterBlockException;
 import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.desirednodes.DesiredNodesSettingsValidator;
 import org.elasticsearch.cluster.desirednodes.VersionConflictException;
-import org.elasticsearch.cluster.metadata.DesiredNode;
 import org.elasticsearch.cluster.metadata.DesiredNodes;
 import org.elasticsearch.cluster.metadata.DesiredNodesMetadata;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
@@ -119,10 +118,11 @@ public class TransportUpdateDesiredNodesAction extends TransportMasterNodeAction
     }
 
     static DesiredNodes updateDesiredNodes(DesiredNodes latestDesiredNodes, UpdateDesiredNodesRequest request) {
-        final DesiredNodes proposedDesiredNodes = new DesiredNodes(
+        final DesiredNodes proposedDesiredNodes = DesiredNodes.transferStatusInformation(
             request.getHistoryID(),
             request.getVersion(),
-            convert(latestDesiredNodes, request.getHistoryID(), request.getNodes())
+            request.getNodes(),
+            latestDesiredNodes
         );
 
         if (latestDesiredNodes != null) {
@@ -151,23 +151,7 @@ public class TransportUpdateDesiredNodesAction extends TransportMasterNodeAction
             }
         }
 
-        return proposedDesiredNodes.withMembershipInformationFrom(latestDesiredNodes);
-    }
-
-    private static List<DesiredNodes.DesiredNodeWithStatus> convert(DesiredNodes previousDesiredNodes, String historyId, List<DesiredNode> dns) {
-        if (previousDesiredNodes == null || previousDesiredNodes.historyID().equals(historyId) == false) {
-            return dns.stream().map(dn -> new DesiredNodes.DesiredNodeWithStatus(dn, DesiredNodes.Status.PENDING)).toList();
-        }
-        List<DesiredNodes.DesiredNodeWithStatus> statuses = new ArrayList<>(dns.size());
-        for (DesiredNode dn : dns) {
-            final var desiredNode = previousDesiredNodes.find(dn.externalId());
-            if (desiredNode != null) {
-                statuses.add(new DesiredNodes.DesiredNodeWithStatus(dn, desiredNode.status()));
-            } else {
-                statuses.add(new DesiredNodes.DesiredNodeWithStatus(dn, DesiredNodes.Status.PENDING));
-            }
-        }
-        return statuses;
+        return proposedDesiredNodes;
     }
 
     private record UpdateDesiredNodesTask(UpdateDesiredNodesRequest request, ActionListener<UpdateDesiredNodesResponse> listener)

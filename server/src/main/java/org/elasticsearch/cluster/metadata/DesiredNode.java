@@ -46,7 +46,6 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
     private static final ParseField STORAGE_FIELD = new ParseField("storage");
     private static final ParseField VERSION_FIELD = new ParseField("node_version");
 
-
     public static final ConstructingObjectParser<DesiredNode, Void> PARSER = new ConstructingObjectParser<>(
         "desired_node",
         false,
@@ -207,7 +206,6 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
         storage.writeTo(out);
         Version.writeVersion(version, out);
     }
-
 
     public static DesiredNode fromXContent(XContentParser parser) throws IOException {
         return PARSER.parse(parser, null);

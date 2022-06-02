@@ -19,24 +19,14 @@ import org.elasticsearch.test.ESTestCase;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import static org.elasticsearch.node.Node.NODE_EXTERNAL_ID_SETTING;
 import static org.elasticsearch.node.Node.NODE_NAME_SETTING;
 import static org.hamcrest.Matchers.greaterThan;
-import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
 
 public abstract class DesiredNodesTestCase extends ESTestCase {
-    public static DesiredNodes randomDesiredNodesWithRandomSettings() {
-        return randomDesiredNodes(DesiredNodesTestCase::putRandomSetting);
-    }
-
-    public static DesiredNodes randomDesiredNodesWithRandomSettings(Version version) {
-        return randomDesiredNodes(version, DesiredNodesTestCase::putRandomSetting);
-    }
-
     public static DesiredNodes randomDesiredNodes() {
         return randomDesiredNodes((settings) -> {});
     }
@@ -53,12 +43,12 @@ public abstract class DesiredNodesTestCase extends ESTestCase {
         );
     }
 
-    public static List<DesiredNodes.DesiredNodeWithStatus> randomDesiredNodeListWithRandomStatus(
+    public static List<DesiredNodeWithStatus> randomDesiredNodeListWithRandomStatus(
         Version version,
         Consumer<Settings.Builder> settingsConsumer
     ) {
         return randomDesiredNodeList(version, settingsConsumer).stream()
-            .map(desiredNode -> new DesiredNodes.DesiredNodeWithStatus(desiredNode, randomFrom(DesiredNodes.Status.values())))
+            .map(desiredNode -> new DesiredNodeWithStatus(desiredNode, randomFrom(DesiredNodeWithStatus.Status.values())))
             .toList();
     }
 
@@ -84,8 +74,8 @@ public abstract class DesiredNodesTestCase extends ESTestCase {
         });
     }
 
-    public static DesiredNodes.DesiredNodeWithStatus randomDesiredNodeWithStatus() {
-        return new DesiredNodes.DesiredNodeWithStatus(randomDesiredNodeWithRandomSettings(), randomFrom(DesiredNodes.Status.values()));
+    public static DesiredNodeWithStatus randomDesiredNodeWithStatus() {
+        return new DesiredNodeWithStatus(randomDesiredNodeWithRandomSettings(), randomFrom(DesiredNodeWithStatus.Status.values()));
     }
 
     public static DesiredNode randomDesiredNodeWithRandomSettings() {
@@ -164,15 +154,15 @@ public abstract class DesiredNodesTestCase extends ESTestCase {
     }
 
     @SafeVarargs
-    public static DesiredNodes createDesiredNodes(List<DesiredNodes.DesiredNodeWithStatus>... nodeLists) {
+    public static DesiredNodes createDesiredNodes(List<DesiredNodeWithStatus>... nodeLists) {
         return createDesiredNodes(UUIDs.randomBase64UUID(random()), 1, nodeLists);
     }
 
     @SafeVarargs
-    public static DesiredNodes createDesiredNodes(String historyId, long version, List<DesiredNodes.DesiredNodeWithStatus>... nodeLists) {
+    public static DesiredNodes createDesiredNodes(String historyId, long version, List<DesiredNodeWithStatus>... nodeLists) {
         assertThat(nodeLists.length, is(greaterThan(0)));
-        final List<DesiredNodes.DesiredNodeWithStatus> desiredNodes = new ArrayList<>();
-        for (List<DesiredNodes.DesiredNodeWithStatus> nodeList : nodeLists) {
+        final List<DesiredNodeWithStatus> desiredNodes = new ArrayList<>();
+        for (List<DesiredNodeWithStatus> nodeList : nodeLists) {
             desiredNodes.addAll(nodeList);
         }
         return new DesiredNodes(historyId, version, desiredNodes);
@@ -180,29 +170,24 @@ public abstract class DesiredNodesTestCase extends ESTestCase {
 
     public static void assertDesiredNodesMembershipIsCorrect(
         ClusterState clusterState,
-        List<DesiredNodes.DesiredNodeWithStatus> expectedMembersList,
-        List<DesiredNodes.DesiredNodeWithStatus> expectedUnknownNodesList
+        List<DesiredNode> expectedActualizedNodes,
+        List<DesiredNode> expectedPendingNodes
     ) {
         final var desiredNodes = DesiredNodes.latestFromClusterState(clusterState);
-        assertDesiredNodesMembershipIsCorrect(desiredNodes, expectedMembersList, expectedUnknownNodesList);
+        assertDesiredNodesMembershipIsCorrect(desiredNodes, expectedActualizedNodes, expectedPendingNodes);
     }
 
     public static void assertDesiredNodesMembershipIsCorrect(
         DesiredNodes desiredNodes,
-        List<DesiredNodes.DesiredNodeWithStatus> expectedMembersList,
-        List<DesiredNodes.DesiredNodeWithStatus> expectedUnknownNodesList
+        List<DesiredNode> expectedActualizedNodes,
+        List<DesiredNode> expectedPendingNodes
     ) {
-        final var expectedMembers = expectedMembersList.stream()
-            .collect(Collectors.toMap(dn -> dn.desiredNode().externalId(), Function.identity()));
-        final var expectedUnknownNodes = expectedUnknownNodesList.stream()
-            .collect(Collectors.toMap(dn -> dn.desiredNode().externalId(), Function.identity()));
-
         for (DesiredNode desiredNode : desiredNodes.actualized()) {
-            assertThat("member not found", expectedMembers, hasKey(desiredNode.externalId()));
+            assertThat(expectedActualizedNodes, hasItem(desiredNode));
         }
 
         for (DesiredNode desiredNode : desiredNodes.pending()) {
-            assertThat("not member not found", expectedUnknownNodes, hasKey(desiredNode.externalId()));
+            assertThat(expectedPendingNodes, hasItem(desiredNode));
         }
     }
 }

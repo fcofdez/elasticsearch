@@ -12,12 +12,13 @@ import org.elasticsearch.action.admin.cluster.desirednodes.UpdateDesiredNodesAct
 import org.elasticsearch.action.admin.cluster.desirednodes.UpdateDesiredNodesRequest;
 import org.elasticsearch.action.admin.cluster.desirednodes.UpdateDesiredNodesResponse;
 import org.elasticsearch.cluster.metadata.DesiredNodes;
+import org.elasticsearch.cluster.metadata.DesiredNodesTestCase;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.test.ESIntegTestCase;
 
 import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.assertDesiredNodesMembershipIsCorrect;
-import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.createDesiredNodes;
 import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.randomDesiredNodeWithName;
+import static org.elasticsearch.common.util.CollectionUtils.concatLists;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 
@@ -27,20 +28,19 @@ public class DesiredNodesMembershipIT extends ESIntegTestCase {
 
         final var nodeNames = internalCluster().startNodes(numberOfNodes);
 
-        final var actualizedDesiredNodes = nodeNames.stream().map(this::createActualizedDesiredNode).toList();
-        final var pendingDesiredNodes = randomList(0, 5, this::createPendingDesiredNode);
+        final var actualizedDesiredNodes = nodeNames.stream().map(DesiredNodesTestCase::randomDesiredNodeWithName).toList();
+        final var pendingDesiredNodes = randomList(0, 5, () -> randomDesiredNodeWithName(UUIDs.randomBase64UUID(random())));
 
-        final var desiredNodes = createDesiredNodes(actualizedDesiredNodes, pendingDesiredNodes);
-
-        updateDesiredNodes(desiredNodes);
+        var req = new UpdateDesiredNodesRequest(randomAlphaOfLength(10), 1, concatLists(actualizedDesiredNodes, pendingDesiredNodes));
+        updateDesiredNodes(req);
 
         {
             final var clusterState = client().admin().cluster().prepareState().get().getState();
             assertDesiredNodesMembershipIsCorrect(clusterState, actualizedDesiredNodes, pendingDesiredNodes);
         }
 
-        final var newerDesiredNodes = createDesiredNodes(desiredNodes.historyID(), desiredNodes.version() + 1, desiredNodes.nodes());
-        updateDesiredNodes(newerDesiredNodes);
+        var newReq = new UpdateDesiredNodesRequest(req.getHistoryID(), req.getVersion() + 1, req.getNodes());
+        updateDesiredNodes(newReq);
 
         {
             final var clusterState = client().admin().cluster().prepareState().get().getState();
@@ -53,19 +53,18 @@ public class DesiredNodesMembershipIT extends ESIntegTestCase {
 
         final var nodeNames = internalCluster().startNodes(numberOfNodes);
 
-        final var actualizedDesiredNodes = nodeNames.stream().map(this::createActualizedDesiredNode).toList();
-        final var pendingDesiredNodes = randomList(0, 5, this::createPendingDesiredNode);
+        final var actualizedDesiredNodes = nodeNames.stream().map(DesiredNodesTestCase::randomDesiredNodeWithName).toList();
+        final var pendingDesiredNodes = randomList(0, 5, () -> randomDesiredNodeWithName(UUIDs.randomBase64UUID(random())));
 
-        final var desiredNodes = createDesiredNodes(actualizedDesiredNodes, pendingDesiredNodes);
-
-        updateDesiredNodes(desiredNodes);
+        var req = new UpdateDesiredNodesRequest(randomAlphaOfLength(10), 1, concatLists(actualizedDesiredNodes, pendingDesiredNodes));
+        updateDesiredNodes(req);
 
         {
             final var clusterState = client().admin().cluster().prepareState().get().getState();
             assertDesiredNodesMembershipIsCorrect(clusterState, actualizedDesiredNodes, pendingDesiredNodes);
         }
 
-        updateDesiredNodes(desiredNodes);
+        updateDesiredNodes(req);
 
         {
             final var clusterState = client().admin().cluster().prepareState().get().getState();
@@ -78,12 +77,11 @@ public class DesiredNodesMembershipIT extends ESIntegTestCase {
 
         final var nodeNames = internalCluster().startNodes(numberOfNodes);
 
-        final var actualizedDesiredNodes = nodeNames.stream().map(this::createActualizedDesiredNode).toList();
-        final var pendingDesiredNodes = randomList(0, 5, this::createPendingDesiredNode);
+        final var actualizedDesiredNodes = nodeNames.stream().map(DesiredNodesTestCase::randomDesiredNodeWithName).toList();
+        final var pendingDesiredNodes = randomList(0, 5, () -> randomDesiredNodeWithName(UUIDs.randomBase64UUID(random())));
 
-        final var desiredNodes = createDesiredNodes(actualizedDesiredNodes, pendingDesiredNodes);
-
-        updateDesiredNodes(desiredNodes);
+        var req = new UpdateDesiredNodesRequest(randomAlphaOfLength(10), 1, concatLists(actualizedDesiredNodes, pendingDesiredNodes));
+        updateDesiredNodes(req);
 
         final var clusterState = client().admin().cluster().prepareState().get().getState();
         assertDesiredNodesMembershipIsCorrect(clusterState, actualizedDesiredNodes, pendingDesiredNodes);
@@ -107,12 +105,15 @@ public class DesiredNodesMembershipIT extends ESIntegTestCase {
 
         final var clusterNodeNames = internalCluster().startNodes(numberOfNodes);
 
-        final var actualizedDesiredNodes = clusterNodeNames.stream().map(this::createActualizedDesiredNode).toList();
-        final var pendingDesiredNodes = randomList(0, 5, this::createPendingDesiredNode);
+        final var actualizedDesiredNodes = clusterNodeNames.stream().map(DesiredNodesTestCase::randomDesiredNodeWithName).toList();
+        final var pendingDesiredNodes = randomList(0, 5, () -> randomDesiredNodeWithName(UUIDs.randomBase64UUID(random())));
 
-        final var desiredNodes = createDesiredNodes(actualizedDesiredNodes, pendingDesiredNodes);
-
-        updateDesiredNodes(desiredNodes);
+        final var updateDesiredNodesRequest = new UpdateDesiredNodesRequest(
+            randomAlphaOfLength(10),
+            1,
+            concatLists(actualizedDesiredNodes, pendingDesiredNodes)
+        );
+        updateDesiredNodes(updateDesiredNodesRequest);
 
         final var clusterState = client().admin().cluster().prepareState().get().getState();
         assertDesiredNodesMembershipIsCorrect(clusterState, actualizedDesiredNodes, pendingDesiredNodes);
@@ -123,9 +124,12 @@ public class DesiredNodesMembershipIT extends ESIntegTestCase {
             internalCluster().stopNode(leavingNodeName);
         }
 
-        final var newDesiredNodesHistory = new DesiredNodes(UUIDs.randomBase64UUID(random()), 1, desiredNodes.nodes());
-
-        final var response = updateDesiredNodes(newDesiredNodesHistory);
+        final var updateDesiredNodesWithNewHistoryRequest = new UpdateDesiredNodesRequest(
+            randomAlphaOfLength(10),
+            1,
+            updateDesiredNodesRequest.getNodes()
+        );
+        final var response = updateDesiredNodes(updateDesiredNodesWithNewHistoryRequest);
         assertThat(response.hasReplacedExistingHistoryId(), is(equalTo(true)));
 
         final var updatedClusterState = client().admin().cluster().prepareState().get().getState();
@@ -137,20 +141,7 @@ public class DesiredNodesMembershipIT extends ESIntegTestCase {
         }
     }
 
-    private UpdateDesiredNodesResponse updateDesiredNodes(DesiredNodes desiredNodes) {
-        final UpdateDesiredNodesRequest request = new UpdateDesiredNodesRequest(
-            desiredNodes.historyID(),
-            desiredNodes.version(),
-            desiredNodes.nodes().stream().map(DesiredNodes.DesiredNodeWithStatus::desiredNode).toList()
-        );
+    private UpdateDesiredNodesResponse updateDesiredNodes(UpdateDesiredNodesRequest request) {
         return client().execute(UpdateDesiredNodesAction.INSTANCE, request).actionGet();
-    }
-
-    private DesiredNodes.DesiredNodeWithStatus createActualizedDesiredNode(String nodeName) {
-        return new DesiredNodes.DesiredNodeWithStatus(randomDesiredNodeWithName(nodeName), DesiredNodes.Status.ACTUALIZED);
-    }
-
-    private DesiredNodes.DesiredNodeWithStatus createPendingDesiredNode() {
-        return new DesiredNodes.DesiredNodeWithStatus(randomDesiredNodeWithName(randomAlphaOfLength(10)), DesiredNodes.Status.PENDING);
     }
 }

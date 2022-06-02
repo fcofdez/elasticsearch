@@ -13,6 +13,7 @@ import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.NotMasterException;
 import org.elasticsearch.cluster.block.ClusterBlocks;
+import org.elasticsearch.cluster.metadata.DesiredNodeWithStatus;
 import org.elasticsearch.cluster.metadata.DesiredNodes;
 import org.elasticsearch.cluster.metadata.DesiredNodesMetadata;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
@@ -35,7 +36,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
-import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.assertDesiredNodesMembershipIsCorrect;
 import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.createDesiredNodes;
 import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.randomDesiredNodeWithExternalId;
 import static org.elasticsearch.test.VersionUtils.maxCompatibleVersion;
@@ -513,7 +513,7 @@ public class JoinTaskExecutorTests extends ESTestCase {
             .localNodeId(masterNode.getId())
             .masterNodeId(masterNode.getId());
 
-        for (DesiredNodes.DesiredNodeWithStatus actualizedDesiredNode : actualizedDesiredNodes) {
+        for (DesiredNodeWithStatus actualizedDesiredNode : actualizedDesiredNodes) {
             discoveryNodes.add(newDiscoveryNode(actualizedDesiredNode.externalId()));
         }
 
@@ -541,11 +541,11 @@ public class JoinTaskExecutorTests extends ESTestCase {
         assertThat(updatedDesiredNodes, is(notNullValue()));
 
         assertThat(updatedDesiredNodes.nodes(), hasSize(desiredNodes.nodes().size()));
-//        assertDesiredNodesMembershipIsCorrect(
-//            clusterState,
-//            Stream.concat(actualizedDesiredNodes.stream(), joiningDesiredNodes.stream()).toList(),
-//            unknownDesiredNodes
-//        );
+        // assertDesiredNodesMembershipIsCorrect(
+        // clusterState,
+        // Stream.concat(actualizedDesiredNodes.stream(), joiningDesiredNodes.stream()).toList(),
+        // pendingDesiredNodes
+        // );
     }
 
     private DiscoveryNode newDiscoveryNode(String nodeName) {
@@ -559,17 +559,17 @@ public class JoinTaskExecutorTests extends ESTestCase {
         );
     }
 
-    private DesiredNodes.DesiredNodeWithStatus createActualizedDesiredNode() {
-        return new DesiredNodes.DesiredNodeWithStatus(
+    private DesiredNodeWithStatus createActualizedDesiredNode() {
+        return new DesiredNodeWithStatus(
             randomDesiredNodeWithExternalId(UUIDs.randomBase64UUID(random())),
-            DesiredNodes.Status.ACTUALIZED
+            DesiredNodeWithStatus.Status.ACTUALIZED
         );
     }
 
-    private DesiredNodes.DesiredNodeWithStatus createPendingDesiredNode() {
-        return new DesiredNodes.DesiredNodeWithStatus(
+    private DesiredNodeWithStatus createPendingDesiredNode() {
+        return new DesiredNodeWithStatus(
             randomDesiredNodeWithExternalId(UUIDs.randomBase64UUID(random())),
-            DesiredNodes.Status.PENDING
+            DesiredNodeWithStatus.Status.PENDING
         );
     }
 
