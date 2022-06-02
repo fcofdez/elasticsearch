@@ -104,6 +104,43 @@ public abstract class DesiredNodesTestCase extends ESTestCase {
         );
     }
 
+    public static DesiredNode randomDesiredNode(float processors, Settings settings) {
+        final var desiredNodesSettings = Settings.builder().put(settings);
+        if (settings.hasValue(NODE_NAME_SETTING.getKey()) == false && settings.hasValue(NODE_EXTERNAL_ID_SETTING.getKey()) == false) {
+            if (randomBoolean()) {
+                desiredNodesSettings.put(NODE_NAME_SETTING.getKey(), randomAlphaOfLength(10));
+            } else {
+                desiredNodesSettings.put(NODE_EXTERNAL_ID_SETTING.getKey(), randomAlphaOfLength(10));
+            }
+        }
+        return new DesiredNode(
+            desiredNodesSettings.build(),
+            processors,
+            ByteSizeValue.ofGb(randomIntBetween(1, 1024)),
+            ByteSizeValue.ofTb(randomIntBetween(1, 40)),
+            Version.CURRENT
+        );
+    }
+
+    public static DesiredNode randomDesiredNode(Version version, Settings settings) {
+        final var desiredNodesSettings = Settings.builder().put(settings);
+        if (settings.hasValue(NODE_NAME_SETTING.getKey()) == false && settings.hasValue(NODE_EXTERNAL_ID_SETTING.getKey()) == false) {
+            if (randomBoolean()) {
+                desiredNodesSettings.put(NODE_NAME_SETTING.getKey(), randomAlphaOfLength(10));
+            } else {
+                desiredNodesSettings.put(NODE_EXTERNAL_ID_SETTING.getKey(), randomAlphaOfLength(10));
+            }
+        }
+        return new DesiredNode(
+            desiredNodesSettings.build(),
+            randomProcessor(),
+            ByteSizeValue.ofGb(randomIntBetween(1, 1024)),
+            ByteSizeValue.ofTb(randomIntBetween(1, 40)),
+            version
+        );
+    }
+
+
     public static DesiredNode randomDesiredNode(
         Version version,
         DesiredNode.ProcessorsRange processorsRange,

@@ -85,11 +85,18 @@ public class DesiredNodesSettingsValidatorTests extends ESTestCase {
         assertThat(exception.getSuppressed()[0].getMessage(), containsString("unknown setting"));
     }
 
-    public void testSettingsInFutureVersionsAreNotValidated() {
+    public void testUnknownSettingsInFutureVersionsAreNotValidated() {
         final ClusterSettings clusterSettings = new ClusterSettings(Settings.EMPTY, Collections.emptySet());
         final DesiredNodesSettingsValidator validator = new DesiredNodesSettingsValidator(clusterSettings);
 
-        final List<DesiredNode> desiredNodes = randomDesiredNodeListWithRandomSettings(Version.fromString("99.9.0"));
+        final List<DesiredNode> desiredNodes = randomList(
+            1,
+            10,
+            () -> randomDesiredNode(
+                Version.fromString("99.9.0"),
+                Settings.builder().put(randomAlphaOfLength(10), randomAlphaOfLength(10)).build()
+            )
+        );
         validator.validate(desiredNodes);
     }
 

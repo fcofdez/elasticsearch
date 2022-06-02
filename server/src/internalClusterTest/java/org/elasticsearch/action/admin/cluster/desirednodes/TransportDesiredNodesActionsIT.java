@@ -225,9 +225,8 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
                     1,
                     20,
                     () -> randomDesiredNode(
-                        Version.CURRENT,
                         numProcessors,
-                        (settings) -> settings.put(NODE_PROCESSORS_SETTING.getKey(), numProcessors + 1)
+                        Settings.builder().put(NODE_PROCESSORS_SETTING.getKey(), numProcessors + 1).build()
                     )
                 )
             );
@@ -261,11 +260,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
                 randomList(
                     1,
                     20,
-                    () -> randomDesiredNode(
-                        Version.CURRENT,
-                        numProcessors,
-                        (settings) -> settings.put(NODE_PROCESSORS_SETTING.getKey(), numProcessors)
-                    )
+                    () -> randomDesiredNode(numProcessors, Settings.builder().put(NODE_PROCESSORS_SETTING.getKey(), numProcessors).build())
                 )
             );
 
