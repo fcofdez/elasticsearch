@@ -39,9 +39,17 @@ public class DesiredNodesSerializationTests extends AbstractSerializingTestCase<
                 return new DesiredNodes(instance.historyID(), instance.version() + 1, instance.nodes());
             } else {
                 return new DesiredNodes(
-                    instance.historyID(),
-                    instance.version(),
-                    instance.nodes().stream().map(DesiredNode::asMember).toList()
+                    randomAlphaOfLength(10),
+                    1,
+                    instance.nodes()
+                        .stream()
+                        .map(
+                            desiredNodeWithStatus -> new DesiredNodes.DesiredNodeWithStatus(
+                                desiredNodeWithStatus.desiredNode(),
+                                DesiredNodes.Status.ACTUALIZED
+                            )
+                        )
+                        .toList()
                 );
             }
         }

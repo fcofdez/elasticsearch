@@ -71,7 +71,7 @@ public class DesiredNodesMetadataSerializationTests extends SimpleDiffableSerial
             new DesiredNodes(
                 latestDesiredNodes.historyID(),
                 latestDesiredNodes.version() + 1,
-                randomList(1, 10, DesiredNodesTestCase::randomDesiredNodeWithRandomSettings)
+                randomList(1, 10, DesiredNodesTestCase::randomDesiredNodeWithStatus)
             )
         );
     }

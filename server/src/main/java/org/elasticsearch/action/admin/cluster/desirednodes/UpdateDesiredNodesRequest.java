@@ -40,7 +40,7 @@ public class UpdateDesiredNodesRequest extends AcknowledgedRequest<UpdateDesired
     static {
         PARSER.declareObjectArray(
             ConstructingObjectParser.constructorArg(),
-            (p, c) -> DesiredNode.fromXContent(p, DesiredNode.ParsingContext.API),
+            (p, c) -> DesiredNode.fromXContent(p),
             NODES_FIELD
         );
     }

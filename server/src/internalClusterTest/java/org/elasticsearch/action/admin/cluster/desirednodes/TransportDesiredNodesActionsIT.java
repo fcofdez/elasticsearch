@@ -65,7 +65,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
     public void testUpdateDesiredNodesIsIdempotent() {
         final DesiredNodes desiredNodes = putRandomDesiredNodes();
 
-        final List<DesiredNode> desiredNodesList = new ArrayList<>(desiredNodes.nodes());
+        final List<DesiredNode> desiredNodesList = new ArrayList<>(desiredNodes.nodesWithoutMembership());
         if (randomBoolean()) {
             Collections.shuffle(desiredNodesList, random());
         }
@@ -245,7 +245,11 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
                 randomList(1, 20, () -> randomDesiredNode(Version.CURRENT, numProcessors, settingsConsumer))
             );
 
-            updateDesiredNodes(desiredNodes);
+            updateDesiredNodes(
+                UUIDs.randomBase64UUID(),
+                randomIntBetween(1, 20),
+                randomList(1, 20, () -> randomDesiredNode(Version.CURRENT, numProcessors, settingsConsumer))
+            );
 
             final ClusterState state = client().admin().cluster().prepareState().get().getState();
             final DesiredNodesMetadata metadata = state.metadata().custom(DesiredNodesMetadata.TYPE);
@@ -253,7 +257,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
             final DesiredNodes latestDesiredNodes = metadata.getLatestDesiredNodes();
             assertThat(latestDesiredNodes, is(equalTo(desiredNodes)));
             assertThat(latestDesiredNodes.nodes().isEmpty(), is(equalTo(false)));
-            for (DesiredNode desiredNode : latestDesiredNodes.nodes()) {
+            for (DesiredNode desiredNode : latestDesiredNodes.nodesWithoutMembership()) {
                 assertThat(desiredNode.settings().get(NODE_PROCESSORS_SETTING.getKey()), is(equalTo(Integer.toString(numProcessors))));
             }
         }
@@ -268,7 +272,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
             final UpdateDesiredNodesRequest request = new UpdateDesiredNodesRequest(
                 desiredNodes.historyID(),
                 desiredNodes.version(),
-                List.copyOf(desiredNodes.nodes())
+                desiredNodes.nodesWithoutMembership()
             );
             // Use the master client to ensure the same updates ordering as in proposedDesiredNodesList
             updateDesiredNodesFutures.add(internalCluster().masterClient().execute(UpdateDesiredNodesAction.INSTANCE, request));
@@ -358,6 +362,16 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
         );
         return client().execute(UpdateDesiredNodesAction.INSTANCE, request).actionGet();
     }
+
+    private UpdateDesiredNodesResponse updateDesiredNodes(String historyId, long version, List<DesiredNode> desiredNodes) {
+        final UpdateDesiredNodesRequest request = new UpdateDesiredNodesRequest(
+            historyId,
+            version,
+            desiredNodes
+        );
+        return client().execute(UpdateDesiredNodesAction.INSTANCE, request).actionGet();
+    }
+
 
     private Runnable blockClusterStateUpdateThread() throws InterruptedException {
         final CountDownLatch unblockClusterStateUpdateTask = new CountDownLatch(1);

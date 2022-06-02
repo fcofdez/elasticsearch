@@ -8,13 +8,17 @@
 
 package org.elasticsearch.cluster.metadata;
 
+import org.elasticsearch.Version;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.cluster.node.DiscoveryNode;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.xcontent.ConstructingObjectParser;
+import org.elasticsearch.xcontent.ObjectParser;
 import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
@@ -37,7 +41,7 @@ import java.util.stream.Collectors;
 import static java.lang.String.format;
 import static org.elasticsearch.node.Node.NODE_EXTERNAL_ID_SETTING;
 
-public class DesiredNodes implements Writeable, ToXContentObject, Iterable<DesiredNode> {
+public class DesiredNodes implements Writeable, ToXContentObject, Iterable<DesiredNodes.DesiredNodeWithStatus> {
 
     private static final ParseField HISTORY_ID_FIELD = new ParseField("history_id");
     private static final ParseField VERSION_FIELD = new ParseField("version");
@@ -47,7 +51,7 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
     public static final ConstructingObjectParser<DesiredNodes, Void> PARSER = new ConstructingObjectParser<>(
         "desired_nodes",
         false,
-        (args, unused) -> new DesiredNodes((String) args[0], (long) args[1], (List<DesiredNode>) args[2])
+        (args, unused) -> new DesiredNodes((String) args[0], (long) args[1], (List<DesiredNodeWithStatus>) args[2])
     );
 
     static {
@@ -55,18 +59,121 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
         PARSER.declareLong(ConstructingObjectParser.constructorArg(), VERSION_FIELD);
         PARSER.declareObjectArray(
             ConstructingObjectParser.constructorArg(),
-            (p, c) -> DesiredNode.fromXContent(p, DesiredNode.ParsingContext.CLUSTER_STATE),
+            (p, c) -> DesiredNodeWithStatus.fromXContent(p),
             NODES_FIELD
         );
     }
 
+    public record DesiredNodeWithStatus(DesiredNode desiredNode, Status status) implements Writeable, ToXContentObject {
+        public static final Version STATUS_TRACKING_SUPPORT_VERSION = Version.V_8_4_0;
+        private static final ParseField STATUS_FIELD = new ParseField("status");
+
+        public static final ConstructingObjectParser<DesiredNodeWithStatus, Void> PARSER = new ConstructingObjectParser<>(
+            "desired_node_with_status",
+            false,
+            (args, unused) -> new DesiredNodeWithStatus(
+                new DesiredNode(
+                    (Settings) args[0],
+                    (Float) args[1],
+                    (DesiredNode.ProcessorsRange) args[2],
+                    (ByteSizeValue) args[3],
+                    (ByteSizeValue) args[4],
+                    (Version) args[5]
+                ),
+                args[6] == null ? Status.defaultStatus() : (Status) args[6]
+            )
+        );
+
+        static {
+            DesiredNode.configureParser(PARSER);
+            PARSER.declareField(
+                ConstructingObjectParser.optionalConstructorArg(),
+                (p, c) -> Status.fromOrdinal(p.shortValue()),
+                STATUS_FIELD,
+                ObjectParser.ValueType.INT
+            );
+        }
+
+        public boolean pending() {
+            return status == Status.PENDING;
+        }
+
+        public boolean actualized() {
+            return status == Status.ACTUALIZED;
+        }
+
+        public String externalId() {
+            return desiredNode.externalId();
+        }
+
+        public static DesiredNodeWithStatus readFrom(StreamInput in) throws IOException {
+            final var desiredNode = DesiredNode.readFrom(in);
+            final Status status;
+            if (in.getVersion().onOrAfter(STATUS_TRACKING_SUPPORT_VERSION)) {
+                status = Status.fromOrdinal(in.readShort());
+            } else {
+                status = Status.defaultStatus();
+            }
+            return new DesiredNodeWithStatus(desiredNode, status);
+        }
+
+        public DesiredNodeWithStatus(StreamInput in) throws IOException {
+            this(DesiredNode.readFrom(in), Status.fromOrdinal(in.readShort()));
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            desiredNode.writeTo(out);
+            if (out.getVersion().onOrAfter(STATUS_TRACKING_SUPPORT_VERSION)) {
+                out.writeShort(status.ordinal);
+            }
+        }
+
+        @Override
+        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+            builder.startObject();
+            desiredNode.toInnerXContent(builder, params);
+            builder.field(STATUS_FIELD.getPreferredName(), status.ordinal());
+            builder.endObject();
+            return builder;
+        }
+
+        static DesiredNodeWithStatus fromXContent(XContentParser parser) throws IOException {
+            return PARSER.parse(parser, null);
+        }
+    }
+
+    public enum Status {
+        PENDING((short) 0),
+        ACTUALIZED((short) 1);
+
+        private short ordinal;
+
+        Status(short ordinal) {
+            this.ordinal = ordinal;
+        }
+
+        static Status defaultStatus() {
+            return PENDING;
+        }
+
+        static Status fromOrdinal(short ordinal) {
+            for (Status status : Status.values()) {
+                if (status.ordinal == ordinal) {
+                    return status;
+                }
+            }
+            throw new IllegalArgumentException("Unknown status " + ordinal);
+        }
+    }
+
     private final String historyID;
     private final long version;
-    private final Map<String, DesiredNode> nodes;
-    private final List<DesiredNode> members;
-    private final List<DesiredNode> notMembers;
+    private final Map<String, DesiredNodeWithStatus> nodes;
+    private final List<DesiredNode> actualized;
+    private final List<DesiredNode> pending;
 
-    public DesiredNodes(String historyID, long version, List<DesiredNode> nodes) {
+    public DesiredNodes(String historyID, long version, List<DesiredNodeWithStatus> nodes) {
         assert historyID != null && historyID.isBlank() == false;
         assert version != Long.MIN_VALUE;
         checkForDuplicatedExternalIDs(nodes);
@@ -74,20 +181,28 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
         this.historyID = historyID;
         this.version = version;
         this.nodes = toMap(nodes);
-        this.members = nodes.stream().filter(DesiredNode::isMember).toList();
-        this.notMembers = nodes.stream().filter(dn -> dn.isMember() == false).toList();
+        this.actualized = nodes
+            .stream()
+            .filter(DesiredNodeWithStatus::actualized)
+            .map(DesiredNodeWithStatus::desiredNode)
+            .toList();
+        this.pending = nodes
+            .stream()
+            .filter(DesiredNodeWithStatus::pending)
+            .map(DesiredNodeWithStatus::desiredNode)
+            .toList();
     }
 
-    private DesiredNodes(String historyID, long version, Map<String, DesiredNode> nodes) {
+    private DesiredNodes(String historyID, long version, Map<String, DesiredNodeWithStatus> nodes) {
         this.historyID = historyID;
         this.version = version;
         this.nodes = Collections.unmodifiableMap(nodes);
-        this.members = nodes.values().stream().filter(DesiredNode::isMember).toList();
-        this.notMembers = nodes.values().stream().filter(dn -> dn.isMember() == false).toList();
+        this.actualized = Collections.emptyList();
+        this.pending = Collections.emptyList();
     }
 
     public DesiredNodes(StreamInput in) throws IOException {
-        this(in.readString(), in.readLong(), in.readList(DesiredNode::readFrom));
+        this(in.readString(), in.readLong(), in.readList(DesiredNodeWithStatus::new));
     }
 
     @Override
@@ -137,9 +252,9 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
             final var externalId = desiredNodeEntry.getKey();
             final var desiredNode = desiredNodeEntry.getValue();
             final var otherDesiredNode = other.nodes.get(externalId);
-            if (otherDesiredNode == null || desiredNode.hasSameSpecs(otherDesiredNode) == false) {
-                return false;
-            }
+//            if (otherDesiredNode == null || desiredNode.hasSameSpecs(otherDesiredNode) == false) {
+//                return false;
+//            }
         }
         return true;
     }
@@ -148,11 +263,11 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
         return other != null && historyID.equals(other.historyID);
     }
 
-    private static void checkForDuplicatedExternalIDs(List<DesiredNode> nodes) {
+    private static void checkForDuplicatedExternalIDs(List<DesiredNodeWithStatus> nodes) {
         Set<String> nodeIDs = new HashSet<>(nodes.size());
         Set<String> duplicatedIDs = new HashSet<>();
-        for (DesiredNode node : nodes) {
-            String externalID = node.externalId();
+        for (DesiredNodeWithStatus node : nodes) {
+            String externalID = node.desiredNode.externalId();
             assert externalID != null;
             if (nodeIDs.add(externalID) == false) {
                 duplicatedIDs.add(externalID);
@@ -196,36 +311,37 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
         return version;
     }
 
-    public List<DesiredNode> nodes() {
+    public List<DesiredNodeWithStatus> nodes() {
         return List.copyOf(nodes.values());
     }
 
-    public List<DesiredNode> members() {
-        assert members.stream().allMatch(DesiredNode::isMember);
-        return members;
+    public List<DesiredNode> nodesWithoutMembership() {
+        return nodes.values().stream().map(DesiredNodeWithStatus::desiredNode).toList();
     }
 
-    public List<DesiredNode> notMembers() {
-        assert notMembers.stream().allMatch(desiredNode -> desiredNode.isMember() == false);
+    public List<DesiredNode> actualized() {
+        return actualized;
+    }
 
-        return notMembers;
+    public List<DesiredNode> pending() {
+        return pending;
     }
 
     @Override
-    public Iterator<DesiredNode> iterator() {
+    public Iterator<DesiredNodeWithStatus> iterator() {
         return nodes.values().iterator();
     }
 
     @Nullable
-    public DesiredNode find(String externalId) {
+    public DesiredNodeWithStatus find(String externalId) {
         return nodes.get(externalId);
     }
 
-    private static Map<String, DesiredNode> toMap(final List<DesiredNode> desiredNodes) {
+    private static Map<String, DesiredNodeWithStatus> toMap(final List<DesiredNodeWithStatus> desiredNodes) {
         // use a linked hash map to preserve order
         return Collections.unmodifiableMap(
-            desiredNodes.stream().collect(Collectors.toMap(DesiredNode::externalId, Function.identity(), (left, right) -> {
-                assert left.externalId().equals(right.externalId()) == false;
+            desiredNodes.stream().collect(Collectors.toMap(DesiredNodeWithStatus::externalId, Function.identity(), (left, right) -> {
+                assert left.desiredNode.externalId().equals(right.externalId()) == false;
                 throw new IllegalStateException("duplicate desired node external id [" + left.externalId() + "]");
             }, TreeMap::new))
         );
@@ -245,13 +361,16 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
             return clusterState;
         }
 
-        final Map<String, DesiredNode> updatedStateDesiredNodes = new HashMap<>(desiredNodes.nodes);
+        final Map<String, DesiredNodeWithStatus> updatedStateDesiredNodes = new HashMap<>(desiredNodes.nodes);
 
         boolean membershipInformationModified = false;
         for (DiscoveryNode discoveryNode : clusterState.nodes()) {
             final var desiredNode = desiredNodes.find(discoveryNode.getExternalId());
-            if (desiredNode != null && desiredNode.isMember() == false) {
-                updatedStateDesiredNodes.put(desiredNode.externalId(), desiredNode.asMember());
+            if (desiredNode != null && desiredNode.pending()) {
+                updatedStateDesiredNodes.put(
+                    desiredNode.externalId(),
+                    new DesiredNodeWithStatus(desiredNode.desiredNode(), Status.ACTUALIZED)
+                );
                 membershipInformationModified = true;
             }
         }
@@ -272,86 +391,42 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
     }
 
     public DesiredNodes withMembershipInformationFrom(DesiredNodes previousDesiredNodes) {
-        if (previousDesiredNodes == this) {
-            return this;
-        }
-        assert hasSameHistoryId(previousDesiredNodes) == false || version > previousDesiredNodes.version();
-        final Map<String, DesiredNode> updatedStateDesiredNodes = new HashMap<>(nodes);
-
-        boolean modified = false;
-        if (hasSameHistoryId(previousDesiredNodes)) {
-            for (DesiredNode desiredNode : nodes.values()) {
-                final var previousDesiredNode = previousDesiredNodes.find(desiredNode.externalId());
-                if (previousDesiredNode != null && previousDesiredNode.membershipStatus() != desiredNode.membershipStatus()) {
-                    updatedStateDesiredNodes.put(
-                        desiredNode.externalId(),
-                        desiredNode.withMembershipStatus(previousDesiredNode.membershipStatus())
-                    );
-                    modified = true;
-                }
-            }
-        }
-
-        if (modified) {
-            return new DesiredNodes(historyID, version, updatedStateDesiredNodes);
-        } else {
-            return this;
-        }
+        return this;
+//        if (previousDesiredNodes == this) {
+//            return this;
+//        }
+//        assert hasSameHistoryId(previousDesiredNodes) == false || version > previousDesiredNodes.version();
+//        final Map<String, DesiredNode> updatedStateDesiredNodes = new HashMap<>(nodes);
+//
+//        boolean modified = false;
+//        if (hasSameHistoryId(previousDesiredNodes)) {
+//            for (DesiredNode desiredNode : nodes.values()) {
+//                final var previousDesiredNode = previousDesiredNodes.find(desiredNode.externalId());
+//                if (previousDesiredNode != null && previousDesiredNode.membershipStatus() != desiredNode.membershipStatus()) {
+//                    updatedStateDesiredNodes.put(
+//                        desiredNode.externalId(),
+//                        desiredNode.withMembershipStatus(previousDesiredNode.membershipStatus())
+//                    );
+//                    modified = true;
+//                }
+//            }
+//        }
+//
+//        if (modified) {
+//            return new DesiredNodes(historyID, version, updatedStateDesiredNodes);
+//        } else {
+//            return this;
+//        }
     }
 
     public static boolean knownDesiredNodesAreCorrect(ClusterState clusterState) {
-        final var desiredNodes = DesiredNodes.latestFromClusterState(clusterState);
-        return desiredNodes == null
-            || clusterState.nodes()
-                .stream()
-                .map(node -> desiredNodes.find(node.getExternalId()))
-                .filter(Objects::nonNull)
-                .allMatch(DesiredNode::isMember);
-    }
-
-    public static class MembershipInformation {
-        public static final MembershipInformation EMPTY = new MembershipInformation(null, Set.of());
-
-        private final DesiredNodes desiredNodes;
-        private final Set<DesiredNode> members;
-        private final Set<DesiredNode> notMembers;
-
-        public MembershipInformation(DesiredNodes desiredNodes, Set<DesiredNode> members) {
-            Objects.requireNonNull(members);
-
-            this.desiredNodes = desiredNodes;
-            this.members = members;
-            if (desiredNodes == null) {
-                this.notMembers = Collections.emptySet();
-            } else {
-                final Set<DesiredNode> pendingMembers = new HashSet<>();
-                for (DesiredNode desiredNode : desiredNodes) {
-                    if (members.contains(desiredNode) == false) {
-                        pendingMembers.add(desiredNode);
-                    }
-                }
-                this.notMembers = Collections.unmodifiableSet(pendingMembers);
-            }
-        }
-
-        public boolean isMember(DesiredNode desiredNode) {
-            return members.contains(desiredNode);
-        }
-
-        public int memberCount() {
-            return members.size();
-        }
-
-        public List<DesiredNode> allDesiredNodes() {
-            return desiredNodes == null ? Collections.emptyList() : desiredNodes.nodes();
-        }
-
-        public Set<DesiredNode> notMembers() {
-            return notMembers;
-        }
-
-        public Set<DesiredNode> members() {
-            return members;
-        }
+        return true;
+//        final var desiredNodes = DesiredNodes.latestFromClusterState(clusterState);
+//        return desiredNodes == null
+//            || clusterState.nodes()
+//                .stream()
+//                .map(node -> desiredNodes.find(node.getExternalId()))
+//                .filter(Objects::nonNull)
+//                .allMatch(DesiredNode::isMember);
     }
 }

@@ -141,7 +141,10 @@ public class TransportUpdateDesiredNodesActionTests extends DesiredNodesTestCase
             // increase the version for the current history and maybe modify the nodes
             final DesiredNodesMetadata currentDesiredNodesMetadata = currentClusterState.metadata().custom(DesiredNodesMetadata.TYPE);
             final DesiredNodes desiredNodes = currentDesiredNodesMetadata.getLatestDesiredNodes();
-            final List<DesiredNode> updatedNodes = randomSubsetOf(randomIntBetween(1, desiredNodes.nodes().size()), desiredNodes.nodes());
+            final List<DesiredNode> updatedNodes = randomSubsetOf(randomIntBetween(1, desiredNodes.nodes().size()), desiredNodes.nodes())
+                .stream()
+                .map(DesiredNodes.DesiredNodeWithStatus::desiredNode)
+                .toList();
             request = new UpdateDesiredNodesRequest(desiredNodes.historyID(), desiredNodes.version() + 1, updatedNodes);
         }
 
@@ -161,7 +164,9 @@ public class TransportUpdateDesiredNodesActionTests extends DesiredNodesTestCase
 
     public void testUpdatesAreIdempotent() {
         final DesiredNodes latestDesiredNodes = randomDesiredNodesMetadata().getLatestDesiredNodes();
-        final List<DesiredNode> equivalentDesiredNodesList = new ArrayList<>(latestDesiredNodes.nodes());
+        final List<DesiredNode> equivalentDesiredNodesList = new ArrayList<>(
+            latestDesiredNodes.nodes().stream().map(DesiredNodes.DesiredNodeWithStatus::desiredNode).toList()
+        );
         if (randomBoolean()) {
             Collections.shuffle(equivalentDesiredNodesList, random());
         }
@@ -196,7 +201,7 @@ public class TransportUpdateDesiredNodesActionTests extends DesiredNodesTestCase
         final UpdateDesiredNodesRequest request = new UpdateDesiredNodesRequest(
             latestDesiredNodes.historyID(),
             latestDesiredNodes.version() - 1,
-            List.copyOf(latestDesiredNodes.nodes())
+            List.copyOf(latestDesiredNodes.nodes().stream().map(DesiredNodes.DesiredNodeWithStatus::desiredNode).toList())
         );
 
         VersionConflictException exception = expectThrows(

@@ -32,15 +32,12 @@ import java.util.Set;
 import java.util.TreeSet;
 
 import static java.lang.String.format;
-import static org.elasticsearch.cluster.metadata.Metadata.CONTEXT_MODE_API;
-import static org.elasticsearch.cluster.metadata.Metadata.CONTEXT_MODE_PARAM;
 import static org.elasticsearch.node.Node.NODE_EXTERNAL_ID_SETTING;
 import static org.elasticsearch.node.Node.NODE_NAME_SETTING;
 import static org.elasticsearch.node.NodeRoleSettings.NODE_ROLES_SETTING;
 
 public final class DesiredNode implements Writeable, ToXContentObject, Comparable<DesiredNode> {
     public static final Version RANGE_FLOAT_PROCESSORS_SUPPORT_VERSION = Version.V_8_3_0;
-    public static final Version MEMBERSHIP_TRACKING_SUPPORT_VERSION = Version.V_8_4_0;
 
     private static final ParseField SETTINGS_FIELD = new ParseField("settings");
     private static final ParseField PROCESSORS_FIELD = new ParseField("processors");
@@ -48,9 +45,9 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
     private static final ParseField MEMORY_FIELD = new ParseField("memory");
     private static final ParseField STORAGE_FIELD = new ParseField("storage");
     private static final ParseField VERSION_FIELD = new ParseField("node_version");
-    private static final ParseField MEMBERSHIP_STATUS_FIELD = new ParseField("membership_status");
 
-    public static final ConstructingObjectParser<DesiredNode, ParsingContext> PARSER = new ConstructingObjectParser<>(
+
+    public static final ConstructingObjectParser<DesiredNode, Void> PARSER = new ConstructingObjectParser<>(
         "desired_node",
         false,
         (args, name) -> new DesiredNode(
@@ -59,45 +56,41 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
             (ProcessorsRange) args[2],
             (ByteSizeValue) args[3],
             (ByteSizeValue) args[4],
-            (Version) args[5],
-            (MembershipStatus) args[6]
+            (Version) args[5]
         )
     );
 
     static {
-        PARSER.declareObject(ConstructingObjectParser.constructorArg(), (p, c) -> Settings.fromXContent(p), SETTINGS_FIELD);
-        PARSER.declareFloat(ConstructingObjectParser.optionalConstructorArg(), PROCESSORS_FIELD);
-        PARSER.declareObjectOrNull(
+        configureParser(PARSER);
+    }
+
+    static <T> void configureParser(ConstructingObjectParser<T, Void> parser) {
+        parser.declareObject(ConstructingObjectParser.constructorArg(), (p, c) -> Settings.fromXContent(p), SETTINGS_FIELD);
+        parser.declareFloat(ConstructingObjectParser.optionalConstructorArg(), PROCESSORS_FIELD);
+        parser.declareObjectOrNull(
             ConstructingObjectParser.optionalConstructorArg(),
             (p, c) -> ProcessorsRange.fromXContent(p),
             null,
             PROCESSORS_RANGE_FIELD
         );
-        PARSER.declareField(
+        parser.declareField(
             ConstructingObjectParser.constructorArg(),
             (p, c) -> ByteSizeValue.parseBytesSizeValue(p.text(), MEMORY_FIELD.getPreferredName()),
             MEMORY_FIELD,
             ObjectParser.ValueType.STRING
         );
-        PARSER.declareField(
+        parser.declareField(
             ConstructingObjectParser.constructorArg(),
             (p, c) -> ByteSizeValue.parseBytesSizeValue(p.text(), STORAGE_FIELD.getPreferredName()),
             STORAGE_FIELD,
             ObjectParser.ValueType.STRING
         );
-        PARSER.declareField(
+        parser.declareField(
             ConstructingObjectParser.constructorArg(),
             (p, c) -> parseVersion(p.text()),
             VERSION_FIELD,
             ObjectParser.ValueType.STRING
         );
-        PARSER.declareField(ConstructingObjectParser.optionalConstructorArg(), (p, parsingContext) -> {
-            if (parsingContext == ParsingContext.API) {
-                throw new IllegalArgumentException("Unknown field " + MEMBERSHIP_STATUS_FIELD.getPreferredName());
-            }
-
-            return MembershipStatus.fromOrdinal(p.shortValue());
-        }, MEMBERSHIP_STATUS_FIELD, ObjectParser.ValueType.INT);
     }
 
     private static Version parseVersion(String version) {
@@ -105,26 +98,6 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
             throw new IllegalArgumentException(VERSION_FIELD.getPreferredName() + " must not be empty");
         }
         return Version.fromString(version);
-    }
-
-    public enum MembershipStatus {
-        UNKNOWN((short) 0),
-        MEMBER((short) 1);
-
-        private final short ordinal;
-
-        MembershipStatus(short ordinal) {
-            this.ordinal = ordinal;
-        }
-
-        static MembershipStatus fromOrdinal(short ordinal) {
-            for (MembershipStatus state : MembershipStatus.values()) {
-                if (state.ordinal == ordinal) {
-                    return state;
-                }
-            }
-            throw new IllegalArgumentException("Unknown membership status ordinal " + ordinal);
-        }
     }
 
     private final Settings settings;
@@ -135,28 +108,26 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
     private final Version version;
     private final String externalId;
     private final Set<DiscoveryNodeRole> roles;
-    private final MembershipStatus membershipStatus;
 
     public DesiredNode(Settings settings, int processors, ByteSizeValue memory, ByteSizeValue storage, Version version) {
         this(settings, (float) processors, memory, storage, version);
     }
 
     public DesiredNode(Settings settings, ProcessorsRange processorsRange, ByteSizeValue memory, ByteSizeValue storage, Version version) {
-        this(settings, null, processorsRange, memory, storage, version, MembershipStatus.UNKNOWN);
+        this(settings, null, processorsRange, memory, storage, version);
     }
 
     public DesiredNode(Settings settings, float processors, ByteSizeValue memory, ByteSizeValue storage, Version version) {
-        this(settings, processors, null, memory, storage, version, MembershipStatus.UNKNOWN);
+        this(settings, processors, null, memory, storage, version);
     }
 
-    private DesiredNode(
+    DesiredNode(
         Settings settings,
         Float processors,
         ProcessorsRange processorsRange,
         ByteSizeValue memory,
         ByteSizeValue storage,
-        Version version,
-        MembershipStatus membershipStatus
+        Version version
     ) {
         assert settings != null;
         assert memory != null;
@@ -201,7 +172,6 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
         this.version = version;
         this.externalId = NODE_EXTERNAL_ID_SETTING.get(settings);
         this.roles = Collections.unmodifiableSortedSet(new TreeSet<>(DiscoveryNode.getRolesFromSettings(settings)));
-        this.membershipStatus = membershipStatus == null ? MembershipStatus.UNKNOWN : membershipStatus;
     }
 
     public static DesiredNode readFrom(StreamInput in) throws IOException {
@@ -218,13 +188,7 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
         final var memory = new ByteSizeValue(in);
         final var storage = new ByteSizeValue(in);
         final var version = Version.readVersion(in);
-        final MembershipStatus state;
-        if (in.getVersion().onOrAfter(MEMBERSHIP_TRACKING_SUPPORT_VERSION)) {
-            state = MembershipStatus.fromOrdinal(in.readShort());
-        } else {
-            state = MembershipStatus.UNKNOWN;
-        }
-        return new DesiredNode(settings, processors, processorsRange, memory, storage, version, state);
+        return new DesiredNode(settings, processors, processorsRange, memory, storage, version);
     }
 
     @Override
@@ -242,25 +206,22 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
         memory.writeTo(out);
         storage.writeTo(out);
         Version.writeVersion(version, out);
-        if (out.getVersion().onOrAfter(MEMBERSHIP_TRACKING_SUPPORT_VERSION)) {
-            out.writeShort(membershipStatus.ordinal);
-        }
     }
 
-    public enum ParsingContext {
-        API,
-        CLUSTER_STATE
-    }
 
-    public static DesiredNode fromXContent(XContentParser parser, ParsingContext parsingContext) throws IOException {
-        return PARSER.parse(parser, parsingContext);
+    public static DesiredNode fromXContent(XContentParser parser) throws IOException {
+        return PARSER.parse(parser, null);
     }
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-        final var context = Metadata.XContentContext.valueOf(params.param(CONTEXT_MODE_PARAM, CONTEXT_MODE_API));
-
         builder.startObject();
+        toInnerXContent(builder, params);
+        builder.endObject();
+        return builder;
+    }
+
+    public void toInnerXContent(XContentBuilder builder, Params params) throws IOException {
         builder.startObject(SETTINGS_FIELD.getPreferredName());
         settings.toXContent(builder, params);
         builder.endObject();
@@ -273,13 +234,6 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
         builder.field(MEMORY_FIELD.getPreferredName(), memory);
         builder.field(STORAGE_FIELD.getPreferredName(), storage);
         builder.field(VERSION_FIELD.getPreferredName(), version);
-
-        if (context == Metadata.XContentContext.GATEWAY) {
-            builder.field(MEMBERSHIP_STATUS_FIELD.getPreferredName(), membershipStatus.ordinal);
-        }
-
-        builder.endObject();
-        return builder;
     }
 
     public boolean hasMasterRole() {
@@ -333,14 +287,6 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
         return version;
     }
 
-    public MembershipStatus membershipStatus() {
-        return membershipStatus;
-    }
-
-    public boolean isMember() {
-        return membershipStatus == MembershipStatus.MEMBER;
-    }
-
     public String externalId() {
         return externalId;
     }
@@ -356,19 +302,11 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
         return processorsRange == null && processorHasDecimals() == false;
     }
 
-    DesiredNode withMembershipStatus(MembershipStatus state) {
-        return new DesiredNode(settings, processors, processorsRange, memory, storage, version, state);
-    }
-
-    public DesiredNode asMember() {
-        return withMembershipStatus(MembershipStatus.MEMBER);
-    }
-
-    public DesiredNode withUnknownMembershipStatus() {
-        return withMembershipStatus(MembershipStatus.UNKNOWN);
-    }
-
-    public boolean hasSameSpecs(DesiredNode that) {
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        DesiredNode that = (DesiredNode) o;
         return Objects.equals(settings, that.settings)
             && Objects.equals(processors, that.processors)
             && Objects.equals(processorsRange, that.processorsRange)
@@ -380,16 +318,8 @@ public final class DesiredNode implements Writeable, ToXContentObject, Comparabl
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        DesiredNode that = (DesiredNode) o;
-        return hasSameSpecs(that) && membershipStatus == that.membershipStatus;
-    }
-
-    @Override
     public int hashCode() {
-        return Objects.hash(settings, processors, processorsRange, memory, storage, version, externalId, roles, membershipStatus);
+        return Objects.hash(settings, processors, processorsRange, memory, storage, version, externalId, roles);
     }
 
     @Override

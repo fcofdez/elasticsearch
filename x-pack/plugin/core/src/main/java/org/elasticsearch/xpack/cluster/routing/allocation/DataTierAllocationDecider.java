@@ -168,7 +168,7 @@ public final class DataTierAllocationDecider extends AllocationDecider {
         for (int i = 0; i < prioritizedTiers.size(); i++) {
             final var tier = prioritizedTiers.get(i);
             final var nextTier = i + 1 == prioritizedTiers.size() ? null : prioritizedTiers.get(i + 1);
-            if (tierNodesPresent(tier, desiredNodes.members())
+            if (tierNodesPresent(tier, desiredNodes.actualized())
                 || isDesiredNodeWithinTierJoining(tier, discoveryNodes, desiredNodes)
                 || nextTierIsGrowingAndCurrentTierCanHoldTheIndex(tier, nextTier, discoveryNodes, desiredNodes)) {
                 return Optional.of(tier);
@@ -183,20 +183,20 @@ public final class DataTierAllocationDecider extends AllocationDecider {
         DiscoveryNodes discoveryNodes,
         DesiredNodes desiredNodes
     ) {
-        assert tierNodesPresent(tier, desiredNodes.members()) == false;
+        assert tierNodesPresent(tier, desiredNodes.actualized()) == false;
         // If there's a plan to grow the next preferred tier, and it hasn't materialized yet,
         // wait until all the nodes in the next tier have joined. This would avoid overwhelming
         // the next tier if within the same plan one tier is removed and the next preferred tier
         // grows.
-        return nextTier != null && tierNodesPresent(tier, discoveryNodes) && tierNodesPresent(nextTier, desiredNodes.notMembers());
+        return nextTier != null && tierNodesPresent(tier, discoveryNodes) && tierNodesPresent(nextTier, desiredNodes.pending());
     }
 
     private static boolean isDesiredNodeWithinTierJoining(String tier, DiscoveryNodes discoveryNodes, DesiredNodes desiredNodes) {
-        assert tierNodesPresent(tier, desiredNodes.members()) == false;
+        assert tierNodesPresent(tier, desiredNodes.actualized()) == false;
         // Take into account the case when the desired nodes have been updated and the node in the tier would be replaced by
         // a new one. In that case the desired node in the tier won't be a member as it has to join, but we still need to ensure
         // that at least one cluster member has the requested tier as we would prefer to minimize the shard movements in these cases.
-        return tierNodesPresent(tier, desiredNodes.notMembers()) && tierNodesPresent(tier, discoveryNodes);
+        return tierNodesPresent(tier, desiredNodes.pending()) && tierNodesPresent(tier, discoveryNodes);
     }
 
     private static Optional<String> getPreferredAvailableTierFromClusterMembers(List<String> prioritizedTiers, DiscoveryNodes nodes) {
