@@ -9,145 +9,61 @@
 package org.elasticsearch.cluster.metadata;
 
 import org.elasticsearch.Version;
+import org.elasticsearch.action.admin.cluster.desirednodes.UpdateDesiredNodesRequest;
 import org.elasticsearch.cluster.ClusterState;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.test.ESTestCase;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Consumer;
 
 import static org.elasticsearch.node.Node.NODE_EXTERNAL_ID_SETTING;
 import static org.elasticsearch.node.Node.NODE_NAME_SETTING;
-import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasItem;
-import static org.hamcrest.Matchers.is;
 
 public abstract class DesiredNodesTestCase extends ESTestCase {
     public static DesiredNodes randomDesiredNodes() {
-        return randomDesiredNodes((settings) -> {});
-    }
-
-    public static DesiredNodes randomDesiredNodes(Consumer<Settings.Builder> settingsConsumer) {
-        return randomDesiredNodes(Version.CURRENT, settingsConsumer);
-    }
-
-    public static DesiredNodes randomDesiredNodes(Version version, Consumer<Settings.Builder> settingsConsumer) {
         return new DesiredNodes(
             UUIDs.randomBase64UUID(),
             randomIntBetween(1, 20),
-            randomDesiredNodeListWithRandomStatus(version, settingsConsumer)
+            randomList(2, 10, DesiredNodesTestCase::randomDesiredNodeWithStatus)
         );
-    }
-
-    public static List<DesiredNodeWithStatus> randomDesiredNodeListWithRandomStatus(
-        Version version,
-        Consumer<Settings.Builder> settingsConsumer
-    ) {
-        return randomDesiredNodeList(version, settingsConsumer).stream()
-            .map(desiredNode -> new DesiredNodeWithStatus(desiredNode, randomFrom(DesiredNodeWithStatus.Status.values())))
-            .toList();
-    }
-
-    public static List<DesiredNode> randomDesiredNodeListWithRandomSettings(Version version) {
-        return randomDesiredNodeList(version, DesiredNodesTestCase::putRandomSetting);
-    }
-
-    public static List<DesiredNode> randomDesiredNodeList(Version version, Consumer<Settings.Builder> settingsConsumer) {
-        return randomList(2, 10, () -> randomDesiredNode(version, settingsConsumer));
-    }
-
-    public static DesiredNode randomDesiredNodeWithName(String nodeName) {
-        return randomDesiredNode(Version.CURRENT, settings -> {
-            settings.remove(NODE_EXTERNAL_ID_SETTING.getKey());
-            settings.put(NODE_NAME_SETTING.getKey(), nodeName);
-        });
-    }
-
-    public static DesiredNode randomDesiredNodeWithExternalId(String externalId) {
-        return randomDesiredNode(Version.CURRENT, settings -> {
-            settings.remove(NODE_NAME_SETTING.getKey());
-            settings.put(NODE_EXTERNAL_ID_SETTING.getKey(), externalId);
-        });
     }
 
     public static DesiredNodeWithStatus randomDesiredNodeWithStatus() {
-        return new DesiredNodeWithStatus(randomDesiredNodeWithRandomSettings(), randomFrom(DesiredNodeWithStatus.Status.values()));
+        return new DesiredNodeWithStatus(randomDesiredNode(), randomFrom(DesiredNodeWithStatus.Status.values()));
     }
 
-    public static DesiredNode randomDesiredNodeWithRandomSettings() {
-        return randomDesiredNodeWithRandomSettings(Version.CURRENT);
+    public static DesiredNode randomDesiredNode() {
+        return randomDesiredNode(Version.CURRENT, Settings.EMPTY);
     }
 
-    public static DesiredNode randomDesiredNodeWithRandomSettings(Version version) {
-        return randomDesiredNode(version, DesiredNodesTestCase::putRandomSetting);
-    }
-
-    public static DesiredNode randomDesiredNode(Version version, Consumer<Settings.Builder> settingsProvider) {
-        if (randomBoolean()) {
-            return randomDesiredNode(version, randomProcessor(), settingsProvider);
-        } else {
-            return randomDesiredNode(version, randomIntBetween(1, 256) + randomFloat(), settingsProvider);
-        }
-    }
-
-    public static DesiredNode randomDesiredNode(Version version, float processors, Consumer<Settings.Builder> settingsProvider) {
-        return new DesiredNode(
-            randomSettings(settingsProvider),
-            processors,
-            ByteSizeValue.ofGb(randomIntBetween(1, 1024)),
-            ByteSizeValue.ofTb(randomIntBetween(1, 40)),
-            version
-        );
-    }
-
-    public static DesiredNode randomDesiredNode(float processors, Settings settings) {
-        final var desiredNodesSettings = Settings.builder().put(settings);
-        if (settings.hasValue(NODE_NAME_SETTING.getKey()) == false && settings.hasValue(NODE_EXTERNAL_ID_SETTING.getKey()) == false) {
-            if (randomBoolean()) {
-                desiredNodesSettings.put(NODE_NAME_SETTING.getKey(), randomAlphaOfLength(10));
-            } else {
-                desiredNodesSettings.put(NODE_EXTERNAL_ID_SETTING.getKey(), randomAlphaOfLength(10));
-            }
-        }
-        return new DesiredNode(
-            desiredNodesSettings.build(),
-            processors,
-            ByteSizeValue.ofGb(randomIntBetween(1, 1024)),
-            ByteSizeValue.ofTb(randomIntBetween(1, 40)),
-            Version.CURRENT
-        );
+    public static DesiredNode randomDesiredNode(Settings settings) {
+        return randomDesiredNode(Version.CURRENT, settings);
     }
 
     public static DesiredNode randomDesiredNode(Version version, Settings settings) {
-        final var desiredNodesSettings = Settings.builder().put(settings);
-        if (settings.hasValue(NODE_NAME_SETTING.getKey()) == false && settings.hasValue(NODE_EXTERNAL_ID_SETTING.getKey()) == false) {
-            if (randomBoolean()) {
-                desiredNodesSettings.put(NODE_NAME_SETTING.getKey(), randomAlphaOfLength(10));
-            } else {
-                desiredNodesSettings.put(NODE_EXTERNAL_ID_SETTING.getKey(), randomAlphaOfLength(10));
-            }
+        if (randomBoolean()) {
+            return randomDesiredNode(version, settings, randomProcessor());
+        } else {
+            return randomDesiredNode(version, settings, randomIntBetween(1, 256) + randomFloat());
         }
+    }
+
+    public static DesiredNode randomDesiredNode(Version version, Settings settings, float processors) {
         return new DesiredNode(
-            desiredNodesSettings.build(),
-            randomProcessor(),
+            addExternalIdIfMissing(settings),
+            processors,
             ByteSizeValue.ofGb(randomIntBetween(1, 1024)),
             ByteSizeValue.ofTb(randomIntBetween(1, 40)),
             version
         );
     }
 
-
-    public static DesiredNode randomDesiredNode(
-        Version version,
-        DesiredNode.ProcessorsRange processorsRange,
-        Consumer<Settings.Builder> settingsProvider
-    ) {
+    public static DesiredNode randomDesiredNode(Version version, Settings settings, DesiredNode.ProcessorsRange processorsRange) {
         return new DesiredNode(
-            randomSettings(settingsProvider),
+            addExternalIdIfMissing(settings),
             processorsRange,
             ByteSizeValue.ofGb(randomIntBetween(1, 1024)),
             ByteSizeValue.ofTb(randomIntBetween(1, 40)),
@@ -160,61 +76,34 @@ public abstract class DesiredNodesTestCase extends ESTestCase {
         return new DesiredNode.ProcessorsRange(minProcessors, randomBoolean() ? null : minProcessors + randomIntBetween(0, 10));
     }
 
-    public static Settings randomSettings(Consumer<Settings.Builder> settingsProvider) {
-        int numSettings = randomIntBetween(1, 20);
-        Settings.Builder settingsBuilder = Settings.builder();
-        if (randomBoolean()) {
-            settingsBuilder.put(NODE_EXTERNAL_ID_SETTING.getKey(), UUIDs.randomBase64UUID());
-        } else {
-            settingsBuilder.put(NODE_NAME_SETTING.getKey(), UUIDs.randomBase64UUID());
+    private static Settings addExternalIdIfMissing(Settings settings) {
+        final var externalId = NODE_EXTERNAL_ID_SETTING.get(settings);
+        if (externalId.isBlank() == false) {
+            return settings;
         }
 
-        for (int i = 0; i < numSettings; i++) {
-            settingsProvider.accept(settingsBuilder);
+        final var settingsBuilder = Settings.builder();
+        settingsBuilder.put(settings);
+        if (randomBoolean()) {
+            settingsBuilder.put(NODE_NAME_SETTING.getKey(), randomAlphaOfLength(10));
+        } else {
+            settingsBuilder.put(NODE_EXTERNAL_ID_SETTING.getKey(), randomAlphaOfLength(10));
         }
+
         return settingsBuilder.build();
     }
 
-    private static void putRandomSetting(Settings.Builder settings) {
-        final String key = randomAlphaOfLength(10);
-        switch (randomIntBetween(0, 7)) {
-            case 0 -> settings.put(key, randomAlphaOfLength(20));
-            case 1 -> settings.put(key, randomInt());
-            case 2 -> settings.put(key, randomLong());
-            case 3 -> settings.put(key, randomFloat());
-            case 4 -> settings.put(key, randomDouble());
-            case 5 -> settings.put(key, TimeValue.timeValueMillis(randomIntBetween(1, 1000)));
-            case 6 -> settings.put(key, ByteSizeValue.ofGb(randomIntBetween(1, 20)));
-            case 7 -> settings.putList(key, randomList(1, 10, () -> randomAlphaOfLength(20)));
-            default -> throw new IllegalArgumentException();
-        }
-    }
-
-    @SafeVarargs
-    public static DesiredNodes createDesiredNodes(List<DesiredNodeWithStatus>... nodeLists) {
-        return createDesiredNodes(UUIDs.randomBase64UUID(random()), 1, nodeLists);
-    }
-
-    @SafeVarargs
-    public static DesiredNodes createDesiredNodes(String historyId, long version, List<DesiredNodeWithStatus>... nodeLists) {
-        assertThat(nodeLists.length, is(greaterThan(0)));
-        final List<DesiredNodeWithStatus> desiredNodes = new ArrayList<>();
-        for (List<DesiredNodeWithStatus> nodeList : nodeLists) {
-            desiredNodes.addAll(nodeList);
-        }
-        return new DesiredNodes(historyId, version, desiredNodes);
-    }
-
-    public static void assertDesiredNodesMembershipIsCorrect(
+    public static void assertDesiredNodesStatusIsCorrect(
         ClusterState clusterState,
         List<DesiredNode> expectedActualizedNodes,
         List<DesiredNode> expectedPendingNodes
     ) {
+        // TODO: Check that actualized nodes are in cluster state?
         final var desiredNodes = DesiredNodes.latestFromClusterState(clusterState);
-        assertDesiredNodesMembershipIsCorrect(desiredNodes, expectedActualizedNodes, expectedPendingNodes);
+        assertDesiredNodesStatusIsCorrect(desiredNodes, expectedActualizedNodes, expectedPendingNodes);
     }
 
-    public static void assertDesiredNodesMembershipIsCorrect(
+    public static void assertDesiredNodesStatusIsCorrect(
         DesiredNodes desiredNodes,
         List<DesiredNode> expectedActualizedNodes,
         List<DesiredNode> expectedPendingNodes
@@ -226,5 +115,13 @@ public abstract class DesiredNodesTestCase extends ESTestCase {
         for (DesiredNode desiredNode : desiredNodes.pending()) {
             assertThat(expectedPendingNodes, hasItem(desiredNode));
         }
+    }
+
+    public static UpdateDesiredNodesRequest randomUpdateDesiredNodesRequest() {
+        return new UpdateDesiredNodesRequest(
+            UUIDs.randomBase64UUID(random()),
+            randomLongBetween(0, Long.MAX_VALUE - 1000),
+            randomList(1, 100, DesiredNodesTestCase::randomDesiredNode)
+        );
     }
 }

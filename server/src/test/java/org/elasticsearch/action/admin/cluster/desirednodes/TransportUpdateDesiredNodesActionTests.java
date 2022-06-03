@@ -8,7 +8,6 @@
 
 package org.elasticsearch.action.admin.cluster.desirednodes;
 
-import org.elasticsearch.Version;
 import org.elasticsearch.action.support.ActionFilters;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.cluster.ClusterName;
@@ -26,7 +25,6 @@ import org.elasticsearch.cluster.metadata.DesiredNodesTestCase;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.metadata.Metadata;
 import org.elasticsearch.cluster.service.ClusterService;
-import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
@@ -194,7 +192,7 @@ public class TransportUpdateDesiredNodesActionTests extends DesiredNodesTestCase
         final UpdateDesiredNodesRequest request = new UpdateDesiredNodesRequest(
             latestDesiredNodes.historyID(),
             latestDesiredNodes.version(),
-            randomList(1, 10, DesiredNodesTestCase::randomDesiredNodeWithRandomSettings)
+            randomList(1, 10, DesiredNodesTestCase::randomDesiredNode)
         );
 
         IllegalArgumentException exception = expectThrows(
@@ -218,13 +216,5 @@ public class TransportUpdateDesiredNodesActionTests extends DesiredNodesTestCase
             () -> TransportUpdateDesiredNodesAction.updateDesiredNodes(latestDesiredNodes, request)
         );
         assertThat(exception.getMessage(), containsString("has been superseded by version"));
-    }
-
-    private UpdateDesiredNodesRequest randomUpdateDesiredNodesRequest() {
-        return new UpdateDesiredNodesRequest(
-            UUIDs.randomBase64UUID(),
-            randomLongBetween(0, Long.MAX_VALUE - 1000),
-            randomList(1, 100, () -> randomDesiredNodeWithRandomSettings(Version.CURRENT))
-        );
     }
 }

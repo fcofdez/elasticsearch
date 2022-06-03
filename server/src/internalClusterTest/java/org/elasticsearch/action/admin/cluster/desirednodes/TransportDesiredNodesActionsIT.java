@@ -18,6 +18,7 @@ import org.elasticsearch.cluster.desirednodes.VersionConflictException;
 import org.elasticsearch.cluster.metadata.DesiredNode;
 import org.elasticsearch.cluster.metadata.DesiredNodeWithStatus;
 import org.elasticsearch.cluster.metadata.DesiredNodes;
+import org.elasticsearch.cluster.metadata.DesiredNodesTestCase;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Priority;
 import org.elasticsearch.common.UUIDs;
@@ -31,10 +32,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 
 import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.randomDesiredNode;
-import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.randomDesiredNodeList;
 import static org.elasticsearch.common.util.concurrent.EsExecutors.NODE_PROCESSORS_SETTING;
 import static org.elasticsearch.http.HttpTransportSettings.SETTING_HTTP_TCP_KEEP_IDLE;
 import static org.elasticsearch.node.NodeRoleSettings.NODE_ROLES_SETTING;
@@ -106,7 +105,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
         final var updateDesiredNodesRequestWithSameHistoryIdAndVersionAndDifferentSpecs = new UpdateDesiredNodesRequest(
             updateDesiredNodesRequest.getHistoryID(),
             updateDesiredNodesRequest.getVersion(),
-            randomDesiredNodeList(Version.CURRENT, settings -> {})
+            randomList(1, 10, DesiredNodesTestCase::randomDesiredNode)
         );
 
         final IllegalArgumentException exception = expectThrows(
@@ -138,7 +137,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
     public void testAtLeastOneMaterNodeIsExpected() {
         {
             final var updateDesiredNodesRequest = randomUpdateDesiredNodesRequest(
-                settings -> settings.put(NODE_ROLES_SETTING.getKey(), "data_hot")
+                Settings.builder().put(NODE_ROLES_SETTING.getKey(), "data_hot").build()
             );
 
             final IllegalArgumentException exception = expectThrows(
@@ -150,7 +149,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
 
         {
             final var updateDesiredNodesRequest = randomUpdateDesiredNodesRequest(
-                settings -> settings.put(NODE_ROLES_SETTING.getKey(), "master")
+                Settings.builder().put(NODE_ROLES_SETTING.getKey(), "master").build()
             );
             updateDesiredNodes(updateDesiredNodesRequest);
         }
@@ -158,7 +157,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
 
     public void testSettingsAreValidated() {
         final var updateDesiredNodesRequest = randomUpdateDesiredNodesRequest(
-            settings -> settings.put(SETTING_HTTP_TCP_KEEP_IDLE.getKey(), Integer.MIN_VALUE)
+            Settings.builder().put(SETTING_HTTP_TCP_KEEP_IDLE.getKey(), Integer.MIN_VALUE).build()
         );
 
         final IllegalArgumentException exception = expectThrows(
@@ -175,7 +174,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
     }
 
     public void testNodeVersionIsValidated() {
-        final var updateDesiredNodesRequest = randomUpdateDesiredNodesRequest(Version.CURRENT.previousMajor(), settings -> {});
+        final var updateDesiredNodesRequest = randomUpdateDesiredNodesRequest(Version.CURRENT.previousMajor(), Settings.EMPTY);
 
         final IllegalArgumentException exception = expectThrows(
             IllegalArgumentException.class,
@@ -189,7 +188,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
 
     public void testUnknownSettingsAreForbiddenInKnownVersions() {
         final var updateDesiredNodesRequest = randomUpdateDesiredNodesRequest(
-            settings -> settings.put("desired_nodes.random_setting", Integer.MIN_VALUE)
+            Settings.builder().put("desired_nodes.random_setting", Integer.MIN_VALUE).build()
         );
 
         final IllegalArgumentException exception = expectThrows(
@@ -205,7 +204,7 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
     public void testUnknownSettingsAreAllowedInFutureVersions() {
         final var updateDesiredNodesRequest = randomUpdateDesiredNodesRequest(
             Version.fromString("99.9.0"),
-            settings -> { settings.put("desired_nodes.random_setting", Integer.MIN_VALUE); }
+            Settings.builder().put("desired_nodes.random_setting", Integer.MIN_VALUE).build()
         );
 
         updateDesiredNodes(updateDesiredNodesRequest);
@@ -225,8 +224,9 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
                     1,
                     20,
                     () -> randomDesiredNode(
-                        numProcessors,
-                        Settings.builder().put(NODE_PROCESSORS_SETTING.getKey(), numProcessors + 1).build()
+                        Version.CURRENT,
+                        Settings.builder().put(NODE_PROCESSORS_SETTING.getKey(), numProcessors + 1).build(),
+                        numProcessors
                     )
                 )
             );
@@ -260,7 +260,11 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
                 randomList(
                     1,
                     20,
-                    () -> randomDesiredNode(numProcessors, Settings.builder().put(NODE_PROCESSORS_SETTING.getKey(), numProcessors).build())
+                    () -> randomDesiredNode(
+                        Version.CURRENT,
+                        Settings.builder().put(NODE_PROCESSORS_SETTING.getKey(), numProcessors).build(),
+                        numProcessors
+                    )
                 )
             );
 
@@ -362,22 +366,18 @@ public class TransportDesiredNodesActionsIT extends ESIntegTestCase {
     }
 
     private UpdateDesiredNodesRequest randomUpdateDesiredNodesRequest() {
-        return randomUpdateDesiredNodesRequest(settings -> {});
+        return randomUpdateDesiredNodesRequest(Settings.EMPTY);
     }
 
-    private UpdateDesiredNodesRequest randomUpdateDesiredNodesRequest(Consumer<Settings.Builder> settingsConsumer) {
+    private UpdateDesiredNodesRequest randomUpdateDesiredNodesRequest(Settings settings) {
+        return randomUpdateDesiredNodesRequest(Version.CURRENT, settings);
+    }
+
+    private UpdateDesiredNodesRequest randomUpdateDesiredNodesRequest(Version version, Settings settings) {
         return new UpdateDesiredNodesRequest(
             UUIDs.randomBase64UUID(),
             randomIntBetween(2, 20),
-            randomDesiredNodeList(Version.CURRENT, settingsConsumer)
-        );
-    }
-
-    private UpdateDesiredNodesRequest randomUpdateDesiredNodesRequest(Version version, Consumer<Settings.Builder> settingsConsumer) {
-        return new UpdateDesiredNodesRequest(
-            UUIDs.randomBase64UUID(),
-            randomIntBetween(2, 20),
-            randomDesiredNodeList(version, settingsConsumer)
+            randomList(2, 10, () -> randomDesiredNode(version, settings))
         );
     }
 

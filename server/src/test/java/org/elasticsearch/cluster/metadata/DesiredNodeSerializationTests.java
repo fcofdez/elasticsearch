@@ -27,7 +27,7 @@ public class DesiredNodeSerializationTests extends AbstractSerializingTestCase<D
 
     @Override
     protected DesiredNode createTestInstance() {
-        return DesiredNodesTestCase.randomDesiredNodeWithRandomSettings();
+        return DesiredNodesTestCase.randomDesiredNode();
     }
 
     @Override

@@ -118,7 +118,7 @@ public class TransportUpdateDesiredNodesAction extends TransportMasterNodeAction
     }
 
     static DesiredNodes updateDesiredNodes(DesiredNodes latestDesiredNodes, UpdateDesiredNodesRequest request) {
-        final DesiredNodes proposedDesiredNodes = DesiredNodes.transferStatusInformation(
+        final DesiredNodes proposedDesiredNodes = DesiredNodes.createDesiredNodes(
             request.getHistoryID(),
             request.getVersion(),
             request.getNodes(),

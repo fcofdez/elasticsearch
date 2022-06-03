@@ -34,7 +34,6 @@ import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
-import static org.elasticsearch.cluster.metadata.DesiredNodes.knownDesiredNodesAreCorrect;
 import static org.elasticsearch.gateway.GatewayService.STATE_NOT_RECOVERED_BLOCK;
 
 public class JoinTaskExecutor implements ClusterStateTaskExecutor<JoinTask> {
@@ -192,7 +191,6 @@ public class JoinTaskExecutor implements ClusterStateTaskExecutor<JoinTask> {
                     + "] to ["
                     + updatedState.nodes().getMinNodeVersion()
                     + "]";
-            assert knownDesiredNodesAreCorrect(clusterStateWithNewNodesAndDesiredNodes);
             return updatedState;
         } else {
             // we must return a new cluster state instance to force publishing. This is important

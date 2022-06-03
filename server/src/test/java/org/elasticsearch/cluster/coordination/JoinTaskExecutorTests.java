@@ -29,6 +29,7 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.VersionUtils;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -36,14 +37,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
-import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.createDesiredNodes;
-import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.randomDesiredNodeWithExternalId;
+import static org.elasticsearch.cluster.metadata.DesiredNodesTestCase.randomDesiredNode;
 import static org.elasticsearch.test.VersionUtils.maxCompatibleVersion;
 import static org.elasticsearch.test.VersionUtils.randomCompatibleVersion;
 import static org.elasticsearch.test.VersionUtils.randomVersion;
 import static org.elasticsearch.test.VersionUtils.randomVersionBetween;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
@@ -526,7 +527,11 @@ public class JoinTaskExecutorTests extends ESTestCase {
             discoveryNodes.add(newDiscoveryNode(UUIDs.randomBase64UUID(random())));
         }
 
-        final var desiredNodes = createDesiredNodes(actualizedDesiredNodes, pendingDesiredNodes, joiningDesiredNodes);
+        final var desiredNodes = new DesiredNodes(
+            randomAlphaOfLength(10),
+            randomInt(10),
+            concatLists(actualizedDesiredNodes, pendingDesiredNodes, joiningDesiredNodes)
+        );
 
         var clusterState = ClusterState.builder(ClusterName.DEFAULT)
             .nodes(discoveryNodes)
@@ -548,6 +553,18 @@ public class JoinTaskExecutorTests extends ESTestCase {
         // );
     }
 
+    @SafeVarargs
+    private List<DesiredNodeWithStatus> concatLists(List<DesiredNodeWithStatus>... nodeLists) {
+        assertThat(nodeLists.length, is(greaterThan(0)));
+
+        List<DesiredNodeWithStatus> concatList = new ArrayList<>();
+        for (List<DesiredNodeWithStatus> desiredNodeWithStatuses : nodeLists) {
+            concatList.addAll(desiredNodeWithStatuses);
+        }
+
+        return Collections.unmodifiableList(concatList);
+    }
+
     private DiscoveryNode newDiscoveryNode(String nodeName) {
         return new DiscoveryNode(
             nodeName,
@@ -560,17 +577,11 @@ public class JoinTaskExecutorTests extends ESTestCase {
     }
 
     private DesiredNodeWithStatus createActualizedDesiredNode() {
-        return new DesiredNodeWithStatus(
-            randomDesiredNodeWithExternalId(UUIDs.randomBase64UUID(random())),
-            DesiredNodeWithStatus.Status.ACTUALIZED
-        );
+        return new DesiredNodeWithStatus(randomDesiredNode(), DesiredNodeWithStatus.Status.ACTUALIZED);
     }
 
     private DesiredNodeWithStatus createPendingDesiredNode() {
-        return new DesiredNodeWithStatus(
-            randomDesiredNodeWithExternalId(UUIDs.randomBase64UUID(random())),
-            DesiredNodeWithStatus.Status.PENDING
-        );
+        return new DesiredNodeWithStatus(randomDesiredNode(), DesiredNodeWithStatus.Status.PENDING);
     }
 
     private static JoinTask createRandomTask(DiscoveryNode node, String reason, long term) {

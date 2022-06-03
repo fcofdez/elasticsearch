@@ -234,16 +234,13 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
         }
 
         if (membershipInformationModified || desiredNodes != latestFromClusterState(clusterState)) {
-            final var updatedClusterState = clusterState.copyAndUpdateMetadata(
+            return clusterState.copyAndUpdateMetadata(
                 metadata -> metadata.putCustom(
                     DesiredNodesMetadata.TYPE,
                     new DesiredNodesMetadata(new DesiredNodes(desiredNodes.historyID(), desiredNodes.version(), updatedStateDesiredNodes))
                 )
             );
-            assert knownDesiredNodesAreCorrect(updatedClusterState);
-            return updatedClusterState;
         } else {
-            assert knownDesiredNodesAreCorrect(clusterState);
             return clusterState;
         }
     }
@@ -261,7 +258,7 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
         return Collections.unmodifiableList(desiredNodesWithStatus);
     }
 
-    public static DesiredNodes transferStatusInformation(
+    public static DesiredNodes createDesiredNodes(
         String historyId,
         long version,
         List<DesiredNode> proposedDesiredNodes,
@@ -271,21 +268,12 @@ public class DesiredNodes implements Writeable, ToXContentObject, Iterable<Desir
             return new DesiredNodes(
                 historyId,
                 version,
-                proposedDesiredNodes.stream().map(dn -> new DesiredNodeWithStatus(dn, DesiredNodeWithStatus.Status.PENDING)).toList()
+                proposedDesiredNodes.stream()
+                    .map(desiredNode -> new DesiredNodeWithStatus(desiredNode, DesiredNodeWithStatus.Status.PENDING))
+                    .toList()
             );
         }
 
         return new DesiredNodes(historyId, version, previousDesiredNodes.transferStatusInformation(proposedDesiredNodes));
-    }
-
-    public static boolean knownDesiredNodesAreCorrect(ClusterState clusterState) {
-        return true;
-        // final var desiredNodes = DesiredNodes.latestFromClusterState(clusterState);
-        // return desiredNodes == null
-        // || clusterState.nodes()
-        // .stream()
-        // .map(node -> desiredNodes.find(node.getExternalId()))
-        // .filter(Objects::nonNull)
-        // .allMatch(DesiredNode::isMember);
     }
 }
