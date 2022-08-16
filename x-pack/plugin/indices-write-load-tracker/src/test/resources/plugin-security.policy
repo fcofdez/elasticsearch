@@ -1,0 +1,4 @@
+grant {
+  permission java.io.FilePermission "/Users/francisco/write_load.csv", "write";
+  permission java.io.FilePermission "/Users/francisco/queues.csv", "write";
+};

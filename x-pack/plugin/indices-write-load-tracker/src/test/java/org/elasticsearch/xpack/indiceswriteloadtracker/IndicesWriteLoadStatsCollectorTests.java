@@ -7,6 +7,7 @@
 
 package org.elasticsearch.xpack.indiceswriteloadtracker;
 
+import org.HdrHistogram.Histogram;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenFilter;
 import org.apache.lucene.analysis.Tokenizer;
@@ -41,12 +42,14 @@ import org.elasticsearch.cluster.routing.ShardRoutingState;
 import org.elasticsearch.cluster.routing.TestShardRouting;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Randomness;
+import org.elasticsearch.common.RunningTimeRecorder;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.core.Nullable;
+import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.env.NodeEnvironment;
 import org.elasticsearch.index.Index;
@@ -64,20 +67,36 @@ import org.elasticsearch.index.shard.ShardPath;
 import org.elasticsearch.index.store.Store;
 import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.test.DummyShardLock;
+import org.elasticsearch.test.PrivilegedOperations;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.xcontent.XContentType;
 
+import java.io.FileWriter;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Queue;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -95,6 +114,393 @@ import static org.mockito.Mockito.when;
 
 public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
     private static final Double MAX_ERROR = 0.4;
+
+    record IndexingOp(String shard, long startTime, int opTimeInMs, LongConsumer totalLatencyConsumer) {
+        void onComplete(long nowInMs) {
+            totalLatencyConsumer.accept(nowInMs - startTime);
+        }
+    }
+
+    static class ClientsSimulator {
+
+        private final int timePerOpInMillis;
+        private final int rateOfArrival;
+
+        private final LongSupplier nowInMs;
+        private final VirtualWriteLoadCollector virtualWriteLoadCollector;
+        private long waitUntil = -1;
+
+        ClientsSimulator(
+            int timePerOpInMillis,
+            int rateOfArrival,
+            LongSupplier nowInMs,
+            VirtualWriteLoadCollector virtualWriteLoadCollector
+        ) {
+            this.timePerOpInMillis = timePerOpInMillis;
+            this.rateOfArrival = rateOfArrival;
+            this.nowInMs = nowInMs;
+            this.virtualWriteLoadCollector = virtualWriteLoadCollector;
+        }
+
+        void enqueueWork(VirtualWriteThreadPool virtualWriteThreadPool) {
+            if (waitUntil > nowInMs.getAsLong() || nowInMs.getAsLong() % rateOfArrival != 0) {
+                return;
+            }
+            final String shard = randomBoolean() ? "shard" : "shard2";
+            final boolean enqueued = virtualWriteThreadPool.submit(
+                new IndexingOp(
+                    shard,
+                    nowInMs.getAsLong(),
+                    timePerOpInMillis,
+                    (latency) -> virtualWriteLoadCollector.trackLatency(shard, latency)
+                )
+            );
+            if (enqueued == false) {
+                // push-back
+                waitUntil = nowInMs.getAsLong() + TimeUnit.SECONDS.toMillis(10);
+            } else {
+                waitUntil = -1;
+            }
+        }
+    }
+
+    static class VirtualWriteLoadCollector {
+        private final LongSupplier nowInMs;
+        private final Map<String, ShardWriteLoadRecorder> runningTimeRecorders = new HashMap<>();
+
+        private final List<String> summaries = new ArrayList<>();
+
+        VirtualWriteLoadCollector(LongSupplier nowInMs) {
+            this.nowInMs = nowInMs;
+        }
+
+        Releasable trackRunningTimeForShard(String shardId) {
+            return getShardWriteLoadRecorder(shardId).trackRunningTime();
+        }
+
+        private ShardWriteLoadRecorder getShardWriteLoadRecorder(String shardId) {
+            return runningTimeRecorders.computeIfAbsent(shardId, (unused) -> new ShardWriteLoadRecorder(shardId, nowInMs));
+        }
+
+        void trackLatency(String shardId, long latency) {
+            getShardWriteLoadRecorder(shardId).trackLatency(latency);
+        }
+
+        void collectWriteLoad() {
+            for (ShardWriteLoadRecorder shardWriteLoadRecorder : runningTimeRecorders.values()) {
+                shardWriteLoadRecorder.collectWriteLoad();
+            }
+        }
+
+        void saveHistogramAndReset() {
+            for (ShardWriteLoadRecorder shardWriteLoadRecorder : runningTimeRecorders.values()) {
+                summaries.add(shardWriteLoadRecorder.getCSVSummaryAndReset());
+            }
+        }
+
+        List<String> stats() {
+            return summaries;
+        }
+
+        String header() {
+            return "ts,shard_id,avg_load,p50_load,p75_load,p90_load,p95_load,p99_load,max_load,p50_latency,p90_latency";
+        }
+    }
+
+    static class ShardWriteLoadRecorder {
+        private final String shardId;
+        private final RunningTimeRecorder runningTimeRecorder;
+        private final LongSupplier nowInMs;
+        private final IndicesWriteLoadStatsCollector.Histogram histogram;
+
+        private final Histogram latencyHistogram;
+
+        private long lastSampleTime;
+
+        private long lastTotalTimeReading;
+
+        ShardWriteLoadRecorder(String shardId, LongSupplier nowInMs) {
+            this.shardId = shardId;
+            this.runningTimeRecorder = new RunningTimeRecorder(nowInMs);
+            this.nowInMs = nowInMs;
+            this.histogram = new IndicesWriteLoadStatsCollector.Histogram(2);
+            this.lastSampleTime = nowInMs.getAsLong();
+            this.latencyHistogram = new Histogram(2);
+        }
+
+        Releasable trackRunningTime() {
+            return runningTimeRecorder.trackRunningTime();
+        }
+
+        void trackLatency(long latency) {
+            latencyHistogram.recordValue(latency);
+        }
+
+        void collectWriteLoad() {
+            long currentTime = nowInMs.getAsLong();
+            long timeDelta = currentTime - lastSampleTime;
+            long totalRunningTime = runningTimeRecorder.totalRunningTimeInNanos();
+            long runningTimeDelta = totalRunningTime - lastTotalTimeReading;
+
+            this.lastSampleTime = currentTime;
+            this.lastTotalTimeReading = totalRunningTime;
+
+            double nCpus = (double) runningTimeDelta / timeDelta;
+            histogram.recordValue(nCpus);
+        }
+
+        String getCSVSummaryAndReset() {
+            final var snapshot = HistogramSnapshot.takeSnapshot(histogram);
+            final var summary = String.format(
+                Locale.ENGLISH,
+                "%d,%s,%f,%f,%f,%f,%f,%f,%f,%d,%d",
+                TimeUnit.MILLISECONDS.toSeconds(nowInMs.getAsLong()),
+                shardId,
+                snapshot.average(),
+                snapshot.p50(),
+                snapshot.p75(),
+                snapshot.p90(),
+                snapshot.p95(),
+                snapshot.p99(),
+                snapshot.max(),
+                latencyHistogram.getValueAtPercentile(50),
+                latencyHistogram.getValueAtPercentile(90)
+            );
+            histogram.reset();
+            latencyHistogram.reset();
+            return summary;
+        }
+    }
+
+    static final class ESNode {
+        private final int tickMs;
+        private final AtomicLong nowInMsSupplier;
+        private final ClientsSimulator clientsSimulator;
+        private final VirtualWriteThreadPool virtualWriteThreadPool;
+        private final VirtualWriteLoadCollector virtualWriteLoadCollector;
+
+        ESNode(int timePerOpInMills, int arrivalRate, int tickMs, int numberOfWriteThreads) {
+            this.tickMs = tickMs;
+            this.nowInMsSupplier = new AtomicLong();
+            this.virtualWriteLoadCollector = new VirtualWriteLoadCollector(nowInMsSupplier::get);
+            this.virtualWriteThreadPool = new VirtualWriteThreadPool(
+                numberOfWriteThreads,
+                new ArrayDeque<>(),
+                nowInMsSupplier::get,
+                virtualWriteLoadCollector::trackRunningTimeForShard
+            );
+            this.clientsSimulator = new ClientsSimulator(timePerOpInMills, arrivalRate, nowInMsSupplier::get, virtualWriteLoadCollector);
+        }
+
+        void run() {
+            nowInMsSupplier.addAndGet(tickMs);
+            clientsSimulator.enqueueWork(virtualWriteThreadPool);
+            virtualWriteThreadPool.run();
+            if (nowInMsSupplier.get() % 100 == 0) {
+                virtualWriteLoadCollector.collectWriteLoad();
+            }
+            if (nowInMsSupplier.get() % TimeUnit.MINUTES.toMillis(1) == 0) {
+                virtualWriteLoadCollector.saveHistogramAndReset();
+                virtualWriteThreadPool.saveStats();
+            }
+        }
+
+        void printStats(Path loadPath, Path queuePath) throws IOException {
+            AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
+                try (
+                    OutputStream os = Files.newOutputStream(loadPath);
+                    OutputStreamWriter writer = new OutputStreamWriter(os)
+                ) {
+                    writer.write(virtualWriteLoadCollector.header());
+                    writer.write("\n");
+                    for (String stat : virtualWriteLoadCollector.stats()) {
+                        writer.write(stat);
+                        writer.write("\n");
+                    }
+
+                } catch (Exception e) {
+                    System.out.println("--> ERROR " + e.getMessage());
+                }
+                return null;
+            });
+
+            AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
+                try (
+                    OutputStream os = Files.newOutputStream(queuePath);
+                    OutputStreamWriter writer = new OutputStreamWriter(os)
+                ) {
+                    writer.write(virtualWriteThreadPool.header());
+                    writer.write("\n");
+                    for (String stat : virtualWriteThreadPool.stats) {
+                        writer.write(stat);
+                        writer.write("\n");
+                    }
+
+                } catch (Exception e) {
+                    System.out.println("--> ERROR " + e.getMessage());
+                }
+                return null;
+            });
+        }
+    }
+
+    static class VirtualWriteThreadPool {
+        private final int numberOfThreads;
+        private final Queue<IndexingOp> writeQueue;
+        private final LongSupplier clockInMs;
+        private final Function<String, Releasable> shardRunningTimeRecorder;
+        private final PriorityQueue<RunningIndexingOp> runningOps;
+        private final List<String> stats = new ArrayList<>();
+
+        private int rejections;
+
+        VirtualWriteThreadPool(
+            int numberOfThreads,
+            Queue<IndexingOp> writeQueue,
+            LongSupplier clockInMs,
+            Function<String, Releasable> shardRunningTimeRecorder
+        ) {
+            this.numberOfThreads = numberOfThreads;
+            this.writeQueue = writeQueue;
+            this.clockInMs = clockInMs;
+            this.shardRunningTimeRecorder = shardRunningTimeRecorder;
+            this.runningOps = new PriorityQueue<>();
+        }
+
+        boolean submit(IndexingOp indexingOp) {
+            if (writeQueue.size() < 10_000) {
+                writeQueue.add(indexingOp);
+                return true;
+            } else {
+                rejections++;
+                return false;
+            }
+        }
+
+        void run() {
+            assert runningOps.size() <= numberOfThreads;
+            final var currentTimeInMs = clockInMs.getAsLong();
+
+            RunningIndexingOp runningIndexingOp;
+            while ((runningIndexingOp = runningOps.peek()) != null && runningIndexingOp.finished(currentTimeInMs)) {
+                runningIndexingOp.finish(currentTimeInMs);
+                runningOps.remove();
+            }
+
+            IndexingOp indexingOp;
+            while (runningOps.size() < numberOfThreads && (indexingOp = writeQueue.poll()) != null) {
+                runningOps.add(
+                    new RunningIndexingOp(
+                        indexingOp,
+                        indexingOp.opTimeInMs() + currentTimeInMs,
+                        shardRunningTimeRecorder.apply(indexingOp.shard())
+                    )
+                );
+            }
+        }
+
+        void saveStats() {
+            stats.add(
+                String.format(
+                    "%d,%d,%d,%d,%d",
+                    TimeUnit.MILLISECONDS.toSeconds(clockInMs.getAsLong()),
+                    numberOfThreads,
+                    writeQueue.size(),
+                    runningOps.size(),
+                    rejections
+                )
+            );
+            rejections = 0;
+        }
+
+        String header() {
+            return "ts,number_of_threads,write_queue_size,running_ops,rejections";
+        }
+
+        @Override
+        public String toString() {
+            return "VirtualWriteThreadPool{"
+                + "numberOfThreads="
+                + numberOfThreads
+                + ", writeQueue="
+                + writeQueue.size()
+                + ", runningOps="
+                + runningOps.size()
+                + ", rejections="
+                + rejections
+                + '}';
+        }
+    }
+
+    static final class RunningIndexingOp implements Comparable<RunningIndexingOp> {
+        private final IndexingOp indexingOp;
+        private final long deadline;
+
+        private final Releasable runningTimeRecorder;
+
+        RunningIndexingOp(IndexingOp indexingOp, long deadline, Releasable runningTimeRecorder) {
+            this.indexingOp = indexingOp;
+            this.deadline = deadline;
+            this.runningTimeRecorder = runningTimeRecorder;
+        }
+
+        @Override
+        public int compareTo(RunningIndexingOp o) {
+            return Long.compare(deadline, o.deadline);
+        }
+
+        boolean finished(long nowInMs) {
+            return deadline <= nowInMs;
+        }
+
+        void finish(long currentTimeInMs) {
+            runningTimeRecorder.close();
+            indexingOp.onComplete(currentTimeInMs);
+        }
+    }
+
+    public void testSimulateInterleaving2() throws Exception {
+        final var esNode = new ESNode(100, 25, 1, 2);
+        for (int i = 0; i < TimeUnit.MINUTES.toMillis(30); i++) {
+            esNode.run();
+        }
+        esNode.printStats(Path.of("/Users/francisco/write_load.csv"), Path.of("/Users/francisco/queues.csv"));
+    }
+
+    public void testSimulateInterleaving() throws Exception {
+        final var nodeHistogram = new IndicesWriteLoadStatsCollector.Histogram(2);
+        final var index1Histogram = new IndicesWriteLoadStatsCollector.Histogram(2);
+        final var index2Histogram = new IndicesWriteLoadStatsCollector.Histogram(2);
+
+        // 1 second all cpus
+        // 5 seconds idle
+        int total = 0;
+        final var numberOfCpus = 4;
+        for (int i = 0; i < 100; i++) {
+            double valueIdx1;
+            double valueIdx2;
+            if (i % 2 == 0) {
+                valueIdx1 = i % 5 == 0 ? numberOfCpus : 0;
+                valueIdx2 = 0;
+            } else {
+                valueIdx1 = 0;
+                valueIdx2 = i % 5 == 0 ? numberOfCpus : 0;
+            }
+            if (valueIdx1 > 0 || valueIdx2 > 0) {
+                total++;
+            }
+            index1Histogram.recordValue(valueIdx1);
+            index2Histogram.recordValue(valueIdx2);
+            nodeHistogram.recordValue(valueIdx1 + valueIdx2);
+        }
+        final var nodeHistogramSnapshot = HistogramSnapshot.takeSnapshot(nodeHistogram);
+        final var index1HistogramSnapshot = HistogramSnapshot.takeSnapshot(index1Histogram);
+        final var index2HistogramSnapshot = HistogramSnapshot.takeSnapshot(index2Histogram);
+        logger.info("--> {}", total);
+        logger.info("---> {}", nodeHistogramSnapshot);
+        logger.info("---> {}", index1HistogramSnapshot);
+        logger.info("---> {}", index2HistogramSnapshot);
+    }
 
     public void testRegularIndicesLoadIsNotTracked() throws Exception {
         try (var shardRef = createRegularIndexShard()) {

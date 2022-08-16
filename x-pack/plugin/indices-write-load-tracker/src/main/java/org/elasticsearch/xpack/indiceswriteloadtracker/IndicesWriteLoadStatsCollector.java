@@ -160,7 +160,7 @@ class IndicesWriteLoadStatsCollector implements IndexEventListener {
         static WriteLoadSample EMPTY = new WriteLoadSample(0, 0, 0);
     }
 
-    private static class ShardWriteLoadHistogram {
+    public static class ShardWriteLoadHistogram {
         private final Supplier<String> parentDataStreamNameSupplier;
         private final IndexShard indexShard;
         private final boolean primary;

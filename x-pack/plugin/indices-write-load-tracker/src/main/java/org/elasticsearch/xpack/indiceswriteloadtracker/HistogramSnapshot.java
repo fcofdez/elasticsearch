@@ -88,7 +88,7 @@ public record HistogramSnapshot(double average, double p50, double p75, double p
         out.writeDouble(max);
     }
 
-    public static HistogramSnapshot takeSnapshot(IndicesWriteLoadStatsCollector.Histogram histogram) {
+    static HistogramSnapshot takeSnapshot(IndicesWriteLoadStatsCollector.Histogram histogram) {
         return new HistogramSnapshot(
             histogram.getAverage(),
             histogram.getValueAtPercentile(50),
