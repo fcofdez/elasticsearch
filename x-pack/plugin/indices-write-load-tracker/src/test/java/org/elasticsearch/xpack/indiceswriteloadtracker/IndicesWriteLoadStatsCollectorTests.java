@@ -67,17 +67,14 @@ import org.elasticsearch.index.shard.ShardPath;
 import org.elasticsearch.index.store.Store;
 import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.test.DummyShardLock;
-import org.elasticsearch.test.PrivilegedOperations;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.xcontent.XContentType;
 
-import java.io.FileWriter;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.ArrayDeque;
@@ -122,10 +119,8 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
     }
 
     static class ClientsSimulator {
-
         private final int timePerOpInMillis;
         private final int rateOfArrival;
-
         private final LongSupplier nowInMs;
         private final VirtualWriteLoadCollector virtualWriteLoadCollector;
         private long waitUntil = -1;
@@ -296,7 +291,7 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
             nowInMsSupplier.addAndGet(tickMs);
             clientsSimulator.enqueueWork(virtualWriteThreadPool);
             virtualWriteThreadPool.run();
-            if (nowInMsSupplier.get() % 100 == 0) {
+            if (nowInMsSupplier.get() % TimeUnit.SECONDS.toMillis(1) == 0) {
                 virtualWriteLoadCollector.collectWriteLoad();
             }
             if (nowInMsSupplier.get() % TimeUnit.MINUTES.toMillis(1) == 0) {
@@ -305,39 +300,27 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
             }
         }
 
-        void printStats(Path loadPath, Path queuePath) throws IOException {
+        void printStats(Path loadPath, Path queuePath) {
             AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
-                try (
-                    OutputStream os = Files.newOutputStream(loadPath);
-                    OutputStreamWriter writer = new OutputStreamWriter(os)
-                ) {
-                    writer.write(virtualWriteLoadCollector.header());
-                    writer.write("\n");
+                try (OutputStream os = Files.newOutputStream(loadPath); PrintWriter printWriter = new PrintWriter(os)) {
+                    printWriter.println(virtualWriteLoadCollector.header());
                     for (String stat : virtualWriteLoadCollector.stats()) {
-                        writer.write(stat);
-                        writer.write("\n");
+                        printWriter.println(stat);
                     }
-
                 } catch (Exception e) {
-                    System.out.println("--> ERROR " + e.getMessage());
+                    // Ignore
                 }
                 return null;
             });
 
             AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
-                try (
-                    OutputStream os = Files.newOutputStream(queuePath);
-                    OutputStreamWriter writer = new OutputStreamWriter(os)
-                ) {
-                    writer.write(virtualWriteThreadPool.header());
-                    writer.write("\n");
+                try (OutputStream os = Files.newOutputStream(queuePath); PrintWriter printWriter = new PrintWriter(os)) {
+                    printWriter.println(virtualWriteThreadPool.header());
                     for (String stat : virtualWriteThreadPool.stats) {
-                        writer.write(stat);
-                        writer.write("\n");
+                        printWriter.println(stat);
                     }
-
                 } catch (Exception e) {
-                    System.out.println("--> ERROR " + e.getMessage());
+                    // Ignore
                 }
                 return null;
             });
@@ -399,6 +382,10 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
             }
         }
 
+        String header() {
+            return "ts,number_of_threads,write_queue_size,running_ops,rejections";
+        }
+
         void saveStats() {
             stats.add(
                 String.format(
@@ -411,10 +398,6 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
                 )
             );
             rejections = 0;
-        }
-
-        String header() {
-            return "ts,number_of_threads,write_queue_size,running_ops,rejections";
         }
 
         @Override
@@ -460,7 +443,7 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
     }
 
     public void testSimulateInterleaving2() throws Exception {
-        final var esNode = new ESNode(100, 25, 1, 2);
+        final var esNode = new ESNode(100, 70, 1, 2);
         for (int i = 0; i < TimeUnit.MINUTES.toMillis(30); i++) {
             esNode.run();
         }
