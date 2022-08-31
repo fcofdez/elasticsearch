@@ -67,6 +67,7 @@ import org.elasticsearch.index.shard.ShardPath;
 import org.elasticsearch.index.store.Store;
 import org.elasticsearch.index.translog.Translog;
 import org.elasticsearch.test.DummyShardLock;
+import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.xcontent.XContentType;
 
@@ -109,6 +110,7 @@ import static org.hamcrest.Matchers.notNullValue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+@ESTestCase.WithoutSecurityManager
 public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
     private static final Double MAX_ERROR = 0.4;
 
@@ -495,15 +497,25 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
     }
 
     public void testSimulateInterleaving2() throws Exception {
-        List<String> shards = new ArrayList<>(100);
-        for (int i = 0; i < 128; i++) {
-            shards.add("shard-" + i);
+        final Path basePath = Path.of("/Users/francisco/ingest_load_experiments_new/");
+        for (int numberOfShards : List.of(2, 16, 32, 64, 100)) {
+            List<String> shards = new ArrayList<>(100);
+            for (int i = 0; i < numberOfShards; i++) {
+                shards.add("shard-" + i);
+            }
+            for (int arrivalRate : List.of(50, 60, 70)) {
+                final var esNode = new ESNode(100, arrivalRate, 1, 2, shards);
+                for (int i = 0; i < TimeUnit.MINUTES.toMillis(30); i++) {
+                    esNode.run();
+                }
+                Path experimentPath = basePath.resolve(numberOfShards + "_shards");
+                Files.createDirectories(experimentPath);
+                esNode.printStats(
+                    experimentPath.resolve(arrivalRate + "ms_arrival_rate_write_load.csv"),
+                    experimentPath.resolve(arrivalRate + "ms_arrival_rate_queues.csv")
+                );
+            }
         }
-        final var esNode = new ESNode(100, 50, 1, 2, shards);
-        for (int i = 0; i < TimeUnit.MINUTES.toMillis(30); i++) {
-            esNode.run();
-        }
-        esNode.printStats(Path.of("/Users/francisco/write_load.csv"), Path.of("/Users/francisco/queues.csv"));
     }
 
     public void testSimulateInterleaving() throws Exception {
