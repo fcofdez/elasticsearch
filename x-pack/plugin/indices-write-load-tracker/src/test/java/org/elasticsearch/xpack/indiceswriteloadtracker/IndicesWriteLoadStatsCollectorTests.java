@@ -123,25 +123,28 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
         private final int rateOfArrival;
         private final LongSupplier nowInMs;
         private final VirtualWriteLoadCollector virtualWriteLoadCollector;
+        private final List<String> shards;
         private long waitUntil = -1;
 
         ClientsSimulator(
             int timePerOpInMillis,
             int rateOfArrival,
             LongSupplier nowInMs,
-            VirtualWriteLoadCollector virtualWriteLoadCollector
+            VirtualWriteLoadCollector virtualWriteLoadCollector,
+            List<String> shards
         ) {
             this.timePerOpInMillis = timePerOpInMillis;
             this.rateOfArrival = rateOfArrival;
             this.nowInMs = nowInMs;
             this.virtualWriteLoadCollector = virtualWriteLoadCollector;
+            this.shards = shards;
         }
 
         void enqueueWork(VirtualWriteThreadPool virtualWriteThreadPool) {
             if (waitUntil > nowInMs.getAsLong() || nowInMs.getAsLong() % rateOfArrival != 0) {
                 return;
             }
-            final String shard = randomBoolean() ? "shard" : "shard2";
+            final String shard = randomFrom(shards);
             final boolean enqueued = virtualWriteThreadPool.submit(
                 new IndexingOp(
                     shard,
@@ -163,7 +166,9 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
         private final LongSupplier nowInMs;
         private final Map<String, ShardWriteLoadRecorder> runningTimeRecorders = new HashMap<>();
 
-        private final List<String> summaries = new ArrayList<>();
+        private final List<HistogramSummary> summaries = new ArrayList<>();
+
+        private final IndicesWriteLoadStatsCollector.Histogram nodeHistogram = new IndicesWriteLoadStatsCollector.Histogram(2);
 
         VirtualWriteLoadCollector(LongSupplier nowInMs) {
             this.nowInMs = nowInMs;
@@ -182,18 +187,42 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
         }
 
         void collectWriteLoad() {
+            double nodeCPUs = 0;
             for (ShardWriteLoadRecorder shardWriteLoadRecorder : runningTimeRecorders.values()) {
-                shardWriteLoadRecorder.collectWriteLoad();
+                nodeCPUs += shardWriteLoadRecorder.collectWriteLoad();
             }
+            nodeHistogram.recordValue(nodeCPUs);
         }
 
         void saveHistogramAndReset() {
+            List<HistogramSummary> partialSummaries = new ArrayList<>();
+            double totalAvg = 0;
+            double totalP75 = 0;
+            double totalP90 = 0;
+            double totalP99 = 0;
             for (ShardWriteLoadRecorder shardWriteLoadRecorder : runningTimeRecorders.values()) {
-                summaries.add(shardWriteLoadRecorder.getCSVSummaryAndReset());
+                HistogramSummary histogramSummary = shardWriteLoadRecorder.getSummaryAndReset();
+                partialSummaries.add(histogramSummary);
+                totalAvg += histogramSummary.snapshot.average();
+                totalP75 += histogramSummary.snapshot.p75();
+                totalP90 += histogramSummary.snapshot.p90();
+                totalP99 += histogramSummary.snapshot.p99();
             }
+            summaries.addAll(partialSummaries);
+            summaries.add(
+                new HistogramSummary(
+                    "total",
+                    nowInMs.getAsLong(),
+                    new HistogramSnapshot(totalAvg, 0, totalP75, totalP90, 0, totalP99, 0),
+                    0,
+                    0
+                )
+            );
+            summaries.add(new HistogramSummary("node", nowInMs.getAsLong(), HistogramSnapshot.takeSnapshot(nodeHistogram), 0, 0));
+            nodeHistogram.reset();
         }
 
-        List<String> stats() {
+        List<HistogramSummary> stats() {
             return summaries;
         }
 
@@ -231,7 +260,7 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
             latencyHistogram.recordValue(latency);
         }
 
-        void collectWriteLoad() {
+        double collectWriteLoad() {
             long currentTime = nowInMs.getAsLong();
             long timeDelta = currentTime - lastSampleTime;
             long totalRunningTime = runningTimeRecorder.totalRunningTimeInNanos();
@@ -242,14 +271,30 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
 
             double nCpus = (double) runningTimeDelta / timeDelta;
             histogram.recordValue(nCpus);
+            return nCpus;
         }
 
-        String getCSVSummaryAndReset() {
-            final var snapshot = HistogramSnapshot.takeSnapshot(histogram);
-            final var summary = String.format(
+        HistogramSummary getSummaryAndReset() {
+            HistogramSummary histogramSummary = new HistogramSummary(
+                shardId,
+                nowInMs.getAsLong(),
+                HistogramSnapshot.takeSnapshot(histogram),
+                latencyHistogram.getValueAtPercentile(50),
+                latencyHistogram.getValueAtPercentile(90)
+            );
+            histogram.reset();
+            latencyHistogram.reset();
+            return histogramSummary;
+        }
+    }
+
+    record HistogramSummary(String shardId, long timestamp, HistogramSnapshot snapshot, long latencyP50, long latencyP90) {
+        @Override
+        public String toString() {
+            return String.format(
                 Locale.ENGLISH,
                 "%d,%s,%f,%f,%f,%f,%f,%f,%f,%d,%d",
-                TimeUnit.MILLISECONDS.toSeconds(nowInMs.getAsLong()),
+                TimeUnit.MILLISECONDS.toSeconds(timestamp),
                 shardId,
                 snapshot.average(),
                 snapshot.p50(),
@@ -258,12 +303,13 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
                 snapshot.p95(),
                 snapshot.p99(),
                 snapshot.max(),
-                latencyHistogram.getValueAtPercentile(50),
-                latencyHistogram.getValueAtPercentile(90)
+                latencyP50,
+                latencyP90
             );
-            histogram.reset();
-            latencyHistogram.reset();
-            return summary;
+        }
+
+        String header() {
+            return "ts,shard_id,avg_load,p50_load,p75_load,p90_load,p95_load,p99_load,max_load,p50_latency,p90_latency";
         }
     }
 
@@ -274,7 +320,7 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
         private final VirtualWriteThreadPool virtualWriteThreadPool;
         private final VirtualWriteLoadCollector virtualWriteLoadCollector;
 
-        ESNode(int timePerOpInMills, int arrivalRate, int tickMs, int numberOfWriteThreads) {
+        ESNode(int timePerOpInMills, int arrivalRate, int tickMs, int numberOfWriteThreads, List<String> shards) {
             this.tickMs = tickMs;
             this.nowInMsSupplier = new AtomicLong();
             this.virtualWriteLoadCollector = new VirtualWriteLoadCollector(nowInMsSupplier::get);
@@ -284,7 +330,13 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
                 nowInMsSupplier::get,
                 virtualWriteLoadCollector::trackRunningTimeForShard
             );
-            this.clientsSimulator = new ClientsSimulator(timePerOpInMills, arrivalRate, nowInMsSupplier::get, virtualWriteLoadCollector);
+            this.clientsSimulator = new ClientsSimulator(
+                timePerOpInMills,
+                arrivalRate,
+                nowInMsSupplier::get,
+                virtualWriteLoadCollector,
+                shards
+            );
         }
 
         void run() {
@@ -304,7 +356,7 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
             AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
                 try (OutputStream os = Files.newOutputStream(loadPath); PrintWriter printWriter = new PrintWriter(os)) {
                     printWriter.println(virtualWriteLoadCollector.header());
-                    for (String stat : virtualWriteLoadCollector.stats()) {
+                    for (HistogramSummary stat : virtualWriteLoadCollector.stats()) {
                         printWriter.println(stat);
                     }
                 } catch (Exception e) {
@@ -443,7 +495,11 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
     }
 
     public void testSimulateInterleaving2() throws Exception {
-        final var esNode = new ESNode(100, 70, 1, 2);
+        List<String> shards = new ArrayList<>(100);
+        for (int i = 0; i < 128; i++) {
+            shards.add("shard-" + i);
+        }
+        final var esNode = new ESNode(100, 50, 1, 2, shards);
         for (int i = 0; i < TimeUnit.MINUTES.toMillis(30); i++) {
             esNode.run();
         }
