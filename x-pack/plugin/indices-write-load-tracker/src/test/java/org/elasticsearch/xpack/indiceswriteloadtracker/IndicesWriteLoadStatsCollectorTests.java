@@ -94,8 +94,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -114,50 +114,43 @@ import static org.mockito.Mockito.when;
 public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
     private static final Double MAX_ERROR = 0.4;
 
-    record IndexingOp(String shard, long startTime, int opTimeInMs, LongConsumer totalLatencyConsumer) {
-        void onComplete(long nowInMs) {
-            totalLatencyConsumer.accept(nowInMs - startTime);
-        }
+    record IndexingOp(String shard, long enqueueTime, int opTimeInMs) {
     }
 
-    static class ClientsSimulator {
+    interface ClientsSimulator {
+        void maybeEnqueueWork(long nowInMs, VirtualWriteThreadPool virtualWriteThreadPool);
+    }
+
+    static class FixedClientsSimulator implements ClientsSimulator {
         private final int timePerOpInMillis;
-        private final int rateOfArrival;
-        private final LongSupplier nowInMs;
-        private final VirtualWriteLoadCollector virtualWriteLoadCollector;
-        private final List<String> shards;
+        private int arrivalRate;
+        private final Supplier<String> nextShard;
         private long waitUntil = -1;
 
-        ClientsSimulator(
-            int timePerOpInMillis,
-            int rateOfArrival,
-            LongSupplier nowInMs,
-            VirtualWriteLoadCollector virtualWriteLoadCollector,
-            List<String> shards
-        ) {
+        FixedClientsSimulator(int timePerOpInMillis, int arrivalRate, Supplier<String> nextShard) {
             this.timePerOpInMillis = timePerOpInMillis;
-            this.rateOfArrival = rateOfArrival;
-            this.nowInMs = nowInMs;
-            this.virtualWriteLoadCollector = virtualWriteLoadCollector;
-            this.shards = shards;
+            this.arrivalRate = arrivalRate;
+            this.nextShard = nextShard;
         }
 
-        void enqueueWork(VirtualWriteThreadPool virtualWriteThreadPool) {
-            if (waitUntil > nowInMs.getAsLong() || nowInMs.getAsLong() % rateOfArrival != 0) {
+        @Override
+        public void maybeEnqueueWork(long nowInMs, VirtualWriteThreadPool virtualWriteThreadPool) {
+            if (waitUntil > nowInMs || nowInMs % arrivalRate != 0) {
                 return;
             }
-            final String shard = randomFrom(shards);
-            final boolean enqueued = virtualWriteThreadPool.submit(
-                new IndexingOp(
-                    shard,
-                    nowInMs.getAsLong(),
-                    timePerOpInMillis,
-                    (latency) -> virtualWriteLoadCollector.trackLatency(shard, latency)
-                )
-            );
+//            if (nowInMs >= TimeUnit.MINUTES.toMillis(360)) {
+//                return;
+//            }
+//            if (nowInMs % TimeUnit.MINUTES.toMillis(60) == 0) {
+//                arrivalRate = Math.max(1, arrivalRate - 10);
+//                System.out.println("--> increase rate " + arrivalRate);
+//                return;
+//            }
+            final String shard = nextShard.get();
+            final boolean enqueued = virtualWriteThreadPool.submit(new IndexingOp(shard, nowInMs, timePerOpInMillis));
             if (enqueued == false) {
                 // push-back
-                waitUntil = nowInMs.getAsLong() + TimeUnit.SECONDS.toMillis(10);
+                waitUntil = nowInMs + TimeUnit.SECONDS.toMillis(10);
             } else {
                 waitUntil = -1;
             }
@@ -321,8 +314,9 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
         private final ClientsSimulator clientsSimulator;
         private final VirtualWriteThreadPool virtualWriteThreadPool;
         private final VirtualWriteLoadCollector virtualWriteLoadCollector;
+        private long latestScaleCheck = 0;
 
-        ESNode(int timePerOpInMills, int arrivalRate, int tickMs, int numberOfWriteThreads, List<String> shards) {
+        ESNode(ClientsSimulator clientsSimulator, int tickMs, int numberOfWriteThreads) {
             this.tickMs = tickMs;
             this.nowInMsSupplier = new AtomicLong();
             this.virtualWriteLoadCollector = new VirtualWriteLoadCollector(nowInMsSupplier::get);
@@ -330,27 +324,74 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
                 numberOfWriteThreads,
                 new ArrayDeque<>(),
                 nowInMsSupplier::get,
-                virtualWriteLoadCollector::trackRunningTimeForShard
+                virtualWriteLoadCollector
             );
-            this.clientsSimulator = new ClientsSimulator(
-                timePerOpInMills,
-                arrivalRate,
-                nowInMsSupplier::get,
-                virtualWriteLoadCollector,
-                shards
-            );
+            this.clientsSimulator = clientsSimulator;
+        }
+
+        int queueSize() {
+            return virtualWriteThreadPool.writeQueue.size();
         }
 
         void run() {
             nowInMsSupplier.addAndGet(tickMs);
-            clientsSimulator.enqueueWork(virtualWriteThreadPool);
+            final long nowInMs = nowInMsSupplier.get();
+
+            clientsSimulator.maybeEnqueueWork(nowInMs, virtualWriteThreadPool);
             virtualWriteThreadPool.run();
-            if (nowInMsSupplier.get() % TimeUnit.SECONDS.toMillis(1) == 0) {
+
+            if (nowInMs % TimeUnit.SECONDS.toMillis(1) == 0) {
                 virtualWriteLoadCollector.collectWriteLoad();
             }
-            if (nowInMsSupplier.get() % TimeUnit.MINUTES.toMillis(1) == 0) {
+
+            if (nowInMs % TimeUnit.MINUTES.toMillis(1) == 0) {
                 virtualWriteLoadCollector.saveHistogramAndReset();
                 virtualWriteThreadPool.saveStats();
+            }
+
+            if (nowInMs % TimeUnit.MINUTES.toMillis(15) == 0) {
+                var stats = virtualWriteLoadCollector.stats()
+                    .stream()
+                    .filter(f -> f.timestamp() >= latestScaleCheck)
+                    .collect(Collectors.groupingBy(HistogramSummary::shardId));
+
+                double totalD = 0;
+                for (Map.Entry<String, List<HistogramSummary>> shardStats : stats.entrySet()) {
+                    if (shardStats.getKey().equals("node") || shardStats.getKey().equals("total")) {
+                        continue;
+                    }
+                    double
+                        totalD1 =
+                        shardStats.getValue()
+                            .stream()
+                            .mapToDouble(f -> Math.max(f.snapshot().average() * 1.05, f.snapshot().p75()))
+                            .max()
+                            .orElse(0);
+                    totalD += totalD1;
+                    //System.out.println("---> " + shardStats.getKey() + " " + totalD1);
+                }
+
+//                double
+//                    avg =
+//                    virtualWriteLoadCollector.stats()
+//                        .stream()
+//                        .filter(f -> f.timestamp() >= latestScaleCheck)
+//                        .filter(f -> f.shardId.equals("total"))
+//                        .mapToDouble(f -> f.snapshot().average() * 1.05)
+//                        .max()
+//                        .orElse(2);
+                int total = Math.min(Math.max((int) Math.floor(totalD), 1), 100);
+//                    Math.max(
+//                        p75, avg
+//                    )
+//                );
+                long prev = latestScaleCheck;
+                latestScaleCheck = nowInMs;
+
+                System.out.println("--> scaling to " + total + " at " + nowInMs / 1000 + " - " + virtualWriteThreadPool.writeQueue.size());
+                if (prev != 0) {
+                    virtualWriteThreadPool.setNumberOfThreads(total);
+                }
             }
         }
 
@@ -382,10 +423,10 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
     }
 
     static class VirtualWriteThreadPool {
-        private final int numberOfThreads;
+        private int numberOfThreads;
         private final Queue<IndexingOp> writeQueue;
         private final LongSupplier clockInMs;
-        private final Function<String, Releasable> shardRunningTimeRecorder;
+        private final VirtualWriteLoadCollector virtualWriteLoadCollector;
         private final PriorityQueue<RunningIndexingOp> runningOps;
         private final List<String> stats = new ArrayList<>();
 
@@ -395,12 +436,12 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
             int numberOfThreads,
             Queue<IndexingOp> writeQueue,
             LongSupplier clockInMs,
-            Function<String, Releasable> shardRunningTimeRecorder
+            VirtualWriteLoadCollector virtualWriteLoadCollector
         ) {
             this.numberOfThreads = numberOfThreads;
             this.writeQueue = writeQueue;
             this.clockInMs = clockInMs;
-            this.shardRunningTimeRecorder = shardRunningTimeRecorder;
+            this.virtualWriteLoadCollector = virtualWriteLoadCollector;
             this.runningOps = new PriorityQueue<>();
         }
 
@@ -415,7 +456,7 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
         }
 
         void run() {
-            assert runningOps.size() <= numberOfThreads;
+            //assert runningOps.size() <= numberOfThreads;
             final var currentTimeInMs = clockInMs.getAsLong();
 
             RunningIndexingOp runningIndexingOp;
@@ -430,10 +471,14 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
                     new RunningIndexingOp(
                         indexingOp,
                         indexingOp.opTimeInMs() + currentTimeInMs,
-                        shardRunningTimeRecorder.apply(indexingOp.shard())
+                        virtualWriteLoadCollector
                     )
                 );
             }
+        }
+
+        void setNumberOfThreads(int numberOfThreads) {
+            this.numberOfThreads = numberOfThreads;
         }
 
         String header() {
@@ -474,11 +519,13 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
         private final long deadline;
 
         private final Releasable runningTimeRecorder;
+        private final VirtualWriteLoadCollector writeLoadCollector;
 
-        RunningIndexingOp(IndexingOp indexingOp, long deadline, Releasable runningTimeRecorder) {
+        RunningIndexingOp(IndexingOp indexingOp, long deadline, VirtualWriteLoadCollector writeLoadCollector) {
             this.indexingOp = indexingOp;
             this.deadline = deadline;
-            this.runningTimeRecorder = runningTimeRecorder;
+            this.runningTimeRecorder = writeLoadCollector.trackRunningTimeForShard(indexingOp.shard());
+            this.writeLoadCollector = writeLoadCollector;
         }
 
         @Override
@@ -490,22 +537,72 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
             return deadline <= nowInMs;
         }
 
+        // Return the total latency
         void finish(long currentTimeInMs) {
             runningTimeRecorder.close();
-            indexingOp.onComplete(currentTimeInMs);
+            writeLoadCollector.trackLatency(indexingOp.shard(), currentTimeInMs - indexingOp.enqueueTime());
         }
+
+        @Override public String toString() {
+            return "RunningIndexingOp{" + "indexingOp=" + indexingOp + ", deadline=" + deadline + '}';
+        }
+    }
+
+    public void testAvg() {
+        var histo = new IndicesWriteLoadStatsCollector.Histogram(2);
+        var histo2 = new IndicesWriteLoadStatsCollector.Histogram(2);
+//        for (int i = 0; i < 25; i++) {
+//            histo.recordValue(0);
+//            histo2.recordValue(8);
+//        }
+//
+//        for (int i = 0; i < 25; i++) {
+//            histo.recordValue(0);
+//            histo2.recordValue(4);
+//        }
+//
+//        for (int i = 0; i < 25; i++) {
+//            histo.recordValue(4);
+//            histo2.recordValue(0);
+//        }
+//
+//        for (int i = 0; i < 25; i++) {
+//            histo.recordValue(8);
+//            histo2.recordValue(0);
+//        }
+
+        for (int i = 0; i < 90; i++) {
+            histo.recordValue(0);
+        }
+
+        for (int i = 0; i < 10; i++) {
+            histo.recordValue(8);
+        }
+
+        var snap = HistogramSnapshot.takeSnapshot(histo);
+        var snap2 = HistogramSnapshot.takeSnapshot(histo2);
+        int i = 1;
     }
 
     public void testSimulateInterleaving2() throws Exception {
         final Path basePath = Path.of("/Users/francisco/ingest_load_experiments_new/");
-        for (int numberOfShards : List.of(2, 16, 32, 64, 100)) {
+        for (int numberOfShards : List.of(100)) {
             List<String> shards = new ArrayList<>(100);
             for (int i = 0; i < numberOfShards; i++) {
                 shards.add("shard-" + i);
             }
-            for (int arrivalRate : List.of(50, 60, 70)) {
-                final var esNode = new ESNode(100, arrivalRate, 1, 2, shards);
-                for (int i = 0; i < TimeUnit.MINUTES.toMillis(30); i++) {
+            List<String> highTrafficShards = shards.subList(0, 10);
+            List<String> lowTrafficShards = shards.subList(10, 100);
+            final Supplier<String> shardSupplier = () -> {
+              if (random().nextInt(100) <= 90) {
+                  return randomFrom(highTrafficShards);
+              } else {
+                  return randomFrom(lowTrafficShards);
+              }
+            };
+            for (int arrivalRate : List.of(25)) {
+                final var esNode = new ESNode(new FixedClientsSimulator(100, arrivalRate, shardSupplier), 1, 2);
+                for (int i = 0; i < TimeUnit.MINUTES.toMillis(480); i++) {
                     esNode.run();
                 }
                 Path experimentPath = basePath.resolve(numberOfShards + "_shards");
@@ -514,6 +611,7 @@ public class IndicesWriteLoadStatsCollectorTests extends IndexShardTestCase {
                     experimentPath.resolve(arrivalRate + "ms_arrival_rate_write_load.csv"),
                     experimentPath.resolve(arrivalRate + "ms_arrival_rate_queues.csv")
                 );
+                System.out.println("--> " + esNode.queueSize());
             }
         }
     }
