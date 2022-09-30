@@ -69,7 +69,12 @@ public class MultiFileWriter extends AbstractRefCounted implements Releasable {
         }
     }
 
-    public void writeFile(StoreFileMetadata fileMetadata, long readSnapshotFileBufferSize, InputStream stream) throws Exception {
+    public void writeFile(
+        StoreFileMetadata fileMetadata,
+        long readSnapshotFileBufferSize,
+        InputStream stream,
+        Runnable checkForCancellation
+    ) throws Exception {
         ensureOpen.run();
         assert Transports.assertNotTransportThread("multi_file_writer");
 
@@ -87,6 +92,7 @@ public class MultiFileWriter extends AbstractRefCounted implements Releasable {
             int length;
             long bytesWritten = 0;
             while ((length = stream.read(buffer)) > 0) {
+                checkForCancellation.run();
                 indexOutput.writeBytes(buffer, length);
                 indexState.addRecoveredFromSnapshotBytesToFile(fileName, length);
                 bytesWritten += length;
@@ -107,6 +113,7 @@ public class MultiFileWriter extends AbstractRefCounted implements Releasable {
             assert Arrays.asList(store.directory().listAll()).contains(tempFileName)
                 : "expected: [" + tempFileName + "] in " + Arrays.toString(store.directory().listAll());
             store.directory().sync(Collections.singleton(tempFileName));
+            checkForCancellation.run();
         } catch (Exception e) {
             tempFileNames.remove(tempFileName);
             store.deleteQuiet(tempFileName);

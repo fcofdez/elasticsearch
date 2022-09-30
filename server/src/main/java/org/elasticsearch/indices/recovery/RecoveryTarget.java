@@ -46,6 +46,7 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -87,6 +88,8 @@ public class RecoveryTarget extends AbstractRefCounted implements RecoveryTarget
 
     // latch that can be used to blockingly wait for RecoveryTarget to be closed
     private final CountDownLatch closedLatch = new CountDownLatch(1);
+
+    private final SnapshotFileDownloadsController snapshotFileDownloadsController = new SnapshotFileDownloadsController();
 
     /**
      * Creates a new recovery target object that represents a recovery to the provided shard.
@@ -553,6 +556,7 @@ public class RecoveryTarget extends AbstractRefCounted implements RecoveryTarget
         ActionListener<Void> listener
     ) {
         try {
+            snapshotFileDownloadsController.maybeCancelOnGoingDownloads();
             state().getTranslog().totalOperations(totalTranslogOps);
             multiFileWriter.writeFileChunk(fileMetadata, position, content, lastChunk);
             listener.onResponse(null);
@@ -577,11 +581,17 @@ public class RecoveryTarget extends AbstractRefCounted implements RecoveryTarget
                 shardId,
                 fileInfo,
                 this::registerThrottleTime
-            )
+            );
+            Releasable unused = snapshotFileDownloadsController.trackSnapshotDownload()
         ) {
             StoreFileMetadata metadata = fileInfo.metadata();
             int readSnapshotFileBufferSize = snapshotFilesProvider.getReadSnapshotFileBufferSizeForRepo(repository);
-            multiFileWriter.writeFile(metadata, readSnapshotFileBufferSize, inputStream);
+            multiFileWriter.writeFile(
+                metadata,
+                readSnapshotFileBufferSize,
+                inputStream,
+                snapshotFileDownloadsController::checkForCancellation
+            );
             listener.onResponse(null);
         } catch (Exception e) {
             logger.debug(() -> format("Unable to recover snapshot file %s from repository %s", fileInfo, repository), e);
@@ -601,5 +611,41 @@ public class RecoveryTarget extends AbstractRefCounted implements RecoveryTarget
 
     Path translogLocation() {
         return indexShard().shardPath().resolveTranslog();
+    }
+
+    static class SnapshotFileDownloadsController {
+        private static final int MAX_PERMITS = Integer.MAX_VALUE;
+        private final AtomicBoolean downloadsCancelled = new AtomicBoolean();
+        private final AtomicBoolean allDownloadsFinished = new AtomicBoolean();
+        private final Semaphore semaphore = new Semaphore(MAX_PERMITS);
+
+        void maybeCancelOnGoingDownloads() {
+            if (allDownloadsFinished.get()) {
+                return;
+            }
+
+            // TODO: it's still possible that the pending download ends just after the
+            // task has been cancelled and we'll still experience issues
+            synchronized (this) {
+                if (semaphore.tryAcquire(MAX_PERMITS) == false) {
+                    downloadsCancelled.set(true);
+                    semaphore.acquireUninterruptibly(MAX_PERMITS);
+                }
+
+                allDownloadsFinished.set(true);
+                semaphore.release(MAX_PERMITS);
+            }
+        }
+
+        void checkForCancellation() {
+            if (downloadsCancelled.get()) {
+                throw new RuntimeException("Download has been cancelled");
+            }
+        }
+
+        Releasable trackSnapshotDownload() {
+            semaphore.acquireUninterruptibly();
+            return semaphore::release;
+        }
     }
 }
