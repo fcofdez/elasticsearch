@@ -5,7 +5,7 @@
  * 2.0.
  */
 
-package org.elasticsearch.xpack.indiceswriteloadtracker;
+package org.elasticsearch.xpack.writeloadsampler;
 
 import org.apache.lucene.util.SetOnce;
 import org.elasticsearch.client.internal.Client;
@@ -21,6 +21,7 @@ import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.repositories.RepositoriesService;
 import org.elasticsearch.script.ScriptService;
 import org.elasticsearch.threadpool.ExecutorBuilder;
+import org.elasticsearch.threadpool.FixedExecutorBuilder;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.tracing.Tracer;
 import org.elasticsearch.watcher.ResourceWatcherService;
@@ -31,10 +32,12 @@ import java.util.Collections;
 import java.util.List;
 import java.util.function.Supplier;
 
-public class IndicesWriteLoadTrackerPlugin extends Plugin {
-    private final SetOnce<IndicesWriteLoadStatsCollector> indicesWriteLoadsStatsCollectorRef = new SetOnce<>();
+public class DataStreamsWriteLoadSamplerPlugin extends Plugin {
+    public static final String WRITE_LOAD_SAMPLING_THREAD_POOL_NAME = "write_load_sampler";
+    public static final String INDICES_WRITE_LOAD_SAMPLING_THREAD_POOL_PREFIX = "xpack.indices_write_load_sampling_thread_pool";
+    private final SetOnce<DataStreamsWriteLoadSampler> indicesWriteLoadsStatsSamplerRef = new SetOnce<>();
 
-    public IndicesWriteLoadTrackerPlugin() {}
+    public DataStreamsWriteLoadSamplerPlugin() {}
 
     @Override
     public Collection<Object> createComponents(
@@ -52,24 +55,37 @@ public class IndicesWriteLoadTrackerPlugin extends Plugin {
         Tracer tracer,
         AllocationDeciders allocationDeciders
     ) {
-        final var indicesWriteLoadStatsCollector = new IndicesWriteLoadStatsCollector(clusterService, threadPool::rawRelativeTimeInNanos);
-        indicesWriteLoadsStatsCollectorRef.set(indicesWriteLoadStatsCollector);
+        final var indicesWriteLoadStatsCollector = new DataStreamsWriteLoadSampler(
+            clusterService::state,
+            threadPool::rawRelativeTimeInNanos
+        );
+        indicesWriteLoadsStatsSamplerRef.set(indicesWriteLoadStatsCollector);
 
         return Collections.emptyList();
     }
 
     @Override
     public void onIndexModule(IndexModule indexModule) {
-        assert indicesWriteLoadsStatsCollectorRef.get() != null;
-        indexModule.addIndexEventListener(indicesWriteLoadsStatsCollectorRef.get());
+        assert indicesWriteLoadsStatsSamplerRef.get() != null;
+        indexModule.addIndexEventListener(indicesWriteLoadsStatsSamplerRef.get());
     }
 
-    static boolean currentThreadIsWriterLoadCollectorThreadOrTestThread() {
-        return Thread.currentThread().getName().startsWith("TEST-");
+    static boolean currentThreadIsWriterLoadSamplerThreadOrTestThread() {
+        return Thread.currentThread().getName().contains('[' + WRITE_LOAD_SAMPLING_THREAD_POOL_NAME + ']')
+            || Thread.currentThread().getName().startsWith("TEST-");
     }
 
     @Override
     public List<ExecutorBuilder<?>> getExecutorBuilders(Settings settings) {
-        return List.of();
+        return Collections.singletonList(
+            new FixedExecutorBuilder(
+                settings,
+                WRITE_LOAD_SAMPLING_THREAD_POOL_NAME,
+                1,
+                100,
+                INDICES_WRITE_LOAD_SAMPLING_THREAD_POOL_PREFIX,
+                false
+            )
+        );
     }
 }
