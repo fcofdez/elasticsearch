@@ -35,7 +35,8 @@ import java.util.function.Supplier;
 public class DataStreamsWriteLoadSamplerPlugin extends Plugin {
     public static final String WRITE_LOAD_SAMPLING_THREAD_POOL_NAME = "write_load_sampler";
     public static final String INDICES_WRITE_LOAD_SAMPLING_THREAD_POOL_PREFIX = "xpack.indices_write_load_sampling_thread_pool";
-    private final SetOnce<DataStreamsWriteLoadSampler> indicesWriteLoadsStatsSamplerRef = new SetOnce<>();
+    private final SetOnce<DataStreamsWriteLoadSampler> writeLoadSamplerRef = new SetOnce<>();
+    private final SetOnce<DataStreamsWriteLoadSamplerService> writeLoadSamplerServiceRef = new SetOnce<>();
 
     public DataStreamsWriteLoadSamplerPlugin() {}
 
@@ -55,24 +56,23 @@ public class DataStreamsWriteLoadSamplerPlugin extends Plugin {
         Tracer tracer,
         AllocationDeciders allocationDeciders
     ) {
-        final var indicesWriteLoadStatsCollector = new DataStreamsWriteLoadSampler(
-            clusterService::state,
-            threadPool::rawRelativeTimeInNanos
+        final var writeLoadSampler = new DataStreamsWriteLoadSampler(clusterService::state, threadPool::rawRelativeTimeInNanos);
+        final var writeLoadSamplerService = new DataStreamsWriteLoadSamplerService(
+            writeLoadSampler,
+            threadPool,
+            clusterService.getClusterSettings(),
+            clusterService.getSettings()
         );
-        indicesWriteLoadsStatsSamplerRef.set(indicesWriteLoadStatsCollector);
+        writeLoadSamplerRef.set(writeLoadSampler);
+        writeLoadSamplerServiceRef.set(writeLoadSamplerService);
 
-        return Collections.emptyList();
+        return Collections.singletonList(writeLoadSamplerService);
     }
 
     @Override
     public void onIndexModule(IndexModule indexModule) {
-        assert indicesWriteLoadsStatsSamplerRef.get() != null;
-        indexModule.addIndexEventListener(indicesWriteLoadsStatsSamplerRef.get());
-    }
-
-    static boolean currentThreadIsWriterLoadSamplerThreadOrTestThread() {
-        return Thread.currentThread().getName().contains('[' + WRITE_LOAD_SAMPLING_THREAD_POOL_NAME + ']')
-            || Thread.currentThread().getName().startsWith("TEST-");
+        assert writeLoadSamplerRef.get() != null;
+        indexModule.addIndexEventListener(writeLoadSamplerRef.get());
     }
 
     @Override
@@ -87,5 +87,15 @@ public class DataStreamsWriteLoadSamplerPlugin extends Plugin {
                 false
             )
         );
+    }
+
+    @Override
+    public void close() {
+        writeLoadSamplerServiceRef.get().close();
+    }
+
+    static boolean currentThreadIsWriterLoadSamplerThreadOrTestThread() {
+        return Thread.currentThread().getName().contains('[' + WRITE_LOAD_SAMPLING_THREAD_POOL_NAME + ']')
+            || Thread.currentThread().getName().startsWith("TEST-");
     }
 }
