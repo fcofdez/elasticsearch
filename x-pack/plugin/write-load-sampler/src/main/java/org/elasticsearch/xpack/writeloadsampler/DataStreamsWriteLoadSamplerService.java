@@ -17,7 +17,6 @@ import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.threadpool.Scheduler;
 import org.elasticsearch.threadpool.ThreadPool;
 
-import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.elasticsearch.xpack.writeloadsampler.DataStreamsWriteLoadSamplerPlugin.WRITE_LOAD_SAMPLING_THREAD_POOL_NAME;
@@ -25,14 +24,14 @@ import static org.elasticsearch.xpack.writeloadsampler.DataStreamsWriteLoadSampl
 
 class DataStreamsWriteLoadSamplerService extends AbstractLifecycleComponent {
     static final Setting<Boolean> ENABLED_SETTING = Setting.boolSetting(
-        "indices.write_load.collect.enabled",
+        "indices.write_load.sampler.enabled",
         true,
         Setting.Property.NodeScope,
         Setting.Property.Dynamic
     );
 
     static final Setting<TimeValue> SAMPLING_FREQUENCY_SETTING = Setting.timeSetting(
-        "indices.write_load.collect.sampling_frequency",
+        "indices.write_load.sampler.frequency",
         TimeValue.timeValueSeconds(1),
         TimeValue.timeValueMillis(500),
         Setting.Property.NodeScope,
@@ -40,35 +39,34 @@ class DataStreamsWriteLoadSamplerService extends AbstractLifecycleComponent {
     );
 
     private final Logger logger = LogManager.getLogger(DataStreamsWriteLoadSamplerService.class);
-
-    private final DataStreamsWriteLoadSampler dataStreamsWriteLoadSampler;
-    private final ThreadPool threadPool;
     private final AtomicBoolean started = new AtomicBoolean();
 
-    private volatile TimeValue samplingFrequency;
-    private volatile boolean enabled;
+    private final DataStreamsWriteLoadSampler writeLoadSampler;
+    private final ThreadPool threadPool;
 
+    private volatile boolean enabled;
+    private volatile TimeValue samplingFrequency;
     private volatile Scheduler.Cancellable scheduledSampling;
 
     DataStreamsWriteLoadSamplerService(
-        DataStreamsWriteLoadSampler collector,
+        DataStreamsWriteLoadSampler writeLoadSampler,
         ThreadPool threadPool,
         ClusterSettings clusterSettings,
         Settings settings
     ) {
-        this.dataStreamsWriteLoadSampler = collector;
+        this.writeLoadSampler = writeLoadSampler;
         this.threadPool = threadPool;
-        this.samplingFrequency = SAMPLING_FREQUENCY_SETTING.get(settings);
         this.enabled = ENABLED_SETTING.get(settings);
+        this.samplingFrequency = SAMPLING_FREQUENCY_SETTING.get(settings);
 
-        clusterSettings.addSettingsUpdateConsumer(SAMPLING_FREQUENCY_SETTING, this::setSamplingFrequency);
         clusterSettings.addSettingsUpdateConsumer(ENABLED_SETTING, this::setEnabled);
+        clusterSettings.addSettingsUpdateConsumer(SAMPLING_FREQUENCY_SETTING, this::setSamplingFrequency);
     }
 
     @Override
     protected void doStart() {
         if (started.compareAndSet(false, true)) {
-            maybeScheduleTasks();
+            maybeScheduleSampling();
         }
     }
 
@@ -76,12 +74,12 @@ class DataStreamsWriteLoadSamplerService extends AbstractLifecycleComponent {
     protected void doStop() {
         if (started.compareAndSet(true, false)) {
             enabled = false;
-            maybeCancelTasks();
+            maybeCancelScheduledSampling();
         }
     }
 
     @Override
-    protected void doClose() throws IOException {
+    protected void doClose() {
 
     }
 
@@ -92,9 +90,9 @@ class DataStreamsWriteLoadSamplerService extends AbstractLifecycleComponent {
     private void setEnabled(boolean enabled) {
         this.enabled = enabled;
         if (enabled) {
-            maybeScheduleTasks();
+            maybeCancelScheduledSampling();
         } else {
-            maybeCancelTasks();
+            maybeCancelScheduledSampling();
         }
     }
 
@@ -106,7 +104,7 @@ class DataStreamsWriteLoadSamplerService extends AbstractLifecycleComponent {
         }
 
         try {
-            dataStreamsWriteLoadSampler.sampleWriteLoadStats();
+            writeLoadSampler.sampleWriteLoadStats();
         } catch (Exception e) {
             logger.warn("Unable to collect write load stats", e);
         }
@@ -114,11 +112,7 @@ class DataStreamsWriteLoadSamplerService extends AbstractLifecycleComponent {
         maybeScheduleSampling();
     }
 
-    private void maybeScheduleTasks() {
-        maybeScheduleSampling();
-    }
-
-    private void maybeCancelTasks() {
+    private void maybeCancelScheduledSampling() {
         if (scheduledSampling != null) {
             scheduledSampling.cancel();
         }
