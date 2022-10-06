@@ -124,7 +124,7 @@ import org.elasticsearch.index.seqno.SeqNoStats;
 import org.elasticsearch.index.seqno.SequenceNumbers;
 import org.elasticsearch.index.shard.PrimaryReplicaSyncer.ResyncTask;
 import org.elasticsearch.index.similarity.SimilarityService;
-import org.elasticsearch.index.stats.ShardWriteLoadStats;
+import org.elasticsearch.index.stats.WriteLoadStats;
 import org.elasticsearch.index.store.Store;
 import org.elasticsearch.index.store.Store.MetadataSnapshot;
 import org.elasticsearch.index.store.StoreFileMetadata;
@@ -1353,7 +1353,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         return shardWriteLoadStatsCollector.totalBulkTimeInNanos();
     }
 
-    public ShardWriteLoadStats writeLoadStats() {
+    public WriteLoadStats writeLoadStats() {
         return shardWriteLoadStatsCollector.getStats();
     }
 

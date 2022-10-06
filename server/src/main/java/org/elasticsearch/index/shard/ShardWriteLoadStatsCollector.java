@@ -12,15 +12,15 @@ import org.elasticsearch.common.RunningTimeRecorder;
 import org.elasticsearch.common.metrics.DoubleMean;
 import org.elasticsearch.common.metrics.DoubleMeanMetric;
 import org.elasticsearch.core.Releasable;
-import org.elasticsearch.index.stats.ShardWriteLoadStats;
+import org.elasticsearch.index.stats.WriteLoadStats;
 
 import java.util.function.LongSupplier;
 
 class ShardWriteLoadStatsCollector {
     static final ShardWriteLoadStatsCollector NO_OP = new ShardWriteLoadStatsCollector(RunningTimeRecorder.NO_OP) {
         @Override
-        public ShardWriteLoadStats getStats() {
-            return new ShardWriteLoadStats(DoubleMean.ZERO);
+        public WriteLoadStats getStats() {
+            return new WriteLoadStats(DoubleMean.ZERO);
         }
 
         @Override
@@ -69,7 +69,7 @@ class ShardWriteLoadStatsCollector {
         return bulkTimeRecorder.inFlightOps();
     }
 
-    ShardWriteLoadStats getStats() {
-        return new ShardWriteLoadStats(indexingLoadMean.mean());
+    WriteLoadStats getStats() {
+        return new WriteLoadStats(indexingLoadMean.mean());
     }
 }
