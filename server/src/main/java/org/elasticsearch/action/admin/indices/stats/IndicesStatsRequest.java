@@ -270,6 +270,15 @@ public class IndicesStatsRequest extends BroadcastRequest<IndicesStatsRequest> {
         return this;
     }
 
+    public IndicesStatsRequest writeLoad(boolean writeLoad) {
+        flags.set(Flag.WriteLoad, writeLoad);
+        return this;
+    }
+
+    public boolean writeLoad() {
+        return flags.isSet(Flag.WriteLoad);
+    }
+
     @Override
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);

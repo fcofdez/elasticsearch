@@ -179,8 +179,7 @@ public class CommonStats implements Writeable, ToXContentFragment {
                     case Shards ->
                         // Setting to 1 because the single IndexShard passed to this method implies 1 shard
                         stats.shards = new ShardCountStats(1);
-                    case WriteLoad ->
-                        stats.writeLoadStats = indexShard.writeLoadStats();
+                    case WriteLoad -> stats.writeLoadStats = indexShard.writeLoadStats();
                     default -> throw new IllegalStateException("Unknown or invalid flag for shard-level stats: " + flag);
                 }
             } catch (AlreadyClosedException e) {

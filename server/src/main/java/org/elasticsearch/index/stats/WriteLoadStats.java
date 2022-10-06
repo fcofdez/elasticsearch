@@ -18,6 +18,8 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import java.io.IOException;
 
 public class WriteLoadStats implements Writeable, ToXContentFragment {
+    private static final String WRITE_LOAD_FIELD = "write_load";
+    private static final String MEAN_FIELD = "mean";
     private final DoubleMean writeLoadMean;
 
     public WriteLoadStats() {
@@ -45,11 +47,14 @@ public class WriteLoadStats implements Writeable, ToXContentFragment {
         if (other == null) {
             return this;
         }
-        return this;
+        return new WriteLoadStats(writeLoadMean.add(other.writeLoadMean));
     }
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+        builder.startObject(WRITE_LOAD_FIELD);
+        builder.field(MEAN_FIELD, writeLoadMean.mean());
+        builder.endObject();
         return builder;
     }
 }

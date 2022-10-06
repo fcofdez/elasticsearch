@@ -38,4 +38,8 @@ public class DoubleMean implements Writeable {
     public double mean() {
         return count == 0 ? 0 : sum / count;
     }
+
+    public DoubleMean add(DoubleMean other) {
+        return new DoubleMean(sum + other.sum, Math.addExact(count, other.count));
+    }
 }
