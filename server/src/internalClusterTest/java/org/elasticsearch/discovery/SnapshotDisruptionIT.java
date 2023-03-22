@@ -21,21 +21,32 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.plugins.Plugin;
+import org.elasticsearch.repositories.RepositoriesService;
+import org.elasticsearch.repositories.Repository;
 import org.elasticsearch.snapshots.AbstractSnapshotIntegTestCase;
 import org.elasticsearch.snapshots.SnapshotException;
 import org.elasticsearch.snapshots.SnapshotInfo;
 import org.elasticsearch.snapshots.SnapshotMissingException;
 import org.elasticsearch.snapshots.SnapshotState;
+import org.elasticsearch.snapshots.SnapshotsService;
+import org.elasticsearch.snapshots.UpdateIndexShardSnapshotStatusRequest;
 import org.elasticsearch.snapshots.mockstore.MockRepository;
+import org.elasticsearch.tasks.Task;
 import org.elasticsearch.test.ESIntegTestCase;
 import org.elasticsearch.test.disruption.NetworkDisruption;
 import org.elasticsearch.test.transport.MockTransportService;
+import org.elasticsearch.test.transport.StubbableTransport;
+import org.elasticsearch.transport.TransportChannel;
+import org.elasticsearch.transport.TransportRequest;
+import org.elasticsearch.transport.TransportRequestHandler;
+import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xcontent.json.JsonXContent;
 
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertFutureThrows;
@@ -60,6 +71,87 @@ public class SnapshotDisruptionIT extends AbstractSnapshotIntegTestCase {
             .put(super.nodeSettings(nodeOrdinal, otherSettings))
             .put(AbstractDisruptionTestCase.DEFAULT_SETTINGS)
             .build();
+    }
+
+    public void testDisruptionAfterAbort() throws Exception {
+        final String idxName = "test";
+        internalCluster().startMasterOnlyNodes(3);
+        final String dataNode = internalCluster().startDataOnlyNode();
+        ensureStableCluster(4);
+
+        createRandomIndex(idxName);
+
+        final String repoName = "test-repo";
+        createRepository(repoName, "mock");
+
+        final String masterNode1 = internalCluster().getMasterName();
+
+        MockTransportService transportService = (MockTransportService) internalCluster().getCurrentMasterNodeInstance(
+            TransportService.class
+        );
+        CountDownLatch failUpdateLatch = new CountDownLatch(1);
+
+        final AtomicBoolean failUpdateIndexShardStatusRequest = new AtomicBoolean();
+        transportService.addRequestHandlingBehavior(
+            SnapshotsService.UPDATE_SNAPSHOT_STATUS_ACTION_NAME,
+            (handler, request, channel, task) -> {
+                UpdateIndexShardSnapshotStatusRequest req = (UpdateIndexShardSnapshotStatusRequest) request;
+                if (req.shardId().getId() == 0 && failUpdateIndexShardStatusRequest.compareAndSet(true, false)) {
+                    channel.sendResponse(new RuntimeException("boom"));
+                    failUpdateLatch.countDown();
+                } else {
+                    handler.messageReceived(request, channel, task);
+                }
+            }
+        );
+
+        ClusterService clusterService = internalCluster().clusterService(masterNode1);
+        CountDownLatch disruptionStarted = new CountDownLatch(1);
+
+        clusterService.addListener(new ClusterStateListener() {
+            @Override
+            public void clusterChanged(ClusterChangedEvent event) {
+                SnapshotsInProgress snapshots = event.state().custom(SnapshotsInProgress.TYPE);
+                if (snapshots != null && snapshots.isEmpty() == false) {
+                    final SnapshotsInProgress.Entry snapshotEntry = snapshots.forRepo(repoName).get(0);
+                    if (snapshotEntry.state() == SnapshotsInProgress.State.STARTED) {
+                        blockDataNode(repoName, dataNode);
+                    }
+                    if (snapshotEntry.state() == SnapshotsInProgress.State.ABORTED) {
+                        failUpdateIndexShardStatusRequest.set(true);
+                        unblockNode(repoName, dataNode);
+                        disruptionStarted.countDown();
+                        clusterService.removeListener(this);
+                    }
+                }
+            }
+        });
+
+        final String snapshot = "test-snap";
+
+        logger.info("--> starting snapshot");
+        var firstSnapshotFuture = client(masterNode1).admin()
+            .cluster()
+            .prepareCreateSnapshot("test-repo", snapshot)
+            .setWaitForCompletion(true)
+            .setIndices(idxName)
+            .execute();
+
+        var deleteSnapshotFuture = client(masterNode1).admin().cluster().prepareDeleteSnapshot(repoName, snapshot).execute();
+
+        logger.info("--> waiting for disruption to start");
+        assertTrue(disruptionStarted.await(1, TimeUnit.MINUTES));
+
+        failUpdateLatch.await();
+
+        var secondSnapshotFuture = client(masterNode1).admin()
+            .cluster()
+            .prepareCreateSnapshot("test-repo", "test-snap-2")
+            .setWaitForCompletion(true)
+            .setIndices(idxName)
+            .execute();
+
+        awaitNoMoreRunningOperations(dataNode);
     }
 
     public void testDisruptionAfterFinalization() throws Exception {
