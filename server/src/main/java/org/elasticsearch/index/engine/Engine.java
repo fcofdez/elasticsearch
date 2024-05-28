@@ -560,7 +560,7 @@ public abstract class Engine implements Closeable {
             return id;
         }
 
-        void setTranslogLocation(Translog.Location translogLocation) {
+        public void setTranslogLocation(Translog.Location translogLocation) {
             if (freeze.get() == null) {
                 this.translogLocation = translogLocation;
             } else {
@@ -911,7 +911,7 @@ public abstract class Engine implements Closeable {
     }
 
     /** get commits stats for the last commit */
-    public final CommitStats commitStats() {
+    public CommitStats commitStats() {
         return new CommitStats(getLastCommittedSegmentInfos());
     }
 

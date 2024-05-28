@@ -1,0 +1,17 @@
+apply plugin: 'elasticsearch.internal-es-plugin'
+apply plugin: 'elasticsearch.internal-cluster-test'
+esplugin {
+  name 'kv-indices'
+  description 'A plugin for the kv indices functionality'
+  classname 'org.elasticsearch.xpack.kv.KVIndices'
+  extendedPlugins = ['x-pack-core']
+}
+base {
+  archivesName = 'x-pack-kv-indices'
+}
+
+dependencies {
+  compileOnly project(path: xpackModule('core'))
+  testImplementation(testArtifact(project(xpackModule('core'))))
+  api 'org.rocksdb:rocksdbjni:9.2.1'
+}

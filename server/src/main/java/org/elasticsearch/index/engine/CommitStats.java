@@ -37,6 +37,13 @@ public final class CommitStats implements Writeable, ToXContentFragment {
         numDocs = Lucene.getNumDocs(segmentInfos);
     }
 
+    public CommitStats(Map<String, String> userData, long generation, String id, int numDocs) {
+        this.userData = userData;
+        this.generation = generation;
+        this.id = id;
+        this.numDocs = numDocs;
+    }
+
     CommitStats(StreamInput in) throws IOException {
         userData = in.readImmutableMap(StreamInput::readString);
         generation = in.readLong();
