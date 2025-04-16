@@ -120,6 +120,7 @@ public class TransportBroadcastUnpromotableActionTests extends ESTestCase {
 
     private class TestTransportBroadcastUnpromotableAction extends TransportBroadcastUnpromotableAction<
         TestBroadcastUnpromotableRequest,
+        ActionResponse.Empty,
         ActionResponse.Empty> {
 
         TestTransportBroadcastUnpromotableAction(ShardStateAction shardStateAction) {
@@ -144,17 +145,17 @@ public class TransportBroadcastUnpromotableActionTests extends ESTestCase {
         }
 
         @Override
-        protected ActionResponse.Empty combineUnpromotableShardResponses(List<ActionResponse.Empty> empties) {
+        protected ActionResponse.Empty combineUnpromotableShardResponses(Map<String, ActionResponse.Empty> empties) {
             return ActionResponse.Empty.INSTANCE;
         }
 
         @Override
-        protected ActionResponse.Empty readResponse(StreamInput in) {
+        protected ActionResponse.Empty readUnpromotableResponse(StreamInput in) {
             return ActionResponse.Empty.INSTANCE;
         }
 
         @Override
-        protected ActionResponse.Empty emptyResponse() {
+        protected ActionResponse.Empty emptyUnpromotableResponse() {
             return ActionResponse.Empty.INSTANCE;
         }
     }
@@ -320,7 +321,6 @@ public class TransportBroadcastUnpromotableActionTests extends ESTestCase {
         }
         IndexShardRoutingTable wrongRoutingTable = wrongRoutingTableBuilder.build();
 
-        PlainActionFuture<ActionResponse.Empty> response = new PlainActionFuture<>();
         logger.debug("--> executing for wrong shard routing table: {}", wrongRoutingTable);
 
         // The request fails if we don't mark shards as stale

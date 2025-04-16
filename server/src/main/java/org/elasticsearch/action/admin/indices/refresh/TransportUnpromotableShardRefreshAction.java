@@ -29,7 +29,6 @@ import org.elasticsearch.tasks.Task;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -37,6 +36,7 @@ import static org.elasticsearch.cluster.metadata.IndexMetadata.INDEX_REFRESH_BLO
 
 public class TransportUnpromotableShardRefreshAction extends TransportBroadcastUnpromotableAction<
     UnpromotableShardRefreshRequest,
+    ActionResponse.Empty,
     ActionResponse.Empty> {
 
     public static final String NAME = "indices:admin/refresh/unpromotable";
@@ -164,17 +164,17 @@ public class TransportUnpromotableShardRefreshAction extends TransportBroadcastU
     }
 
     @Override
-    protected ActionResponse.Empty combineUnpromotableShardResponses(List<ActionResponse.Empty> empties) {
+    protected ActionResponse.Empty combineUnpromotableShardResponses(Map<String, ActionResponse.Empty> empties) {
         return ActionResponse.Empty.INSTANCE;
     }
 
     @Override
-    protected ActionResponse.Empty readResponse(StreamInput in) {
+    protected ActionResponse.Empty readUnpromotableResponse(StreamInput in) {
         return ActionResponse.Empty.INSTANCE;
     }
 
     @Override
-    protected ActionResponse.Empty emptyResponse() {
+    protected ActionResponse.Empty emptyUnpromotableResponse() {
         return ActionResponse.Empty.INSTANCE;
     }
 }
