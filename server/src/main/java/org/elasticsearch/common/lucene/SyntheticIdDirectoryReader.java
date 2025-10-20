@@ -48,7 +48,8 @@ public class SyntheticIdDirectoryReader extends FilterDirectoryReader {
         @Override
         public Terms terms(String field) throws IOException {
             if (IdFieldMapper.NAME.equals(field)) {
-                return SyntheticIdTerms.from(getDelegate());
+                LeafReader leafReader = getDelegate();
+                return BloomFilterIdTerms.from(SyntheticIdTerms.from(leafReader), leafReader);
             }
             return super.terms(field);
         }

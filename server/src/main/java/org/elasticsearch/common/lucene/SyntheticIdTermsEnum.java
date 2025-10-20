@@ -100,7 +100,7 @@ public class SyntheticIdTermsEnum extends BaseTermsEnum {
             return SeekStatus.END;
         }
 
-        // _id synthetic format = [timestamp(long), tsid]
+        // _id synthetic format = [size(tsid):int, tsid, timestamp]
         final byte[] idAsBytes = id.bytes;
         byte[] tsId = new byte[Math.toIntExact(id.length - Long.BYTES)];
         System.arraycopy(idAsBytes, Long.BYTES, tsId, 0, tsId.length);

@@ -10,6 +10,7 @@
 package org.elasticsearch.common.lucene;
 
 import org.apache.lucene.index.*;
+import org.elasticsearch.index.mapper.IdFieldMapper;
 import org.elasticsearch.index.mapper.TimeSeriesIdFieldMapper;
 
 import java.io.IOException;

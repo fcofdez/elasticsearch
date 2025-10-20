@@ -118,7 +118,7 @@ public class TsidExtractingIdFieldMapper extends IdFieldMapper {
         BytesRef uidEncoded = Uid.encodeId(context.id());
         if (isSyntheticId) {
             // Synthetic ids are not written to disk, but they must be hashed into the bloom filter (which is written to disk)
-            context.doc().add(syntheticIdField(uidEncoded));
+            //context.doc().add(syntheticIdField(uidEncoded));
         } else {
             context.doc().add(new StringField(NAME, uidEncoded, Field.Store.YES));
         }
@@ -135,7 +135,7 @@ public class TsidExtractingIdFieldMapper extends IdFieldMapper {
             fieldType.setIndexOptions(IndexOptions.DOCS);
             fieldType.setOmitNorms(true);
             fieldType.setTokenized(false);
-            fieldType.setStored(false);
+            fieldType.setStored(true);
             FIELD_TYPE = fieldType;
         }
 

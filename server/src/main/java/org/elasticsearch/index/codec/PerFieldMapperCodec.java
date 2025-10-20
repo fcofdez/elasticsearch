@@ -13,6 +13,7 @@ import org.apache.lucene.codecs.Codec;
 import org.apache.lucene.codecs.DocValuesFormat;
 import org.apache.lucene.codecs.KnnVectorsFormat;
 import org.apache.lucene.codecs.PostingsFormat;
+import org.apache.lucene.codecs.StoredFieldsFormat;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.index.codec.zstd.Zstd814StoredFieldsFormat;
@@ -32,7 +33,8 @@ public final class PerFieldMapperCodec extends Elasticsearch92Lucene103Codec {
 
     public PerFieldMapperCodec(Zstd814StoredFieldsFormat.Mode compressionMode, MapperService mapperService, BigArrays bigArrays) {
         super(compressionMode);
-        this.formatSupplier = new PerFieldFormatSupplier(mapperService, bigArrays);
+        // TODO: improve this wiring
+        this.formatSupplier = new PerFieldFormatSupplier(mapperService, bigArrays, compressionMode.getFormat());
         // If the below assertion fails, it is a sign that Lucene released a new codec. You must create a copy of the current Elasticsearch
         // codec that delegates to this new Lucene codec, and make PerFieldMapperCodec extend this new Elasticsearch codec.
         assert Codec.forName(Lucene.LATEST_CODEC).getClass() == delegate.getClass()
@@ -54,4 +56,8 @@ public final class PerFieldMapperCodec extends Elasticsearch92Lucene103Codec {
         return formatSupplier.getDocValuesFormatForField(field);
     }
 
+    @Override
+    public StoredFieldsFormat storedFieldsFormat() {
+        return formatSupplier.getStoredFieldsFormatForField();
+    }
 }

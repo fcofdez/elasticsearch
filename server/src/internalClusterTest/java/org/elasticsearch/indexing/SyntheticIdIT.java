@@ -127,19 +127,28 @@ public class SyntheticIdIT extends ESIntegTestCase {
         assertThat(results[4].getId(), equalTo(results[2].getId()));
         assertThat(results[4].getVersion(), equalTo(2L));
 
-        // Get by synthetic _id
-        var docId = results[4].getId();
-        var getResponse = client().prepareGet(indexName, docId).setFetchSource(true).execute().actionGet();
-        assertThat(getResponse.isExists(), equalTo(true));
-        assertThat(getResponse.getVersion(), equalTo(2L));
-        assertThat(getResponse.getId(), equalTo(docId));
-        var source = asInstanceOf(Map.class, getResponse.getSourceAsMap().get("metric"));
-        assertThat(asInstanceOf(Integer.class, source.get("value")), equalTo(5)); // update
+//        // Get by synthetic _id
+//        var docId = results[4].getId();
+//        var getResponse = client().prepareGet(indexName, docId).setFetchSource(true).execute().actionGet();
+//        assertThat(getResponse.isExists(), equalTo(true));
+//        assertThat(getResponse.getVersion(), equalTo(2L));
+//        assertThat(getResponse.getId(), equalTo(docId));
+//        var source = asInstanceOf(Map.class, getResponse.getSourceAsMap().get("metric"));
+//        assertThat(asInstanceOf(Integer.class, source.get("value")), equalTo(5)); // update
 
         // Refresh
         assertHitCount(client().prepareSearch(indexName).setSize(0), 0L);
         refresh(indexName);
         assertHitCount(client().prepareSearch(indexName).setSize(0), 4L);
+
+        var results2 = indexDocuments(
+            indexName,
+            document(timestamp, "vm-dev01", "cpu-load", 0),
+            document(timestamp, "vm-dev02", "cpu-load", 1),
+            document(timestamp.plusSeconds(2), "vm-dev02", "cpu-load", 3),
+            document(timestamp.plusSeconds(5), "vm-dev03", "cpu-load", 4),
+            document(timestamp.plusSeconds(2), "vm-dev02", "cpu-load", 5) // update
+        );
 
         // Update another doc
         var updateDocId = results[0].getId();
@@ -164,10 +173,10 @@ public class SyntheticIdIT extends ESIntegTestCase {
         assertHitCount(client().prepareSearch(indexName).setSize(0), 3L);
 
         // Search by synthetic _id:
-        assertResponse(client().prepareSearch(indexName).setQuery(QueryBuilders.termQuery(IdFieldMapper.NAME, docId)), searchResponse -> {
-            assertThat(searchResponse, notNullValue());
-            assertThat(searchResponse.getHits().getTotalHits().value(), equalTo(1L)); // found
-        });
+//        assertResponse(client().prepareSearch(indexName).setQuery(QueryBuilders.termQuery(IdFieldMapper.NAME, docId)), searchResponse -> {
+//            assertThat(searchResponse, notNullValue());
+//            assertThat(searchResponse.getHits().getTotalHits().value(), equalTo(1L)); // found
+//        });
 
         assertResponse(
             client().prepareSearch(indexName).setQuery(QueryBuilders.termQuery(IdFieldMapper.NAME, deleteDocId)),

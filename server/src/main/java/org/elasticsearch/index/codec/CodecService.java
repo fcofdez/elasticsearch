@@ -101,7 +101,7 @@ public class CodecService implements CodecProvider {
         }
 
         @Override
-        public final FieldInfosFormat fieldInfosFormat() {
+        public FieldInfosFormat fieldInfosFormat() {
             return deduplicatingFieldInfosFormat;
         }
 

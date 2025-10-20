@@ -10,8 +10,7 @@
 package org.elasticsearch.index.codec;
 
 import org.apache.lucene.codecs.DocValuesFormat;
-import org.apache.lucene.codecs.FieldsConsumer;
-import org.apache.lucene.codecs.FieldsProducer;
+import org.apache.lucene.codecs.FieldInfosFormat;
 import org.apache.lucene.codecs.KnnVectorsFormat;
 import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.codecs.StoredFieldsFormat;
@@ -21,12 +20,27 @@ import org.apache.lucene.codecs.lucene90.Lucene90DocValuesFormat;
 import org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsFormat;
 import org.apache.lucene.codecs.perfield.PerFieldKnnVectorsFormat;
 import org.apache.lucene.codecs.perfield.PerFieldPostingsFormat;
-import org.apache.lucene.index.SegmentReadState;
-import org.apache.lucene.index.SegmentWriteState;
+import org.apache.lucene.index.DocValuesSkipIndexType;
+import org.apache.lucene.index.DocValuesType;
+import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.FieldInfos;
+import org.apache.lucene.index.IndexOptions;
+import org.apache.lucene.index.SegmentInfo;
+import org.apache.lucene.index.VectorEncoding;
+import org.apache.lucene.index.VectorSimilarityFunction;
+import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.IOContext;
 import org.elasticsearch.index.codec.perfield.XPerFieldDocValuesFormat;
 import org.elasticsearch.index.codec.zstd.Zstd814StoredFieldsFormat;
+import org.elasticsearch.index.mapper.IdFieldMapper;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.apache.lucene.codecs.perfield.PerFieldPostingsFormat.PER_FIELD_FORMAT_KEY;
+import static org.apache.lucene.codecs.perfield.PerFieldPostingsFormat.PER_FIELD_SUFFIX_KEY;
 
 /**
  * Elasticsearch codec as of 9.2 relying on Lucene 10.3. This extends the Lucene 10.3 codec to compressed
@@ -136,4 +150,65 @@ public class Elasticsearch92Lucene103Codec extends CodecService.DeduplicateField
         return defaultKnnVectorsFormat;
     }
 
+    @Override
+    public final FieldInfosFormat fieldInfosFormat() {
+        return new FakeIdFieldInfosFormat(super.fieldInfosFormat());
+    }
+
+    static class FakeIdFieldInfosFormat extends FieldInfosFormat {
+        private final FieldInfosFormat delegate;
+
+        FakeIdFieldInfosFormat(FieldInfosFormat delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public FieldInfos read(Directory directory, SegmentInfo segmentInfo, String segmentSuffix, IOContext iocontext) throws IOException {
+            var fieldInfos = delegate.read(directory, segmentInfo, segmentSuffix, iocontext);
+            if (fieldInfos.fieldInfo(IdFieldMapper.NAME) != null) {
+                return fieldInfos;
+            }
+
+            FieldInfo[] fieldInfosArray = new FieldInfo[fieldInfos.size() + 1];
+            for (FieldInfo fieldInfo : fieldInfos) {
+                fieldInfosArray[fieldInfo.getFieldNumber()] = fieldInfo;
+            }
+
+            Map<String, String> attributes = new HashMap<>();
+            if (segmentInfo.getCodec() instanceof PerFieldMapperCodec codec) {
+                var postingsFormat = ES93DelegatingPostingsFormat.FORMAT_NAME;
+
+                attributes.put(PER_FIELD_FORMAT_KEY, postingsFormat);
+                attributes.put(PER_FIELD_SUFFIX_KEY, Integer.toString(0));
+            }
+
+            fieldInfosArray[fieldInfosArray.length - 1] = new FieldInfo(
+                IdFieldMapper.NAME,
+                fieldInfosArray.length - 1,
+                false,
+                false,
+                false,
+                IndexOptions.DOCS,
+                DocValuesType.NONE,
+                DocValuesSkipIndexType.NONE,
+                -1,
+                attributes,
+                0,
+                0,
+                0,
+                0,
+                VectorEncoding.FLOAT32,
+                VectorSimilarityFunction.EUCLIDEAN,
+                false,
+                false
+            );
+            return new FieldInfos(fieldInfosArray);
+        }
+
+        @Override
+        public void write(Directory directory, SegmentInfo segmentInfo, String segmentSuffix, FieldInfos infos, IOContext context)
+            throws IOException {
+            delegate.write(directory, segmentInfo, segmentSuffix, infos, context);
+        }
+    }
 }

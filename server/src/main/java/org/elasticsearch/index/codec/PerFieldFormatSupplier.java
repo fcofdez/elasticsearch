@@ -12,13 +12,17 @@ package org.elasticsearch.index.codec;
 import org.apache.lucene.codecs.DocValuesFormat;
 import org.apache.lucene.codecs.KnnVectorsFormat;
 import org.apache.lucene.codecs.PostingsFormat;
+import org.apache.lucene.codecs.StoredFieldsFormat;
 import org.apache.lucene.codecs.lucene90.Lucene90DocValuesFormat;
 import org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsFormat;
 import org.elasticsearch.common.util.BigArrays;
+import org.elasticsearch.common.util.FeatureFlag;
 import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.index.codec.bloomfilter.ES87BloomFilterPostingsFormat;
+import org.elasticsearch.index.codec.bloomfilter.ES93BloomFilterStoredFieldsFormat;
+import org.elasticsearch.index.codec.bloomfilter.IdBloomFilterDelegatingStoredFieldsFormat;
 import org.elasticsearch.index.codec.postings.ES812PostingsFormat;
 import org.elasticsearch.index.codec.tsdb.es819.ES819TSDBDocValuesFormat;
 import org.elasticsearch.index.mapper.CompletionFieldMapper;
@@ -39,6 +43,8 @@ import java.util.Set;
  * vectors.
  */
 public class PerFieldFormatSupplier {
+
+    public static FeatureFlag ID_STORED_FIELD_BLOOM_FILTER_FEATURE_FLAG = new FeatureFlag("id_stored_field_bloom_filter");
 
     private static final Set<String> INCLUDE_META_FIELDS;
 
@@ -62,16 +68,30 @@ public class PerFieldFormatSupplier {
     private static final PostingsFormat completionPostingsFormat = PostingsFormat.forName("Completion101");
 
     private final ES87BloomFilterPostingsFormat bloomFilterPostingsFormat;
+    private final ES93DelegatingPostingsFormat es93DelegatingPostingsFormat;
     private final MapperService mapperService;
 
     private final PostingsFormat defaultPostingsFormat;
+    private final StoredFieldsFormat defaultStoredFieldsFormat;
+    private final StoredFieldsFormat bloomFilterStoredFieldsFormat;
+
 
     public PerFieldFormatSupplier(MapperService mapperService, BigArrays bigArrays) {
+        this(mapperService, bigArrays, null);
+    }
+
+    public PerFieldFormatSupplier(MapperService mapperService, BigArrays bigArrays, StoredFieldsFormat defaultStoredFieldsFormat) {
         this.mapperService = mapperService;
         this.bloomFilterPostingsFormat = new ES87BloomFilterPostingsFormat(
             bigArrays,
             this::internalGetPostingsFormatForField,
             mapperService != null && mapperService.getIndexSettings().useSyntheticId()
+        );
+        this.es93DelegatingPostingsFormat = new ES93DelegatingPostingsFormat();
+        this.defaultStoredFieldsFormat = defaultStoredFieldsFormat;
+        this.bloomFilterStoredFieldsFormat = new IdBloomFilterDelegatingStoredFieldsFormat(
+            defaultStoredFieldsFormat,
+            new ES93BloomFilterStoredFieldsFormat(bigArrays, "suffix")
         );
 
         if (mapperService != null
@@ -88,7 +108,19 @@ public class PerFieldFormatSupplier {
         if (useBloomFilter(field)) {
             return bloomFilterPostingsFormat;
         }
+
         return internalGetPostingsFormatForField(field);
+    }
+
+    public StoredFieldsFormat getStoredFieldsFormatForField() {
+        IndexSettings indexSettings = mapperService.getIndexSettings();
+        if (mapperService.mappingLookup().isDataStreamTimestampFieldEnabled()
+            && indexSettings.getMode() == IndexMode.TIME_SERIES
+            && ID_STORED_FIELD_BLOOM_FILTER_FEATURE_FLAG.isEnabled()) {
+            return bloomFilterStoredFieldsFormat;
+        }
+
+        return defaultStoredFieldsFormat;
     }
 
     private PostingsFormat internalGetPostingsFormatForField(String field) {
