@@ -27,6 +27,7 @@ import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
 import org.apache.lucene.store.RandomAccessInput;
 import org.apache.lucene.util.BytesRef;
+import org.elasticsearch.common.CheckedSupplier;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.lucene.store.IndexOutputOutputStream;
 import org.elasticsearch.common.unit.ByteSizeValue;
@@ -119,7 +120,7 @@ public class ES93BloomFilterStoredFieldsFormat extends StoredFieldsFormat {
 
     @Override
     public StoredFieldsReader fieldsReader(Directory directory, SegmentInfo si, FieldInfos fn, IOContext context) throws IOException {
-        return new Reader(directory, si, fn, context, segmentSuffix, delegate.fieldsReader(directory, si, fn, context));
+        return new Reader(directory, si, fn, context, segmentSuffix, () -> delegate.fieldsReader(directory, si, fn, context));
     }
 
     @Override
@@ -338,10 +339,11 @@ public class ES93BloomFilterStoredFieldsFormat extends StoredFieldsFormat {
         }
     }
 
-    private static class Reader extends StoredFieldsReader implements BloomFilterProvider {
+    private static class Reader extends StoredFieldsReader implements BloomFilter {
         @Nullable
         private final BloomFilterFieldReader bloomFilterFieldReader;
-        private final StoredFieldsReader delegateReader;
+        private StoredFieldsReader delegateReader;
+        private final CheckedSupplier<StoredFieldsReader, IOException> delegateReaderSupplier;
 
         Reader(
             Directory directory,
@@ -349,18 +351,10 @@ public class ES93BloomFilterStoredFieldsFormat extends StoredFieldsFormat {
             FieldInfos fn,
             IOContext context,
             String segmentSuffix,
-            StoredFieldsReader delegateReader
+            CheckedSupplier<StoredFieldsReader, IOException> delegateReaderSupplier
         ) throws IOException {
-            this.delegateReader = delegateReader;
-            var success = false;
-            try {
-                bloomFilterFieldReader = BloomFilterFieldReader.open(directory, si, fn, context, segmentSuffix);
-                success = true;
-            } finally {
-                if (success == false) {
-                    delegateReader.close();
-                }
-            }
+            this.delegateReaderSupplier = delegateReaderSupplier;
+            bloomFilterFieldReader = BloomFilterFieldReader.open(directory, si, fn, context, segmentSuffix);
         }
 
         @Override
@@ -373,7 +367,9 @@ public class ES93BloomFilterStoredFieldsFormat extends StoredFieldsFormat {
             if (bloomFilterFieldReader != null) {
                 bloomFilterFieldReader.checkIntegrity();
             }
-            delegateReader.checkIntegrity();
+            if (delegateReader != null) {
+                delegateReader.checkIntegrity();
+            }
         }
 
         @Override
@@ -383,12 +379,25 @@ public class ES93BloomFilterStoredFieldsFormat extends StoredFieldsFormat {
 
         @Override
         public void document(int docID, StoredFieldVisitor visitor) throws IOException {
-            delegateReader.document(docID, visitor);
+            getDelegate().document(docID, visitor);
         }
 
         @Override
-        public BloomFilter getBloomFilter() throws IOException {
-            return bloomFilterFieldReader;
+        public boolean mayContainTerm(String field, BytesRef term) throws IOException {
+            return isFilterAvailable() == false || bloomFilterFieldReader.mayContainTerm(field, term);
+        }
+
+        @Override
+        public boolean isFilterAvailable() {
+            return bloomFilterFieldReader != null;
+        }
+
+        private StoredFieldsReader getDelegate() throws IOException {
+            if (delegateReader == null) {
+                // If we throw here we expect consumers to close the Reader
+                delegateReader = delegateReaderSupplier.get();
+            }
+            return delegateReader;
         }
     }
 
@@ -418,7 +427,7 @@ public class ES93BloomFilterStoredFieldsFormat extends StoredFieldsFormat {
         }
     }
 
-    static class BloomFilterFieldReader implements BloomFilter {
+    static class BloomFilterFieldReader implements Closeable {
         private final FieldInfo fieldInfo;
         private final IndexInput bloomFilterData;
         private final RandomAccessInput bloomFilterIn;
@@ -495,7 +504,7 @@ public class ES93BloomFilterStoredFieldsFormat extends StoredFieldsFormat {
             this.bloomFilterData = bloomFilterData;
         }
 
-        public boolean mayContainTerm(String field, BytesRef term) throws IOException {
+        boolean mayContainTerm(String field, BytesRef term) throws IOException {
             assert fieldInfo.getName().equals(field);
 
             var termHashes = hashTerm(term, hashes);
@@ -545,21 +554,5 @@ public class ES93BloomFilterStoredFieldsFormat extends StoredFieldsFormat {
 
     private static String bloomFilterFileName(SegmentInfo segmentInfo, String segmentSuffix) {
         return IndexFileNames.segmentFileName(segmentInfo.name, segmentSuffix, STORED_FIELDS_BLOOM_FILTER_EXTENSION);
-    }
-
-    public interface BloomFilter extends Closeable {
-        /**
-         * Tests whether the given term may exist in the specified field.
-         *
-         * @param field the field name to check
-         * @param term the term to test for membership
-         * @return true if term may be present, false if definitely absent
-         */
-        boolean mayContainTerm(String field, BytesRef term) throws IOException;
-    }
-
-    public interface BloomFilterProvider extends Closeable {
-        @Nullable
-        BloomFilter getBloomFilter() throws IOException;
     }
 }

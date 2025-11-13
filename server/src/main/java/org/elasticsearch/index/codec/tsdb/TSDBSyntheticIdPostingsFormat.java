@@ -13,9 +13,12 @@ import org.apache.lucene.codecs.DocValuesProducer;
 import org.apache.lucene.codecs.FieldsConsumer;
 import org.apache.lucene.codecs.FieldsProducer;
 import org.apache.lucene.codecs.PostingsFormat;
+import org.apache.lucene.codecs.StoredFieldsReader;
 import org.apache.lucene.index.SegmentReadState;
 import org.apache.lucene.index.SegmentWriteState;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.index.codec.bloomfilter.BloomFilter;
+import org.elasticsearch.index.codec.bloomfilter.BloomFilterFieldsProducer;
 import org.elasticsearch.index.mapper.DataStreamTimestampFieldMapper;
 import org.elasticsearch.index.mapper.SyntheticIdField;
 import org.elasticsearch.index.mapper.TimeSeriesIdFieldMapper;
@@ -40,17 +43,32 @@ public class TSDBSyntheticIdPostingsFormat extends PostingsFormat {
     @Override
     public FieldsProducer fieldsProducer(SegmentReadState state) throws IOException {
         DocValuesProducer docValuesProducer = null;
+        StoredFieldsReader storedFieldsReader = null;
         boolean success = false;
         try {
             var codec = state.segmentInfo.getCodec();
+            storedFieldsReader = codec.storedFieldsFormat()
+                .fieldsReader(state.directory, state.segmentInfo, state.fieldInfos, state.context);
+
+            BloomFilter bloomFilter = null;
+            if (storedFieldsReader instanceof BloomFilter filter && filter.isFilterAvailable()) {
+                bloomFilter = filter;
+            } else {
+                storedFieldsReader.close();
+            }
+
             // Erase the segment suffix (used only for reading postings)
             docValuesProducer = codec.docValuesFormat().fieldsProducer(new SegmentReadState(state, ""));
             var fieldsProducer = new TSDBSyntheticIdFieldsProducer(state, docValuesProducer);
             success = true;
-            return fieldsProducer;
+            if (bloomFilter != null) {
+                return new BloomFilterFieldsProducer(fieldsProducer, bloomFilter);
+            } else {
+                return fieldsProducer;
+            }
         } finally {
             if (success == false) {
-                IOUtils.close(docValuesProducer);
+                IOUtils.close(docValuesProducer, storedFieldsReader);
             }
         }
     }

@@ -105,8 +105,7 @@ public class ES93BloomFilterStoredFieldsFormatTests extends BaseStoredFieldsForm
 
                 try (var directoryReader = StandardDirectoryReader.open(writer)) {
                     for (LeafReaderContext leaf : directoryReader.leaves()) {
-                        try (ES93BloomFilterStoredFieldsFormat.BloomFilterProvider fieldReader = getBloomFilterProvider(leaf)) {
-                            var bloomFilter = fieldReader.getBloomFilter();
+                        try (BloomFilter bloomFilter = getBloomFilterProvider(leaf)) {
                             // the bloom filter reader is null only if the _id field is not stored during indexing
                             assertThat(bloomFilter, is(not(nullValue())));
 
@@ -138,8 +137,7 @@ public class ES93BloomFilterStoredFieldsFormatTests extends BaseStoredFieldsForm
         return new BytesRef(random.getBytes(StandardCharsets.UTF_8));
     }
 
-    private ES93BloomFilterStoredFieldsFormat.BloomFilterProvider getBloomFilterProvider(LeafReaderContext leafReaderContext)
-        throws IOException {
+    private BloomFilter getBloomFilterProvider(LeafReaderContext leafReaderContext) throws IOException {
         LeafReader reader = leafReaderContext.reader();
         var fieldInfos = reader.getFieldInfos();
         assertThat(reader, is(instanceOf(SegmentReader.class)));
@@ -147,7 +145,7 @@ public class ES93BloomFilterStoredFieldsFormatTests extends BaseStoredFieldsForm
         SegmentInfo si = segmentReader.getSegmentInfo().info;
 
         var storedFieldsReader = si.getCodec().storedFieldsFormat().fieldsReader(si.dir, si, fieldInfos, IOContext.DEFAULT);
-        assertThat(storedFieldsReader, is(instanceOf(ES93BloomFilterStoredFieldsFormat.BloomFilterProvider.class)));
-        return ((ES93BloomFilterStoredFieldsFormat.BloomFilterProvider) storedFieldsReader);
+        assertThat(storedFieldsReader, is(instanceOf(BloomFilter.class)));
+        return ((BloomFilter) storedFieldsReader);
     }
 }
