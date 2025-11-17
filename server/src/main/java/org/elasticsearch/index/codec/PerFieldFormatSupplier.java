@@ -14,12 +14,16 @@ import org.apache.lucene.codecs.KnnVectorsFormat;
 import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.codecs.lucene90.Lucene90DocValuesFormat;
 import org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsFormat;
+import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.index.codec.bloomfilter.ES87BloomFilterPostingsFormat;
+import org.elasticsearch.index.codec.bloomfilter.ES93BloomFilterStoredFieldsFormat;
 import org.elasticsearch.index.codec.postings.ES812PostingsFormat;
+import org.elasticsearch.index.codec.storedfields.ESStoredFieldsFormat;
 import org.elasticsearch.index.codec.tsdb.es819.ES819TSDBDocValuesFormat;
 import org.elasticsearch.index.mapper.CompletionFieldMapper;
 import org.elasticsearch.index.mapper.IdFieldMapper;
@@ -66,7 +70,18 @@ public class PerFieldFormatSupplier {
 
     private final PostingsFormat defaultPostingsFormat;
 
+    private final ES93BloomFilterStoredFieldsFormat bloomFilterStoredFieldsFormat;
+    private final ESStoredFieldsFormat defaultStoredFieldsFormat;
+
     public PerFieldFormatSupplier(MapperService mapperService, BigArrays bigArrays) {
+        this(mapperService, bigArrays, null);
+    }
+
+    public PerFieldFormatSupplier(
+        MapperService mapperService,
+        BigArrays bigArrays,
+        @Nullable ESStoredFieldsFormat defaultStoredFieldsFormat
+    ) {
         this.mapperService = mapperService;
         this.bloomFilterPostingsFormat = new ES87BloomFilterPostingsFormat(bigArrays, this::internalGetPostingsFormatForField);
 
@@ -78,6 +93,10 @@ public class PerFieldFormatSupplier {
             // our own posting format using PFOR
             defaultPostingsFormat = es812PostingsFormat;
         }
+
+        // TODO: assert when the default is null
+        this.bloomFilterStoredFieldsFormat = new ES93BloomFilterStoredFieldsFormat(bigArrays, ByteSizeValue.ofKb(2), IdFieldMapper.NAME);
+        this.defaultStoredFieldsFormat = defaultStoredFieldsFormat;
     }
 
     public PostingsFormat getPostingsFormatForField(String field) {
@@ -131,6 +150,19 @@ public class PerFieldFormatSupplier {
             return tsdbDocValuesFormat;
         }
         return docValuesFormat;
+    }
+
+    public ESStoredFieldsFormat getStoredFieldsFormatForField(String field) {
+        if (useStoredFieldsBloomFilter(field)) {
+            return bloomFilterStoredFieldsFormat;
+        }
+        return defaultStoredFieldsFormat;
+    }
+
+    private boolean useStoredFieldsBloomFilter(String field) {
+        return field.equals(IdFieldMapper.NAME)
+            && mapperService != null
+            && mapperService.getIndexSettings().useStoredFieldsBloomFilterForId();
     }
 
     boolean useTSDBDocValuesFormat(final String field) {

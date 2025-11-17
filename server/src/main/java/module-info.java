@@ -245,6 +245,7 @@ module org.elasticsearch.server {
     exports org.elasticsearch.index.codec;
     exports org.elasticsearch.index.codec.tsdb;
     exports org.elasticsearch.index.codec.bloomfilter;
+    exports org.elasticsearch.index.codec.storedfields;
     exports org.elasticsearch.index.codec.zstd;
     exports org.elasticsearch.index.engine;
     exports org.elasticsearch.index.fielddata;
@@ -468,6 +469,11 @@ module org.elasticsearch.server {
             org.elasticsearch.index.codec.vectors.es93.ES93BinaryQuantizedVectorsFormat,
             org.elasticsearch.index.codec.vectors.es93.ES93HnswVectorsFormat,
             org.elasticsearch.index.codec.vectors.es93.ES93HnswBinaryQuantizedVectorsFormat;
+    provides org.elasticsearch.index.codec.storedfields.ESStoredFieldsFormat
+        with
+            org.elasticsearch.index.codec.storedfields.ESZstd814StoredFieldsFormat,
+            org.elasticsearch.index.codec.storedfields.ESLucene90StoredFieldsFormat,
+            org.elasticsearch.index.codec.bloomfilter.ES93BloomFilterStoredFieldsFormat;
 
     provides org.apache.lucene.codecs.Codec
         with
@@ -475,7 +481,11 @@ module org.elasticsearch.server {
             org.elasticsearch.index.codec.Elasticsearch816Codec,
             org.elasticsearch.index.codec.Elasticsearch900Codec,
             org.elasticsearch.index.codec.Elasticsearch900Lucene101Codec,
-            org.elasticsearch.index.codec.Elasticsearch92Lucene103Codec;
+            org.elasticsearch.index.codec.Elasticsearch92Lucene103Codec,
+            org.elasticsearch.index.codec.Elasticsearch93DefaultCompressionLucene103,
+            org.elasticsearch.index.codec.Elasticsearch93ZstdCompressionLucene103Codec;
+
+    uses org.elasticsearch.index.codec.storedfields.ESStoredFieldsFormat;
 
     provides org.apache.logging.log4j.core.util.ContextDataProvider with org.elasticsearch.common.logging.DynamicContextDataProvider;
 

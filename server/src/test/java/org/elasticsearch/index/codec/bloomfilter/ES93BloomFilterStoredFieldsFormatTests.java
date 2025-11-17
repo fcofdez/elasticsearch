@@ -30,12 +30,12 @@ import org.apache.lucene.store.IOContext;
 import org.apache.lucene.tests.analysis.MockAnalyzer;
 import org.apache.lucene.tests.codecs.asserting.AssertingCodec;
 import org.apache.lucene.tests.index.BaseStoredFieldsFormatTestCase;
-import org.apache.lucene.tests.util.TestUtil;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.UUIDs;
 import org.elasticsearch.common.logging.LogConfigurator;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
+import org.elasticsearch.index.codec.storedfields.ESStoredFieldsFormat;
 import org.elasticsearch.index.mapper.IdFieldMapper;
 
 import java.io.IOException;
@@ -64,8 +64,6 @@ public class ES93BloomFilterStoredFieldsFormatTests extends BaseStoredFieldsForm
                 var bloomFilterSizeInKb = atLeast(2);
                 return new ES93BloomFilterStoredFieldsFormat(
                     BigArrays.NON_RECYCLING_INSTANCE,
-                    "",
-                    TestUtil.getDefaultCodec().storedFieldsFormat(),
                     ByteSizeValue.ofKb(bloomFilterSizeInKb),
                     IdFieldMapper.NAME
                 );
@@ -79,6 +77,7 @@ public class ES93BloomFilterStoredFieldsFormatTests extends BaseStoredFieldsForm
     }
 
     public void testBloomFilterFieldIsNotStoredAndBloomFilterCanBeChecked() throws IOException {
+        var x = ESStoredFieldsFormat.forName("ESZstd814StoredFieldsFormat");
         try (var directory = newDirectory()) {
             Analyzer analyzer = new MockAnalyzer(random());
             IndexWriterConfig conf = newIndexWriterConfig(analyzer);
@@ -112,8 +111,6 @@ public class ES93BloomFilterStoredFieldsFormatTests extends BaseStoredFieldsForm
                     var bloomFilterSizeInKb = atLeast(2);
                     return new ES93BloomFilterStoredFieldsFormat(
                         BigArrays.NON_RECYCLING_INSTANCE,
-                        "",
-                        TestUtil.getDefaultCodec().storedFieldsFormat(),
                         ByteSizeValue.ofKb(bloomFilterSizeInKb),
                         IdFieldMapper.NAME
                     ) {
@@ -204,8 +201,7 @@ public class ES93BloomFilterStoredFieldsFormatTests extends BaseStoredFieldsForm
         return new BytesRef(random.getBytes(StandardCharsets.UTF_8));
     }
 
-    private BloomFilter getBloomFilterProvider(LeafReaderContext leafReaderContext)
-        throws IOException {
+    private BloomFilter getBloomFilterProvider(LeafReaderContext leafReaderContext) throws IOException {
         LeafReader reader = leafReaderContext.reader();
         var fieldInfos = reader.getFieldInfos();
         assertThat(reader, is(instanceOf(SegmentReader.class)));
