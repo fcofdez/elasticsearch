@@ -24,10 +24,14 @@ import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.util.set.Sets;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.core.Nullable;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -126,11 +130,39 @@ public abstract class PerFieldStoredFieldsFormat extends StoredFieldsFormat {
 
         @Override
         public int merge(MergeState mergeState) throws IOException {
-            // TODO: filter out segment readers per format
-            for (var writerAndExtensions : formatWriters.values()) {
-                writerAndExtensions.writer().merge(mergeState);
+            Map<StoredFieldsWriter, Set<String>> writersToFields = new IdentityHashMap<>();
+            for (FieldInfo mergeFieldInfo : mergeState.mergeFieldInfos) {
+                StoredFieldsWriter writer = getWriterForField(mergeFieldInfo);
+                var fieldsForWriter = writersToFields.computeIfAbsent(writer, ignored -> new HashSet<>());
+                fieldsForWriter.add(mergeFieldInfo.name);
             }
-            return 0;
+
+            var totalDocs = 0;
+            for (Map.Entry<StoredFieldsWriter, Set<String>> storedFieldsWriterToFields : writersToFields.entrySet()) {
+                totalDocs += storedFieldsWriterToFields.getKey().merge(restrictFields(mergeState, storedFieldsWriterToFields.getValue()));
+            }
+            return totalDocs;
+        }
+
+        private MergeState restrictFields(MergeState in, Set<String> fields) {
+            return new MergeState(
+                in.docMaps,
+                in.segmentInfo,
+                in.mergeFieldInfos,
+                in.storedFieldsReaders,
+                in.termVectorsReaders,
+                in.normsProducers,
+                in.docValuesProducers,
+                in.fieldInfos,
+                in.liveDocs,
+                in.fieldsProducers,
+                in.pointsReaders,
+                in.knnVectorsReaders,
+                in.maxDocs,
+                in.infoStream,
+                in.intraMergeTaskExecutor,
+                in.needsIndexSort
+            );
         }
 
         @Override
@@ -200,70 +232,90 @@ public abstract class PerFieldStoredFieldsFormat extends StoredFieldsFormat {
         }
     }
 
-    static class PerFieldStoredFieldsReader extends StoredFieldsReader {
-        private final Map<String, StoredFieldsReader> formats;
+    public static class PerFieldStoredFieldsReader extends StoredFieldsReader {
+        private final Map<String, StoredFieldsReader> formatStoredFieldReaders;
+        private final Map<String, StoredFieldsReader> perFieldStoredFieldReaders;
 
         PerFieldStoredFieldsReader(Directory directory, SegmentInfo si, FieldInfos fn, IOContext context) throws IOException {
-            this.formats = new HashMap<>();
+            HashMap<String, StoredFieldsReader> formatStoredFieldReaders = new HashMap<>();
+            HashMap<String, StoredFieldsReader> perFieldStoredFieldReaders = new HashMap<>();
             boolean success = false;
             try {
                 for (FieldInfo fi : fn) {
                     final String formatName = fi.getAttribute(STORED_FIELD_FORMAT_ATTRIBUTE_KEY);
                     if (formatName != null) {
-                        if (formats.get(formatName) == null) {
-                            StoredFieldsFormat format = ESStoredFieldsFormat.forName(formatName);
-                            var previous = formats.put(formatName, format.fieldsReader(directory, si, fn, context));
+                        var storedFieldsReader = formatStoredFieldReaders.get(formatName);
+                        if (storedFieldsReader == null) {
+                            ESStoredFieldsFormat format = ESStoredFieldsFormat.forName(formatName);
+                            storedFieldsReader = format.fieldsReader(directory, si, fn, context);
+                            var previous = formatStoredFieldReaders.put(formatName, storedFieldsReader);
                             assert previous == null;
                         }
+                        perFieldStoredFieldReaders.put(fi.name, storedFieldsReader);
                     }
                 }
                 success = true;
             } finally {
                 if (success == false) {
-                    IOUtils.close(formats.values());
+                    IOUtils.close(formatStoredFieldReaders.values());
                 }
             }
+            this.formatStoredFieldReaders = Collections.unmodifiableMap(formatStoredFieldReaders);
+            this.perFieldStoredFieldReaders = Collections.unmodifiableMap(perFieldStoredFieldReaders);
         }
 
-        PerFieldStoredFieldsReader(Map<String, StoredFieldsReader> formats) {
-            this.formats = formats;
+        PerFieldStoredFieldsReader(
+            Map<String, StoredFieldsReader> formatStoredFieldReaders,
+            Map<String, StoredFieldsReader> perFieldStoredFieldReaders
+        ) {
+            this.formatStoredFieldReaders = Collections.unmodifiableMap(formatStoredFieldReaders);
+            this.perFieldStoredFieldReaders = Collections.unmodifiableMap(perFieldStoredFieldReaders);
         }
 
         @Override
         public StoredFieldsReader clone() {
-            Map<String, StoredFieldsReader> clonedFormats = Maps.newMapWithExpectedSize(formats.size());
-            for (Map.Entry<String, StoredFieldsReader> entry : formats.entrySet()) {
+            Map<String, StoredFieldsReader> clonedFormats = Maps.newMapWithExpectedSize(formatStoredFieldReaders.size());
+            Map<String, StoredFieldsReader> clonedFields = Maps.newMapWithExpectedSize(perFieldStoredFieldReaders.size());
+            for (Map.Entry<String, StoredFieldsReader> entry : formatStoredFieldReaders.entrySet()) {
                 clonedFormats.put(entry.getKey(), entry.getValue().clone());
             }
-            return new PerFieldStoredFieldsReader(clonedFormats);
+            // TODO: fix this
+            return new PerFieldStoredFieldsReader(clonedFormats, Map.of());
         }
 
         @Override
         public StoredFieldsReader getMergeInstance() {
-            Map<String, StoredFieldsReader> mergeFormats = Maps.newMapWithExpectedSize(formats.size());
-            for (Map.Entry<String, StoredFieldsReader> entry : formats.entrySet()) {
+            Map<String, StoredFieldsReader> mergeFormats = Maps.newMapWithExpectedSize(formatStoredFieldReaders.size());
+            Map<String, StoredFieldsReader> clonedFields = Maps.newMapWithExpectedSize(perFieldStoredFieldReaders.size());
+            for (Map.Entry<String, StoredFieldsReader> entry : formatStoredFieldReaders.entrySet()) {
                 mergeFormats.put(entry.getKey(), entry.getValue().getMergeInstance());
             }
-            return new PerFieldStoredFieldsReader(mergeFormats);
+            // TODO: fix this
+            return new PerFieldStoredFieldsReader(mergeFormats, Map.of());
         }
 
         @Override
         public void checkIntegrity() throws IOException {
-            for (StoredFieldsReader storedFieldsReader : formats.values()) {
+            for (StoredFieldsReader storedFieldsReader : formatStoredFieldReaders.values()) {
                 storedFieldsReader.checkIntegrity();
             }
         }
 
         @Override
         public void close() throws IOException {
-            IOUtils.close(formats.values());
+            IOUtils.close(formatStoredFieldReaders.values());
         }
 
         @Override
         public void document(int docID, StoredFieldVisitor visitor) throws IOException {
-            for (StoredFieldsReader storedFieldsReader : formats.values()) {
+            for (StoredFieldsReader storedFieldsReader : formatStoredFieldReaders.values()) {
                 storedFieldsReader.document(docID, visitor);
             }
+        }
+
+        @Nullable
+        public StoredFieldsReader getReaderForField(String fieldName) {
+            return perFieldStoredFieldReaders.get(fieldName);
         }
     }
 }
