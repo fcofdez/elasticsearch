@@ -55,7 +55,7 @@ public abstract class ESStoredFieldsFormat extends StoredFieldsFormat implements
     }
 
     /**
-     * Returns the set of file extensions that this stored fields format would write to disk.
+     * Returns the set of file fileExtensions that this stored fields format would write to disk.
      */
     protected abstract Set<String> getFileExtensions();
 }
