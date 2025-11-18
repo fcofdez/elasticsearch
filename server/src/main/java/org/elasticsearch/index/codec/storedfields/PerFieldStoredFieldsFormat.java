@@ -234,7 +234,7 @@ public abstract class PerFieldStoredFieldsFormat extends StoredFieldsFormat {
                     formatWriter.writer().startDocument();
                 }
                 for (int i = 0; i < numFinishedDocs; i++) {
-                    formatWriter.writer().startDocument();
+                    formatWriter.writer().finishDocument();
                 }
 
                 var previous = formatWriters.put(format, formatWriter);
@@ -265,6 +265,7 @@ public abstract class PerFieldStoredFieldsFormat extends StoredFieldsFormat {
             try {
                 for (FieldInfo fi : fn) {
                     final String formatName = fi.getAttribute(STORED_FIELD_FORMAT_ATTRIBUTE_KEY);
+                    // Can be a format name be null if we're reading a segment from this codec?
                     if (formatName != null) {
                         var storedFieldsReader = formatStoredFieldReaders.get(formatName);
                         if (storedFieldsReader == null) {
