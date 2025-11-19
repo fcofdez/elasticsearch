@@ -91,6 +91,7 @@ public class ES93BloomFilterStoredFieldsFormat extends ESStoredFieldsFormat {
     private static final byte BLOOM_FILTER_NOT_STORED = 0;
     private static final ByteSizeValue MAX_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(8);
     private static final String DEFAULT_SEGMENT_SUFFIX = "";
+    public static final ByteSizeValue DEFAULT_BLOOM_FILTER_SIZE = ByteSizeValue.ofKb(2);
 
     private final BigArrays bigArrays;
     private final String bloomFilterFieldName;

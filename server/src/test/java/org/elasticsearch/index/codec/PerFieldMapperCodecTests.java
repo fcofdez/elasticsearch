@@ -19,7 +19,11 @@ import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.MapperTestUtils;
 import org.elasticsearch.index.codec.bloomfilter.ES87BloomFilterPostingsFormat;
+import org.elasticsearch.index.codec.bloomfilter.ES93BloomFilterStoredFieldsFormat;
 import org.elasticsearch.index.codec.postings.ES812PostingsFormat;
+import org.elasticsearch.index.codec.storedfields.ESLucene90StoredFieldsFormat;
+import org.elasticsearch.index.codec.storedfields.ESStoredFieldsFormat;
+import org.elasticsearch.index.mapper.IdFieldMapper;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.SeqNoFieldMapper;
 import org.elasticsearch.index.mapper.SourceFieldMapper;
@@ -192,7 +196,7 @@ public class PerFieldMapperCodecTests extends ESTestCase {
     }
 
     public void testUseTimeSeriesDocValuesCodecSetting() throws IOException {
-        PerFieldFormatSupplier perFieldMapperCodec = createFormatSupplier(true, null, IndexMode.STANDARD, MAPPING_2);
+        PerFieldFormatSupplier perFieldMapperCodec = createFormatSupplier(true, null, null, IndexMode.STANDARD, MAPPING_2);
         assertThat((perFieldMapperCodec.useTSDBDocValuesFormat("@timestamp")), is(true));
         assertThat((perFieldMapperCodec.useTSDBDocValuesFormat("counter")), is(true));
         assertThat((perFieldMapperCodec.useTSDBDocValuesFormat("gauge")), is(true));
@@ -226,17 +230,43 @@ public class PerFieldMapperCodecTests extends ESTestCase {
         assertThat((perFieldMapperCodec.useTSDBDocValuesFormat(SeqNoFieldMapper.NAME)), is(true));
     }
 
+    public void testUseStoredFieldBloomFilterForIdFieldOnTimeSeriesModeIfEnabled() throws IOException {
+        PerFieldFormatSupplier perFieldMapperCodec = createFormatSupplier(null, null, true, IndexMode.TIME_SERIES, MAPPING_2);
+        assertThat(
+            perFieldMapperCodec.getStoredFieldsFormatForField(IdFieldMapper.NAME),
+            is(instanceOf(ES93BloomFilterStoredFieldsFormat.class))
+        );
+        // For other fields, it uses the default one
+        assertThat(perFieldMapperCodec.getStoredFieldsFormatForField("hostname"), is(instanceOf(ESLucene90StoredFieldsFormat.class)));
+    }
+
+    public void testUseDefaultStoredFieldsForIdFieldOnTimeSeriesModeIfDisabled() throws IOException {
+        PerFieldFormatSupplier perFieldMapperCodec = createFormatSupplier(null, null, false, IndexMode.TIME_SERIES, MAPPING_2);
+        assertThat(
+            perFieldMapperCodec.getStoredFieldsFormatForField(IdFieldMapper.NAME),
+            is(instanceOf(ESLucene90StoredFieldsFormat.class))
+        );
+        assertThat(perFieldMapperCodec.getStoredFieldsFormatForField("hostname"), is(instanceOf(ESLucene90StoredFieldsFormat.class)));
+    }
+
+    public void testGetStoredFieldsFormatForFieldThrowsIfDefaultIsNotProvided() throws IOException {
+        PerFieldFormatSupplier perFieldMapperCodec = createFormatSupplier(IndexMode.TIME_SERIES, MAPPING_2);
+        expectThrows(IllegalStateException.class, () -> perFieldMapperCodec.getStoredFieldsFormatForField(IdFieldMapper.NAME));
+        expectThrows(IllegalStateException.class, () -> perFieldMapperCodec.getStoredFieldsFormatForField("hostname"));
+    }
+
     private PerFieldFormatSupplier createFormatSupplier(IndexMode mode, String mapping) throws IOException {
         return createFormatSupplier(null, mode, mapping);
     }
 
     private PerFieldFormatSupplier createFormatSupplier(Boolean enableES87TSDBCodec, IndexMode mode, String mapping) throws IOException {
-        return createFormatSupplier(null, enableES87TSDBCodec, mode, mapping);
+        return createFormatSupplier(null, enableES87TSDBCodec, null, mode, mapping);
     }
 
     private PerFieldFormatSupplier createFormatSupplier(
         Boolean useTimeSeriesDocValuesFormatSetting,
         Boolean enableES87TSDBCodec,
+        Boolean enableIdStoredFieldBloomFilter,
         IndexMode mode,
         String mapping
     ) throws IOException {
@@ -251,9 +281,14 @@ public class PerFieldMapperCodecTests extends ESTestCase {
         if (useTimeSeriesDocValuesFormatSetting != null) {
             settings.put(IndexSettings.USE_TIME_SERIES_DOC_VALUES_FORMAT_SETTING.getKey(), useTimeSeriesDocValuesFormatSetting);
         }
+        ESStoredFieldsFormat defaultStoredFieldsFormat = null;
+        if (enableIdStoredFieldBloomFilter != null) {
+            settings.put(IndexSettings.USE_STORED_FIELD_BLOOM_FILTER_ID.getKey(), enableIdStoredFieldBloomFilter);
+            defaultStoredFieldsFormat = new ESLucene90StoredFieldsFormat();
+        }
         MapperService mapperService = MapperTestUtils.newMapperService(xContentRegistry(), createTempDir(), settings.build(), "test");
         mapperService.merge("type", new CompressedXContent(mapping), MapperService.MergeReason.MAPPING_UPDATE);
-        return new PerFieldFormatSupplier(mapperService, BigArrays.NON_RECYCLING_INSTANCE);
+        return new PerFieldFormatSupplier(mapperService, BigArrays.NON_RECYCLING_INSTANCE, defaultStoredFieldsFormat);
     }
 
 }

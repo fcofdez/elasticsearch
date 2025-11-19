@@ -14,7 +14,6 @@ import org.apache.lucene.codecs.KnnVectorsFormat;
 import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.codecs.lucene90.Lucene90DocValuesFormat;
 import org.apache.lucene.codecs.lucene99.Lucene99HnswVectorsFormat;
-import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.IndexMode;
@@ -37,6 +36,8 @@ import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+
+import static org.elasticsearch.index.codec.bloomfilter.ES93BloomFilterStoredFieldsFormat.DEFAULT_BLOOM_FILTER_SIZE;
 
 /**
  * Class that encapsulates the logic of figuring out the most appropriate file format for a given field, across postings, doc values and
@@ -94,8 +95,9 @@ public class PerFieldFormatSupplier {
             defaultPostingsFormat = es812PostingsFormat;
         }
 
-        // TODO: assert when the default is null
-        this.bloomFilterStoredFieldsFormat = new ES93BloomFilterStoredFieldsFormat(bigArrays, ByteSizeValue.ofKb(2), IdFieldMapper.NAME);
+        this.bloomFilterStoredFieldsFormat = defaultStoredFieldsFormat == null
+            ? null
+            : new ES93BloomFilterStoredFieldsFormat(bigArrays, DEFAULT_BLOOM_FILTER_SIZE, IdFieldMapper.NAME);
         this.defaultStoredFieldsFormat = defaultStoredFieldsFormat;
     }
 
@@ -153,6 +155,10 @@ public class PerFieldFormatSupplier {
     }
 
     public ESStoredFieldsFormat getStoredFieldsFormatForField(String field) {
+        if (defaultStoredFieldsFormat == null) {
+            throw new IllegalStateException("No default stored fields format available");
+        }
+
         if (useStoredFieldsBloomFilter(field)) {
             return bloomFilterStoredFieldsFormat;
         }
