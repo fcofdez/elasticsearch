@@ -207,8 +207,8 @@ public class ES93BloomFilterStoredFieldsFormatTests extends ESTestCase {
         }
     }
 
-    private static BytesRef getBytesRefFromString(String random) {
-        return new BytesRef(random.getBytes(StandardCharsets.UTF_8));
+    private static BytesRef getBytesRefFromString(String string) {
+        return new BytesRef(string.getBytes(StandardCharsets.UTF_8));
     }
 
     private BloomFilter getBloomFilterProvider(LeafReaderContext leafReaderContext) throws IOException {
