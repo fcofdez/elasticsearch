@@ -85,20 +85,26 @@ public class PerFieldFormatSupplier {
     ) {
         this.mapperService = mapperService;
         this.bloomFilterPostingsFormat = new ES87BloomFilterPostingsFormat(bigArrays, this::internalGetPostingsFormatForField);
-
-        if (mapperService != null
-            && mapperService.getIndexSettings().getIndexVersionCreated().onOrAfter(IndexVersions.UPGRADE_TO_LUCENE_10_3_0)
-            && mapperService.getIndexSettings().getMode().useDefaultPostingsFormat()) {
-            defaultPostingsFormat = Elasticsearch92Lucene103Codec.DEFAULT_POSTINGS_FORMAT;
-        } else {
-            // our own posting format using PFOR
-            defaultPostingsFormat = es812PostingsFormat;
-        }
-
+        this.defaultPostingsFormat = getDefaultPostingsFormat(mapperService);
         this.bloomFilterStoredFieldsFormat = defaultStoredFieldsFormat == null
             ? null
             : new ES93BloomFilterStoredFieldsFormat(bigArrays, DEFAULT_BLOOM_FILTER_SIZE, IdFieldMapper.NAME);
         this.defaultStoredFieldsFormat = defaultStoredFieldsFormat;
+    }
+
+    private static PostingsFormat getDefaultPostingsFormat(final MapperService mapperService) {
+        // we migrated to using a new postings format for the standard indices with Lucene 10.3
+        if (mapperService != null
+            && mapperService.getIndexSettings().getIndexVersionCreated().onOrAfter(IndexVersions.UPGRADE_TO_LUCENE_10_3_0)) {
+            if (IndexSettings.USE_ES_812_POSTINGS_FORMAT.get(mapperService.getIndexSettings().getSettings())) {
+                return es812PostingsFormat;
+            } else {
+                return Elasticsearch92Lucene103Codec.DEFAULT_POSTINGS_FORMAT;
+            }
+        } else {
+            // our own posting format using PFOR, used for logsdb and tsdb indices by default
+            return es812PostingsFormat;
+        }
     }
 
     public PostingsFormat getPostingsFormatForField(String field) {
