@@ -23,6 +23,7 @@ import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.env.Environment;
+import org.elasticsearch.index.IndexMode;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.analysis.IndexAnalyzers;
 import org.elasticsearch.index.cache.bitset.BitsetFilterCache;
@@ -60,6 +61,19 @@ public class CodecTests extends ESTestCase {
             "Zstd814StoredFieldsFormat(compressionMode=ZSTD(level=1), chunkSize=14336, maxDocsPerChunk=128, blockShift=10)",
             codec.storedFieldsFormat().toString()
         );
+    }
+
+    public void testTSDBDefaultWithZSTD() throws Exception {
+        assumeTrue("Only when zstd_stored_fields feature flag is enabled", CodecService.ZSTD_STORED_FIELDS_FEATURE_FLAG);
+        assumeTrue("Only when synthetic id feature flag is enabled", IndexSettings.TSDB_SYNTHETIC_ID_FEATURE_FLAG);
+        CodecService codecService = createCodecService(true);
+        assertThat(codecService.codec("default"), instanceOf(ES93TSDBZSTDCompressionLucene103Codec.class));
+    }
+
+    public void testTSDBDefault() throws Exception {
+        assumeTrue("Only when synthetic id feature flag is enabled", IndexSettings.TSDB_SYNTHETIC_ID_FEATURE_FLAG);
+        CodecService codecService = createCodecService(true);
+        assertThat(codecService.codec("default"), instanceOf(ES93TSDBDefaultCompressionLucene103Codec.class));
     }
 
     public void testBestCompression() throws Exception {
@@ -120,8 +134,19 @@ public class CodecTests extends ESTestCase {
     }
 
     private CodecService createCodecService() throws IOException {
+        return createCodecService(false);
+    }
+
+    private CodecService createCodecService(boolean syntheticIdEnabled) throws IOException {
         Settings nodeSettings = Settings.builder().put(Environment.PATH_HOME_SETTING.getKey(), createTempDir()).build();
-        IndexSettings settings = IndexSettingsModule.newIndexSettings("_na", nodeSettings);
+        var indexSettings = Settings.builder().put(nodeSettings);
+        if (syntheticIdEnabled) {
+            assertTrue(IndexSettings.TSDB_SYNTHETIC_ID_FEATURE_FLAG);
+            indexSettings.put(IndexSettings.USE_SYNTHETIC_ID.getKey(), syntheticIdEnabled)
+                .put(IndexSettings.MODE.getKey(), IndexMode.TIME_SERIES)
+                .put("index.routing_path", "hostname");
+        }
+        IndexSettings settings = IndexSettingsModule.newIndexSettings("_na", indexSettings.build());
         SimilarityService similarityService = new SimilarityService(settings, null, Collections.emptyMap());
         IndexAnalyzers indexAnalyzers = createTestAnalysis(settings, nodeSettings).indexAnalyzers;
         MapperRegistry mapperRegistry = new MapperRegistry(

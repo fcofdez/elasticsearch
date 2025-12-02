@@ -88,14 +88,10 @@ public class CodecService implements CodecProvider {
             codecs.put(codec, Codec.forName(codec));
         }
 
-        this.codecs = codecs.entrySet().stream().collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> {
-            Codec codec;
-            if (e.getValue() instanceof DeduplicateFieldInfosCodec dedupCodec) {
-                codec = dedupCodec;
-            } else {
-                codec = new DeduplicateFieldInfosCodec(e.getValue().getName(), e.getValue());
-            }
-            return codec;
+        this.codecs = codecs.entrySet().stream().collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> switch (e.getValue()) {
+            case DeduplicateFieldInfosCodec dedupCodec -> dedupCodec;
+            case TSDBCodecWithSyntheticId tsdbCodec when tsdbCodec.getDelegate() instanceof DeduplicateFieldInfosCodec -> tsdbCodec;
+            default -> new DeduplicateFieldInfosCodec(e.getValue().getName(), e.getValue());
         }));
     }
 

@@ -60,4 +60,8 @@ abstract class TSDBCodecWithSyntheticId extends FilterCodec {
     public StoredFieldsFormat storedFieldsFormat() {
         return storedFieldsFormat;
     }
+
+    Codec getDelegate() {
+        return delegate;
+    }
 }
