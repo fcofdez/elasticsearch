@@ -35,8 +35,6 @@ import org.apache.lucene.store.IndexOutput;
 import org.apache.lucene.store.RandomAccessInput;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.hash.Murmur3Hasher;
-import org.elasticsearch.common.hash.MurmurHash3;
 import org.elasticsearch.common.lucene.store.IndexOutputOutputStream;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
@@ -49,7 +47,6 @@ import org.elasticsearch.index.mapper.IdFieldMapper;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.function.IntSupplier;
 
@@ -64,7 +61,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
 
     // We use prime numbers with the Kirsch-Mitzenmacher technique to obtain multiple hashes from two hash functions
     private static final int[] PRIMES = new int[] { 2, 5, 11, 17, 23, 29, 41, 47, 53, 59, 71 };
-    private static final int DEFAULT_NUM_HASH_FUNCTIONS = 4;
+    private static final int DEFAULT_NUM_HASH_FUNCTIONS = 7;
     private static final byte BLOOM_FILTER_STORED = 1;
     private static final byte BLOOM_FILTER_NOT_STORED = 0;
     private static final ByteSizeValue MAX_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(8);
@@ -112,7 +109,6 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
         private final int bitSetSizeInBytes;
         private final byte[] buffer;
         private final int[] hashes;
-        private final MurmurHash3.Hash128 scratchHash = new MurmurHash3.Hash128();
         private boolean closed;
 
         Writer(
@@ -153,7 +149,6 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
             this.bitsetSizeInBits = defaultBloomFilterSizeInBitsSupplier.getAsInt();
             this.bitSetSizeInBytes = bitsetSizeInBits / Byte.SIZE;
             this.buffer = BUFFER.get();
-            Arrays.fill(buffer, (byte) 0);
             //this.buffer = bigArrays.newByteArray(bitSetSizeInBytes);
             //toClose.add(buffer);
         }
@@ -163,7 +158,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
             var values = valuesProducer.getBinary(field);
             for (int doc = values.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = values.nextDoc()) {
                 BytesRef term = values.binaryValue();
-                var termHashes = hashTerm(term, hashes, scratchHash);
+                var termHashes = hashTerm(term, hashes);
                 for (int hash : termHashes) {
                     final int posInBitArray = hash & (bitsetSizeInBits - 1);
                     final int pos = posInBitArray >> 3; // div 8
@@ -656,7 +651,6 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
         private final RandomAccessInput bloomFilterIn;
         private final int bloomFilterBitSetSizeInBits;
         private final int[] hashes;
-        private final MurmurHash3.Hash128 scratchHash = new MurmurHash3.Hash128();
 
         @Nullable
         static BloomFilterFieldReader open(SegmentReadState state) throws IOException {
@@ -732,7 +726,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
         public boolean mayContainTerm(String field, BytesRef term) throws IOException {
             // assert fieldInfo.getName().equals(field);
 
-            var termHashes = hashTerm(term, hashes, scratchHash);
+            var termHashes = hashTerm(term, hashes);
 
             for (int hash : termHashes) {
                 final int posInBitArray = hash & (bloomFilterBitSetSizeInBits - 1);
@@ -788,27 +782,17 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
         }
     }
 
-    private static int[] hashTerm(BytesRef value, int[] outputs, MurmurHash3.Hash128 scratchHash) {
-        var result = MurmurHash3.hash128(value.bytes, value.offset, value.length, 0, scratchHash);
-        long hash1 = result.h1;
-        long hash2 = result.h2;
-
-        outputs[0] = (int) hash1 & 0x7FFF_FFFF;
-        outputs[1] = (int) (hash1 >> Integer.SIZE) & 0x7FFF_FFFF;
-        outputs[2] = (int) hash2 & 0x7FFF_FFFF;
-        outputs[3] = (int) (hash2 >> Integer.SIZE) & 0x7FFF_FFFF;
-
+    private static int[] hashTerm(BytesRef value, int[] outputs) {
+        long hash64 = hash64(value.bytes, value.offset, value.length);
+        // First use output splitting to get two hash values out of a single hash function
+        int upperHalf = (int) (hash64 >> Integer.SIZE);
+        int lowerHalf = (int) hash64;
+        // Then use the Kirsch-Mitzenmacher technique to obtain multiple hashes efficiently
+        for (int i = 0; i < outputs.length; i++) {
+            // Use prime numbers as the constant for the KM technique so these don't have a common gcd
+            outputs[i] = (lowerHalf + PRIMES[i] * upperHalf) & 0x7FFF_FFFF; // Clears sign bit, gives positive 31-bit values
+        }
         return outputs;
-//        long hash64 = hash64(value.bytes, value.offset, value.length);
-//        // First use output splitting to get two hash values out of a single hash function
-//        int upperHalf = (int) (hash64 >> Integer.SIZE);
-//        int lowerHalf = (int) hash64;
-//        // Then use the Kirsch-Mitzenmacher technique to obtain multiple hashes efficiently
-//        for (int i = 0; i < outputs.length; i++) {
-//            // Use prime numbers as the constant for the KM technique so these don't have a common gcd
-//            outputs[i] = (lowerHalf + PRIMES[i] * upperHalf) & 0x7FFF_FFFF; // Clears sign bit, gives positive 31-bit values
-//        }
-//        return outputs;
     }
 
     private static boolean isPowerOfTwo(int value) {
