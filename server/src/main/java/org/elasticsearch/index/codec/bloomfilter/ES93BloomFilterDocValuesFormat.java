@@ -9,6 +9,10 @@
 
 package org.elasticsearch.index.codec.bloomfilter;
 
+import net.jpountz.xxhash.XXHash64;
+
+import net.jpountz.xxhash.XXHashFactory;
+
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.codecs.DocValuesConsumer;
 import org.apache.lucene.codecs.DocValuesFormat;
@@ -66,6 +70,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
     private static final byte BLOOM_FILTER_NOT_STORED = 0;
     private static final ByteSizeValue MAX_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(8);
     public static final ByteSizeValue DEFAULT_BLOOM_FILTER_SIZE = ByteSizeValue.ofKb(512);
+    private static final XXHash64 HASH_64 = XXHashFactory.fastestInstance().hash64();
 
     private final BigArrays bigArrays;
     private final int numHashFunctions;
@@ -781,7 +786,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
     }
 
     private static int[] hashTerm(BytesRef value, int[] outputs) {
-        long hash64 = hash64(value.bytes, value.offset, value.length);
+        long hash64 = HASH_64.hash(value.bytes, value.offset, value.length, 0);
         // First use output splitting to get two hash values out of a single hash function
         int upperHalf = (int) (hash64 >> Integer.SIZE);
         int lowerHalf = (int) hash64;
