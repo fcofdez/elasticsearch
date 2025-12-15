@@ -708,7 +708,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
                 }
                 CodecUtil.retrieveChecksum(bloomFilterData);
 
-                bloomFilterData.prefetch(bloomFilterMetadata.fileOffset(), bloomFilterMetadata.sizeInBytes());
+                //bloomFilterData.prefetch(bloomFilterMetadata.fileOffset(), bloomFilterMetadata.sizeInBytes());
                 var bloomFilterFieldReader = new BloomFilterFieldReader(
                     bloomFilterData.randomAccessSlice(bloomFilterMetadata.fileOffset(), bloomFilterMetadata.sizeInBytes()),
                     bloomFilterMetadata.sizeInBits(),
