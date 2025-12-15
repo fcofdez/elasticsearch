@@ -63,11 +63,11 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
 
     // We use prime numbers with the Kirsch-Mitzenmacher technique to obtain multiple hashes from two hash functions
     private static final int[] PRIMES = new int[] { 2, 5, 11, 17, 23, 29, 41, 47, 53, 59, 71 };
-    private static final int DEFAULT_NUM_HASH_FUNCTIONS = 7;
+    private static final int DEFAULT_NUM_HASH_FUNCTIONS = 2;
     private static final byte BLOOM_FILTER_STORED = 1;
     private static final byte BLOOM_FILTER_NOT_STORED = 0;
     private static final ByteSizeValue MAX_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(8);
-    public static final ByteSizeValue DEFAULT_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(1);
+    public static final ByteSizeValue DEFAULT_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(8);
 
     private final BigArrays bigArrays;
     private final int numHashFunctions;
@@ -869,12 +869,15 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
         // First use output splitting to get two hash values out of a single hash function
         int upperHalf = (int) (hash64 >> Integer.SIZE);
         int lowerHalf = (int) hash64;
-        // Then use the Kirsch-Mitzenmacher technique to obtain multiple hashes efficiently
-        for (int i = 0; i < outputs.length; i++) {
-            // Use prime numbers as the constant for the KM technique so these don't have a common gcd
-            outputs[i] = (lowerHalf + PRIMES[i] * upperHalf) & 0x7FFF_FFFF; // Clears sign bit, gives positive 31-bit values
-        }
+        outputs[0] = upperHalf;
+        outputs[1] = lowerHalf;
         return outputs;
+//        // Then use the Kirsch-Mitzenmacher technique to obtain multiple hashes efficiently
+//        for (int i = 0; i < outputs.length; i++) {
+//            // Use prime numbers as the constant for the KM technique so these don't have a common gcd
+//            outputs[i] = (lowerHalf + PRIMES[i] * upperHalf) & 0x7FFF_FFFF; // Clears sign bit, gives positive 31-bit values
+//        }
+//        return outputs;
     }
 
     private static boolean isPowerOfTwo(int value) {
