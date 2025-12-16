@@ -304,7 +304,7 @@ public final class IndexSettings {
         if (EXISTING_SHARDS_ALLOCATOR_SETTING.get(settings).equals("stateless") && INDEX_FAST_REFRESH_SETTING.get(settings) == false) {
             return STATELESS_DEFAULT_REFRESH_INTERVAL;
         }
-        return TimeValue.MINUS_ONE;
+        return DEFAULT_REFRESH_INTERVAL;
     }, new RefreshIntervalValidator(), Property.Dynamic, Property.IndexScope, Property.ServerlessPublic);
 
     static class RefreshIntervalValidator implements Setting.Validator<TimeValue> {
