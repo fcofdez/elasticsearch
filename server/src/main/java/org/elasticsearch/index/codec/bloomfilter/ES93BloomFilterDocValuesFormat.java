@@ -869,15 +869,12 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
         // First use output splitting to get two hash values out of a single hash function
         int upperHalf = (int) (hash64 >> Integer.SIZE);
         int lowerHalf = (int) hash64;
-        outputs[0] = upperHalf;
-        outputs[1] = lowerHalf;
+        // Then use the Kirsch-Mitzenmacher technique to obtain multiple hashes efficiently
+        for (int i = 0; i < outputs.length; i++) {
+            // Use prime numbers as the constant for the KM technique so these don't have a common gcd
+            outputs[i] = (lowerHalf + PRIMES[i] * upperHalf) & 0x7FFF_FFFF; // Clears sign bit, gives positive 31-bit values
+        }
         return outputs;
-//        // Then use the Kirsch-Mitzenmacher technique to obtain multiple hashes efficiently
-//        for (int i = 0; i < outputs.length; i++) {
-//            // Use prime numbers as the constant for the KM technique so these don't have a common gcd
-//            outputs[i] = (lowerHalf + PRIMES[i] * upperHalf) & 0x7FFF_FFFF; // Clears sign bit, gives positive 31-bit values
-//        }
-//        return outputs;
     }
 
     private static boolean isPowerOfTwo(int value) {
