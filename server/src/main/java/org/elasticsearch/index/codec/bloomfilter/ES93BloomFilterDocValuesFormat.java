@@ -159,20 +159,17 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
         @Override
         public void addBinaryField(FieldInfo field, DocValuesProducer valuesProducer) throws IOException {
             var values = valuesProducer.getBinary(field);
-            var count = 1;
             for (int doc = values.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = values.nextDoc()) {
                 BytesRef term = values.binaryValue();
-                count += 1;
+                var termHashes = hashTerm(term, hashes);
+                for (int hash : termHashes) {
+                    final int posInBitArray = hash & (bitsetSizeInBits - 1);
+                    final int pos = posInBitArray >> 3; // div 8
+                    final int mask = 1 << (posInBitArray & 7); // mod 8
+                    final byte val = (byte) (buffer.get(pos) | mask);
+                    buffer.set(pos, val);
+                }
             }
-//                var termHashes = hashTerm(term, hashes);
-//                for (int hash : termHashes) {
-//                    final int posInBitArray = hash & (bitsetSizeInBits - 1);
-//                    final int pos = posInBitArray >> 3; // div 8
-//                    final int mask = 1 << (posInBitArray & 7); // mod 8
-//                    final byte val = (byte) (buffer.get(pos) | mask);
-//                    buffer.set(pos, val);
-//                }
-//            }
         }
 
         private int getBloomFilterSizeInBits() {
