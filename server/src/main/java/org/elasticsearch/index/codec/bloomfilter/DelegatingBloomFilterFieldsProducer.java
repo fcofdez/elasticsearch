@@ -91,10 +91,11 @@ public class DelegatingBloomFilterFieldsProducer extends FieldsProducer {
 
                 @Override
                 public boolean seekExact(BytesRef text) throws IOException {
-                    if (bloomFilter.mayContainTerm(field, text) == false) {
-                        return false;
-                    }
-                    return getDelegate().seekExact(text);
+//                    if (bloomFilter.mayContainTerm(field, text) == false) {
+//                        return false;
+//                    }
+//                    return getDelegate().seekExact(text);
+                    return false;
                 }
             };
         }

@@ -29,6 +29,8 @@ import org.apache.lucene.index.SortedNumericDocValues;
 import org.apache.lucene.index.SortedSetDocValues;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.store.Directory;
+import org.apache.lucene.store.FilterIndexInput;
+import org.apache.lucene.store.FilterIndexOutput;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
@@ -44,6 +46,7 @@ import org.elasticsearch.index.codec.FilterDocValuesProducer;
 import org.elasticsearch.index.mapper.IdFieldMapper;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
+import org.elasticsearch.nativeaccess.NativeAccess;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -155,18 +158,18 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
 
         @Override
         public void addBinaryField(FieldInfo field, DocValuesProducer valuesProducer) throws IOException {
-            var values = valuesProducer.getBinary(field);
-            for (int doc = values.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = values.nextDoc()) {
-                BytesRef term = values.binaryValue();
-                var termHashes = hashTerm(term, hashes);
-                for (int hash : termHashes) {
-                    final int posInBitArray = hash & (bitsetSizeInBits - 1);
-                    final int pos = posInBitArray >> 3; // div 8
-                    final int mask = 1 << (posInBitArray & 7); // mod 8
-                    final byte val = (byte) (buffer.get(pos) | mask);
-                    buffer.set(pos, val);
-                }
-            }
+//            var values = valuesProducer.getBinary(field);
+//            for (int doc = values.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = values.nextDoc()) {
+//                BytesRef term = values.binaryValue();
+//                var termHashes = hashTerm(term, hashes);
+//                for (int hash : termHashes) {
+//                    final int posInBitArray = hash & (bitsetSizeInBits - 1);
+//                    final int pos = posInBitArray >> 3; // div 8
+//                    final int mask = 1 << (posInBitArray & 7); // mod 8
+//                    final byte val = (byte) (buffer.get(pos) | mask);
+//                    buffer.set(pos, val);
+//                }
+//            }
         }
 
         private int getBloomFilterSizeInBits() {
