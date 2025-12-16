@@ -314,7 +314,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
                     bloomFilterFieldReader.checkIntegrity();
                     var bloomFilterData = bloomFilterFieldReader.buffer;
 
-                    // bloomFilterData.prefetch(0, bitSetSizeInBytes);
+                    //bloomFilterData.prefetch(0, bitSetSizeInBytes);
                     for (int i = 0; i < bitSetSizeInBytes; i++) {
                         var existingBloomFilterByte = bloomFilterData[i];
                         var resultingBloomFilterByte = buffer.get(i);
@@ -738,9 +738,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
             IndexInput bloomFilterData,
             String segmentName,
             int maxDoc,
-            BloomFilterMetadata bloomFilterMetadata,
-            byte[] buffer
-        ) {
+            BloomFilterMetadata bloomFilterMetadata, byte[] buffer) {
             this.bloomFilterIn = bloomFilterIn;
             this.bloomFilterBitSetSizeInBits = bloomFilterBitSetSizeInBits;
             this.hashes = new int[numHashFunctions];
