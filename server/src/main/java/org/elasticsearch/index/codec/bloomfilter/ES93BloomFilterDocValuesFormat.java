@@ -36,19 +36,20 @@ import org.apache.lucene.store.RandomAccessInput;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.lucene.store.IndexOutputOutputStream;
-import org.elasticsearch.common.lucene.store.InputStreamIndexInput;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.ByteArray;
 import org.elasticsearch.core.IOUtils;
-import org.elasticsearch.core.Streams;
 import org.elasticsearch.index.codec.FilterDocValuesProducer;
 import org.elasticsearch.index.mapper.IdFieldMapper;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.IntSupplier;
 
 import static org.elasticsearch.index.codec.bloomfilter.BloomFilterHashFunctions.MurmurHash3.hash64;
@@ -93,7 +94,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
 
     @Override
     public DocValuesProducer fieldsProducer(SegmentReadState state) throws IOException {
-        return new Reader(state, bigArrays);
+        return new Reader(state);
     }
 
     static class Writer extends DocValuesConsumer {
@@ -312,11 +313,11 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
                             + " but got "
                             + bloomFilterFieldReader.getBloomFilterBitSetSizeInBits();
                     bloomFilterFieldReader.checkIntegrity();
-                    var bloomFilterData = bloomFilterFieldReader.buffer;
+                    RandomAccessInput bloomFilterData = bloomFilterFieldReader.bloomFilterIn;
 
-                    //bloomFilterData.prefetch(0, bitSetSizeInBytes);
+                    bloomFilterData.prefetch(0, bitSetSizeInBytes);
                     for (int i = 0; i < bitSetSizeInBytes; i++) {
-                        var existingBloomFilterByte = bloomFilterData[i];
+                        var existingBloomFilterByte = bloomFilterData.readByte(i);
                         var resultingBloomFilterByte = buffer.get(i);
                         buffer.set(i, (byte) (existingBloomFilterByte | resultingBloomFilterByte));
                     }
@@ -348,8 +349,8 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
     static class Reader extends DocValuesProducer implements BloomFilter {
         private final BloomFilterFieldReader bloomFilterFieldReader;
 
-        Reader(SegmentReadState state, BigArrays bigArrays) throws IOException {
-            bloomFilterFieldReader = BloomFilterFieldReader.open(state, bigArrays);
+        Reader(SegmentReadState state) throws IOException {
+            bloomFilterFieldReader = BloomFilterFieldReader.open(state);
         }
 
         @Override
@@ -660,12 +661,11 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
         private final String segmentName;
         private final int maxDoc;
         private final BloomFilterMetadata bloomFilterMetadata;
-        private final byte[] buffer;
         private final RandomAccessInput bloomFilterIn;
         private final int bloomFilterBitSetSizeInBits;
         private final int[] hashes;
 
-        static BloomFilterFieldReader open(SegmentReadState state, BigArrays bigArrays) throws IOException {
+        static BloomFilterFieldReader open(SegmentReadState state) throws IOException {
             final Directory directory = state.directory;
             final SegmentInfo si = state.segmentInfo;
             final String segmentSuffix = state.segmentSuffix;
@@ -709,9 +709,6 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
                 CodecUtil.retrieveChecksum(bloomFilterData);
 
                 bloomFilterData.prefetch(bloomFilterMetadata.fileOffset(), bloomFilterMetadata.sizeInBytes());
-                var buffer = new byte[bloomFilterMetadata.sizeInBytes()];
-                bloomFilterData.seek(bloomFilterMetadata.fileOffset());
-                Streams.readFully(new InputStreamIndexInput(bloomFilterData, bloomFilterMetadata.sizeInBytes()), buffer, 0, buffer.length);
                 var bloomFilterFieldReader = new BloomFilterFieldReader(
                     bloomFilterData.randomAccessSlice(bloomFilterMetadata.fileOffset(), bloomFilterMetadata.sizeInBytes()),
                     bloomFilterMetadata.sizeInBits(),
@@ -719,8 +716,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
                     bloomFilterData,
                     si.name,
                     si.maxDoc(),
-                    bloomFilterMetadata,
-                    buffer
+                    bloomFilterMetadata
                 );
                 success = true;
                 return bloomFilterFieldReader;
@@ -731,6 +727,10 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
             }
         }
 
+        private final LongAdder numDocs;
+        private final LongAdder falsePositives;
+        private final Logger logger = LogManager.getLogger(ES93BloomFilterDocValuesFormat.class);
+
         BloomFilterFieldReader(
             RandomAccessInput bloomFilterIn,
             int bloomFilterBitSetSizeInBits,
@@ -738,7 +738,32 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
             IndexInput bloomFilterData,
             String segmentName,
             int maxDoc,
-            BloomFilterMetadata bloomFilterMetadata, byte[] buffer) {
+            BloomFilterMetadata bloomFilterMetadata
+        ) {
+            this(
+                bloomFilterIn,
+                bloomFilterBitSetSizeInBits,
+                numHashFunctions,
+                bloomFilterData,
+                segmentName,
+                maxDoc,
+                bloomFilterMetadata,
+                new LongAdder(),
+                new LongAdder()
+            );
+        }
+
+        BloomFilterFieldReader(
+            RandomAccessInput bloomFilterIn,
+            int bloomFilterBitSetSizeInBits,
+            int numHashFunctions,
+            IndexInput bloomFilterData,
+            String segmentName,
+            int maxDoc,
+            BloomFilterMetadata bloomFilterMetadata,
+            LongAdder numDocs,
+            LongAdder falsePositives
+        ) {
             this.bloomFilterIn = bloomFilterIn;
             this.bloomFilterBitSetSizeInBits = bloomFilterBitSetSizeInBits;
             this.hashes = new int[numHashFunctions];
@@ -746,7 +771,8 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
             this.segmentName = segmentName;
             this.maxDoc = maxDoc;
             this.bloomFilterMetadata = bloomFilterMetadata;
-            this.buffer = buffer;
+            this.numDocs = numDocs;
+            this.falsePositives = falsePositives;
         }
 
         public boolean mayContainTerm(String field, BytesRef term) throws IOException {
@@ -757,7 +783,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
                 final int posInBitArray = hash & (bloomFilterBitSetSizeInBits - 1);
                 final int pos = posInBitArray >> 3; // div 8
                 final int mask = 1 << (posInBitArray & 7); // mod 8
-                final byte bits = buffer[pos];
+                final byte bits = bloomFilterIn.readByte(pos);
                 if ((bits & mask) == 0) {
                     return false;
                 }
@@ -809,7 +835,8 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
                 segmentName,
                 maxDoc,
                 bloomFilterMetadata,
-                buffer
+                numDocs,
+                falsePositives
             );
         }
     }
