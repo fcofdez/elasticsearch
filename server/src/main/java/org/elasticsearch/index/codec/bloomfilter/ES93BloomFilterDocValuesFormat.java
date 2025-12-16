@@ -63,11 +63,11 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
 
     // We use prime numbers with the Kirsch-Mitzenmacher technique to obtain multiple hashes from two hash functions
     private static final int[] PRIMES = new int[] { 2, 5, 11, 17, 23, 29, 41, 47, 53, 59, 71 };
-    private static final int DEFAULT_NUM_HASH_FUNCTIONS = 2;
+    private static final int DEFAULT_NUM_HASH_FUNCTIONS = 7;
     private static final byte BLOOM_FILTER_STORED = 1;
     private static final byte BLOOM_FILTER_NOT_STORED = 0;
     private static final ByteSizeValue MAX_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(8);
-    public static final ByteSizeValue DEFAULT_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(8);
+    public static final ByteSizeValue DEFAULT_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(1);
 
     private final BigArrays bigArrays;
     private final int numHashFunctions;
