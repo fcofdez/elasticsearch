@@ -225,7 +225,7 @@ public class ES93BloomFilterDocValuesFormat extends DocValuesFormat {
             // Reader firstReader = (Reader) mergeState.fieldsProducers[0];
             // assert firstReader.bloomFilterFieldReader != null;
 
-            mergeBloomFiltersWithOr(mergeState);
+            //mergeBloomFiltersWithOr(mergeState);
         }
 
         /**
