@@ -9,6 +9,10 @@
 
 package org.elasticsearch.index.codec.bloomfilter;
 
+import jdk.incubator.vector.LongVector;
+
+import jdk.incubator.vector.VectorSpecies;
+
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.codecs.DocValuesConsumer;
 import org.apache.lucene.codecs.DocValuesFormat;
@@ -38,18 +42,22 @@ import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.store.IndexOutput;
 import org.apache.lucene.store.RandomAccessInput;
+import org.apache.lucene.util.BitUtil;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.lucene.store.IndexOutputOutputStream;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
 import org.elasticsearch.common.util.ByteArray;
+import org.elasticsearch.common.util.PageCacheRecycler;
 import org.elasticsearch.core.IOUtils;
 import org.elasticsearch.index.codec.FilterDocValuesProducer;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.foreign.MemorySegment;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntSupplier;
@@ -328,6 +336,9 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
             return true;
         }
 
+        static final VectorSpecies<Long> SPECIES = LongVector.SPECIES_PREFERRED;
+
+
         private void mergeOptimized(MergeState mergeState) throws IOException {
             assert useOptimizedMerge(mergeState);
 
@@ -360,11 +371,34 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                         + bloomFilterFieldReader.getBloomFilterBitSetSizeInBits();
 
                 RandomAccessInput bloomFilterData = bloomFilterFieldReader.bloomFilterIn;
-                for (int i = 0; i < bitSetSizeInBytes; i++) {
-                    var existingBloomFilterByte = bloomFilterData.readByte(i);
-                    var resultingBloomFilterByte = buffer.get(i);
-                    // TODO: Consider merging more than a byte at a time to speed up the process
-                    buffer.set(i, (byte) (existingBloomFilterByte | resultingBloomFilterByte));
+                var newBloomFilterPageScratch = new BytesRef(PageCacheRecycler.PAGE_SIZE_IN_BYTES);
+                var existingPageScratch = new BytesRef(PageCacheRecycler.PAGE_SIZE_IN_BYTES);
+
+                int offset = 0;
+                while (offset < bitsetSizeInBits) {
+                    var pageLen = Math.min(PageCacheRecycler.PAGE_SIZE_IN_BYTES, bitSetSizeInBytes - offset);
+                    buffer.get(offset, pageLen, newBloomFilterPageScratch);
+                    bloomFilterData.readBytes(offset, existingPageScratch.bytes, 0, pageLen);
+
+                    var existingSegment = MemorySegment.ofArray(existingPageScratch.bytes).asSlice(0, pageLen);
+                    var pageSegment = MemorySegment.ofArray(newBloomFilterPageScratch.bytes).asSlice(0, pageLen);
+
+                    int i = 0;
+                    int bound = SPECIES.loopBound(pageLen / Long.BYTES) * Long.BYTES;
+                    for (; i < bound; i += SPECIES.vectorByteSize()) {
+                        var existing = LongVector.fromMemorySegment(SPECIES, existingSegment, i, ByteOrder.LITTLE_ENDIAN);
+                        var current = LongVector.fromMemorySegment(SPECIES, pageSegment, i, ByteOrder.LITTLE_ENDIAN);
+                        existing.or(current).intoMemorySegment(pageSegment, i, ByteOrder.LITTLE_ENDIAN);
+                    }
+
+                    // or the remaining bytes one by one
+                    for (; i < pageLen; i++) {
+                        newBloomFilterPageScratch.bytes[i] |= existingPageScratch.bytes[i];
+                    }
+
+                    buffer.set(offset, newBloomFilterPageScratch.bytes, 0, pageLen);
+
+                    offset += pageLen;
                 }
             }
         }
