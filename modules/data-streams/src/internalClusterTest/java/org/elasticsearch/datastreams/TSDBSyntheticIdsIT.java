@@ -9,6 +9,7 @@
 
 package org.elasticsearch.datastreams;
 
+import org.apache.lucene.search.join.ScoreMode;
 import org.apache.lucene.tests.util.LuceneTestCase;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.action.DocWriteRequest;
@@ -88,14 +89,21 @@ import java.util.function.Function;
 import static org.elasticsearch.cluster.metadata.IndexMetadata.INDEX_ROUTING_EXCLUDE_GROUP_SETTING;
 import static org.elasticsearch.cluster.metadata.IndexMetadata.INDEX_ROUTING_INCLUDE_GROUP_SETTING;
 import static org.elasticsearch.common.time.FormatNames.STRICT_DATE_OPTIONAL_TIME;
+import static org.elasticsearch.index.query.QueryBuilders.boolQuery;
+import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
+import static org.elasticsearch.index.query.QueryBuilders.matchQuery;
 import static org.elasticsearch.index.shard.IndexShardTestCase.getTranslog;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertCheckedResponse;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertHitCount;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoFailures;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertResponse;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertSearchHit;
+import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.hasId;
 import static org.hamcrest.Matchers.arrayWithSize;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
@@ -912,6 +920,64 @@ public class TSDBSyntheticIdsIT extends ESIntegTestCase {
         }
     }
 
+    public void testSeqNoRemoval() throws Exception {
+        final var dataStreamName = randomIdentifier();
+        putDataStreamTemplate(
+            dataStreamName,
+            1,
+            0,
+            Settings.builder()
+                .put(IndexSettings.INDEX_TRANSLOG_DURABILITY_SETTING.getKey(), Translog.Durability.REQUEST)
+                .put(IndexSettings.INDEX_TRANSLOG_FLUSH_THRESHOLD_SIZE_SETTING.getKey(), ByteSizeValue.of(1, ByteSizeUnit.PB))
+                .build()
+        );
+
+        var timestamp = Instant.now();
+        // Use `timestamp = Instant.ofEpochMilli(epoch)` to set the timestamp back to a specific value when reproducing a test failure
+        logger.info("--> timestamp is {} (epoch: {})", timestamp, timestamp.toEpochMilli());
+
+        final int nbDocs = randomIntBetween(20, 100);
+
+        var client = client();
+        for (int j = 0; j < 5; j++) {
+            var bulkRequest = client.prepareBulk();
+            for (int i = 0; i < nbDocs; i++) {
+                var doc = document(timestamp, randomFrom("vm-dev01", "vm-dev02", "vm-dev03", "vm-dev04"), "cpu-load", i);
+                bulkRequest.add(client.prepareIndex(dataStreamName).setOpType(DocWriteRequest.OpType.CREATE).setSource(doc));
+                timestamp = timestamp.plusMillis(1);
+            }
+            var bulkResponse = bulkRequest.get();
+            assertNoFailures(bulkResponse);
+            if (randomBoolean()) {
+                flush(dataStreamName);
+            } else {
+                refresh(dataStreamName);
+            }
+        }
+
+        flush(dataStreamName);
+        assertResponse(prepareSearch(dataStreamName).setQuery(matchAllQuery()).seqNoAndPrimaryTerm(true), response -> {
+            for (SearchHit searchHit : response.getHits()) {
+                assertThat(searchHit.getSeqNo(), is(greaterThanOrEqualTo(0L)));
+                assertThat(searchHit.getPrimaryTerm(), is(equalTo(1L)));
+            }
+        });
+
+        logger.info("--> force merging");
+        safeSleep(2000);
+
+        forceMerge();
+        var shardSegments = getShardSegments(dataStreamName);
+        logger.info("--> shard segments are {}", shardSegments.stream().map(s -> s.getSegments()).toList());
+
+        assertResponse(prepareSearch(dataStreamName).setQuery(matchAllQuery()).seqNoAndPrimaryTerm(true), response -> {
+            for (SearchHit searchHit : response.getHits()) {
+                assertThat(searchHit.getSeqNo(), is(equalTo(-2L)));
+                assertThat(searchHit.getPrimaryTerm(), is(equalTo(0L)));
+            }
+        });
+    }
+
     private static void assertTranslogOperation(
         String indexName,
         DocumentMapper documentMapper,
@@ -1210,8 +1276,7 @@ public class TSDBSyntheticIdsIT extends ESIntegTestCase {
 
     private static void putDataStreamTemplate(String indexPattern, int primaries, int replicas, Settings extraSettings) throws IOException {
         final var settings = indexSettings(primaries, replicas).put(IndexSettings.MODE.getKey(), IndexMode.TIME_SERIES.getName())
-            .put(IndexSettings.INDEX_REFRESH_INTERVAL_SETTING.getKey(), -1)
-            .put(IndexSettings.USE_SYNTHETIC_ID.getKey(), true);
+            .put(IndexSettings.INDEX_REFRESH_INTERVAL_SETTING.getKey(), -1);
         if (randomBoolean()) {
             settings.put(IndexSettings.INDEX_MAPPER_SOURCE_MODE_SETTING.getKey(), SourceFieldMapper.Mode.SYNTHETIC);
             settings.put(IndexSettings.RECOVERY_USE_SYNTHETIC_SOURCE_SETTING.getKey(), randomBoolean());

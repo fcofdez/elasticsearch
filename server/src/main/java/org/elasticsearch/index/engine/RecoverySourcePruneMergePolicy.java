@@ -45,11 +45,31 @@ final class RecoverySourcePruneMergePolicy extends OneMergeWrappingMergePolicy {
         Supplier<Query> retainSourceQuerySupplier,
         MergePolicy in
     ) {
+        this(pruneStoredFieldName, pruneNumericDVFieldName, null, null, pruneIdField, retainSourceQuerySupplier, in);
+    }
+
+    RecoverySourcePruneMergePolicy(
+        @Nullable String pruneStoredFieldName,
+        String pruneNumericDVFieldName,
+        @Nullable String seqNoField,
+        @Nullable String primaryTermField,
+        boolean pruneIdField,
+        Supplier<Query> retainSourceQuerySupplier,
+        MergePolicy in
+    ) {
         super(in, toWrap -> new OneMerge(toWrap.segments) {
             @Override
             public CodecReader wrapForMerge(CodecReader reader) throws IOException {
                 CodecReader wrapped = toWrap.wrapForMerge(reader);
-                return wrapReader(pruneStoredFieldName, pruneNumericDVFieldName, pruneIdField, wrapped, retainSourceQuerySupplier);
+                return wrapReader(
+                    pruneStoredFieldName,
+                    pruneNumericDVFieldName,
+                    pruneIdField,
+                    wrapped,
+                    retainSourceQuerySupplier,
+                    seqNoField,
+                    primaryTermField
+                );
             }
         });
     }
@@ -59,7 +79,9 @@ final class RecoverySourcePruneMergePolicy extends OneMergeWrappingMergePolicy {
         String pruneNumericDVFieldName,
         boolean pruneIdField,
         CodecReader reader,
-        Supplier<Query> retainSourceQuerySupplier
+        Supplier<Query> retainSourceQuerySupplier,
+        String seqNoField,
+        String primaryTermFieldName
     ) throws IOException {
         NumericDocValues recoverySource = reader.getNumericDocValues(pruneNumericDVFieldName);
         if (recoverySource == null || recoverySource.nextDoc() == DocIdSetIterator.NO_MORE_DOCS) {
@@ -81,10 +103,20 @@ final class RecoverySourcePruneMergePolicy extends OneMergeWrappingMergePolicy {
                 pruneNumericDVFieldName,
                 pruneIdField,
                 reader,
-                recoverySourceToKeep
+                recoverySourceToKeep,
+                seqNoField,
+                primaryTermFieldName
             );
         } else {
-            return new SourcePruningFilterCodecReader(pruneStoredFieldName, pruneNumericDVFieldName, pruneIdField, reader, null);
+            return new SourcePruningFilterCodecReader(
+                pruneStoredFieldName,
+                pruneNumericDVFieldName,
+                pruneIdField,
+                reader,
+                null,
+                seqNoField,
+                primaryTermFieldName
+            );
         }
     }
 
@@ -93,19 +125,25 @@ final class RecoverySourcePruneMergePolicy extends OneMergeWrappingMergePolicy {
         private final String pruneStoredFieldName;
         private final String pruneNumericDVFieldName;
         private final boolean pruneIdField;
+        private final String seqNoFieldName;
+        private final String primaryTermFieldName;
 
         SourcePruningFilterCodecReader(
             @Nullable String pruneStoredFieldName,
             String pruneNumericDVFieldName,
             boolean pruneIdField,
             CodecReader reader,
-            BitSet recoverySourceToKeep
+            BitSet recoverySourceToKeep,
+            String seqNoFieldName,
+            String primaryTermFieldName
         ) {
             super(reader);
             this.pruneStoredFieldName = pruneStoredFieldName;
             this.recoverySourceToKeep = recoverySourceToKeep;
             this.pruneNumericDVFieldName = pruneNumericDVFieldName;
             this.pruneIdField = pruneIdField;
+            this.seqNoFieldName = seqNoFieldName;
+            this.primaryTermFieldName = primaryTermFieldName;
         }
 
         @Override
@@ -115,7 +153,8 @@ final class RecoverySourcePruneMergePolicy extends OneMergeWrappingMergePolicy {
                 @Override
                 public NumericDocValues getNumeric(FieldInfo field) throws IOException {
                     NumericDocValues numeric = super.getNumeric(field);
-                    if (field.name.equals(pruneNumericDVFieldName)) {
+                    if (isPrunableField(field)) {
+                        System.out.println("Pruning " + field.getName() + " " + recoverySourceToKeep);
                         assert numeric != null : pruneNumericDVFieldName + " must have numeric DV but was null";
                         final DocIdSetIterator intersection;
                         if (recoverySourceToKeep == null) {
@@ -147,6 +186,10 @@ final class RecoverySourcePruneMergePolicy extends OneMergeWrappingMergePolicy {
                     return numeric;
                 }
             };
+        }
+
+        private boolean isPrunableField(FieldInfo field) {
+            return field.name.equals(pruneNumericDVFieldName) || field.name.equals(seqNoFieldName) || field.name.equals(primaryTermFieldName);
         }
 
         @Override

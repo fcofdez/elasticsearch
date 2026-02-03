@@ -206,6 +206,10 @@ public class PerFieldFormatSupplier {
     }
 
     boolean useTSDBDocValuesFormat(final String field) {
+        if (field.equals(SeqNoFieldMapper.NAME)) {
+            return false;
+        }
+
         if (excludeFields(field)) {
             return false;
         }
