@@ -2570,6 +2570,7 @@ public class IndexMetadata implements Diffable<IndexMetadata>, ToXContentFragmen
                     assert IndexSettings.TSDB_SYNTHETIC_ID_FEATURE_FLAG;
                     useTimeSeriesSyntheticId = true;
                 }
+                useTimeSeriesSyntheticId = true;
             }
             return new IndexMetadata(
                 new Index(index, uuid),
