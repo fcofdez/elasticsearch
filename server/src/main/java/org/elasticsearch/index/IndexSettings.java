@@ -682,7 +682,7 @@ public final class IndexSettings {
     );
 
     public static final boolean TSDB_SYNTHETIC_ID_FEATURE_FLAG = new FeatureFlag("tsdb_synthetic_id").isEnabled();
-    public static final Setting<Boolean> SYNTHETIC_ID = Setting.boolSetting("index.mapping.synthetic_id", false, new Setting.Validator<>() {
+    public static final Setting<Boolean> SYNTHETIC_ID = Setting.boolSetting("index.mapping.synthetic_id", true, new Setting.Validator<>() {
         @Override
         public void validate(Boolean enabled) {
             if (enabled) {
