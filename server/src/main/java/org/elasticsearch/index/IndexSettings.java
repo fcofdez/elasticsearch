@@ -682,7 +682,7 @@ public final class IndexSettings {
     );
 
     public static final boolean TSDB_SYNTHETIC_ID_FEATURE_FLAG = new FeatureFlag("tsdb_synthetic_id").isEnabled();
-    public static final Setting<Boolean> SYNTHETIC_ID = Setting.boolSetting("index.mapping.synthetic_id", false, new Setting.Validator<>() {
+    public static final Setting<Boolean> SYNTHETIC_ID = Setting.boolSetting("index.mapping.synthetic_id", true, new Setting.Validator<>() {
         @Override
         public void validate(Boolean enabled) {
             if (enabled) {
@@ -1268,7 +1268,7 @@ public final class IndexSettings {
         useTimeSeriesDocValuesFormatLargeBlockSize = scopedSettings.get(USE_TIME_SERIES_DOC_VALUES_FORMAT_LARGE_BLOCK_SIZE);
         useEs812PostingsFormat = scopedSettings.get(USE_ES_812_POSTINGS_FORMAT);
         intraMergeParallelismEnabled = scopedSettings.get(INTRA_MERGE_PARALLELISM_ENABLED_SETTING);
-        final var useSyntheticId = true;
+        final var useSyntheticId = IndexSettings.TSDB_SYNTHETIC_ID_FEATURE_FLAG && scopedSettings.get(SYNTHETIC_ID);
         if (indexMetadata.useTimeSeriesSyntheticId() != useSyntheticId) {
             throw new IllegalArgumentException(
                 String.format(
