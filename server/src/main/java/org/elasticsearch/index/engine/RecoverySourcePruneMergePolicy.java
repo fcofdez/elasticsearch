@@ -222,7 +222,15 @@ final class RecoverySourcePruneMergePolicy extends OneMergeWrappingMergePolicy {
             @Override
             public void document(int docID, StoredFieldVisitor visitor) throws IOException {
                 if (recoverySourceToKeep != null && recoverySourceToKeep.get(docID)) {
-                    super.document(docID, visitor);
+                    super.document(docID, new FilterStoredFieldVisitor(visitor) {
+                        @Override
+                        public Status needsField(FieldInfo fieldInfo) throws IOException {
+                            if (pruneIdField && IdFieldMapper.NAME.equals(fieldInfo.name)) {
+                                return Status.NO;
+                            }
+                            return super.needsField(fieldInfo);
+                        }
+                    });
                 } else {
                     super.document(docID, new FilterStoredFieldVisitor(visitor) {
                         @Override
