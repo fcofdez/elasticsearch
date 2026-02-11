@@ -105,6 +105,7 @@ public class TSDBStoredFieldsFormat extends StoredFieldsFormat {
             // Some clients of this API expect that the _id is read before other fields,
             // therefore we call first to the bloom filter reader so we can synthesize the _id
             // and read it in the expected order.
+            // 
             if (syntheticIdStoredFieldsReader != null) {
                 syntheticIdStoredFieldsReader.document(docID, visitor);
             }
