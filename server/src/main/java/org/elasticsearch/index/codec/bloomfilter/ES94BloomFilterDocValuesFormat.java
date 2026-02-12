@@ -866,7 +866,7 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
         // Use median size as a balance: folding very large filters loses precision,
         // while expanding very small filters increases false positive rate.
         // Median minimizes the worst-case precision loss across all merged filters.
-        return boundAndRoundBloomFilterSizeInBytes(segmentSizes.stream().sorted().skip(segmentSizes.size() / 2).findFirst().orElseThrow());
+        return boundAndRoundBloomFilterSizeInBytes(segmentSizes.stream().max(Integer::compareTo).orElseThrow());
     }
 
     private int boundAndRoundBloomFilterSizeInBytes(long idealSizeInBytes) {
