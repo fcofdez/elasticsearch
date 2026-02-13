@@ -38,7 +38,7 @@ public class TSDBStoredFieldsFormat extends StoredFieldsFormat {
 
     @Override
     public StoredFieldsReader fieldsReader(Directory directory, SegmentInfo si, FieldInfos fn, IOContext context) throws IOException {
-        return new TSDBStoredFieldsReader(directory, si, fn, context);
+        return delegate.fieldsReader(directory, si, fn, context);
     }
 
     @Override
