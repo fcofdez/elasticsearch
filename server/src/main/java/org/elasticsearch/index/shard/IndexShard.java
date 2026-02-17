@@ -3890,7 +3890,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             translogConfig,
             IndexingMemoryController.SHARD_INACTIVE_TIME_SETTING.get(indexSettings.getSettings()),
             List.of(refreshListeners, refreshPendingLocationListener, refreshFieldHasValueListener),
-            List.of(new RefreshMetricUpdater(refreshMetric), new RefreshShardFieldStatsListener()),
+            List.of(new RefreshMetricUpdater(refreshMetric), new RefreshShardFieldStatsListener(), new SegmentSizeStatsListener()),
             indexSort,
             circuitBreakerService,
             globalCheckpointSupplier,
@@ -4518,6 +4518,22 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                 try {
                     shardFieldStats = getEngine().shardFieldStats();
                 } catch (AlreadyClosedException ignored) {}
+            }
+        }
+    }
+
+    private class SegmentSizeStatsListener implements ReferenceManager.RefreshListener {
+        @Override
+        public void beforeRefresh() {
+
+        }
+
+        @Override
+        public void afterRefresh(boolean didRefresh) throws IOException {
+            if (didRefresh) {
+                for (Segment segment : getEngine().segments()) {
+                    logger.info("--> segment {}", segment);
+                }
             }
         }
     }
