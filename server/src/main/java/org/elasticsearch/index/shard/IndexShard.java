@@ -4523,6 +4523,8 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     }
 
     private class SegmentSizeStatsListener implements ReferenceManager.RefreshListener {
+        private final AtomicLong snap = new AtomicLong();
+
         @Override
         public void beforeRefresh() {
 
@@ -4531,9 +4533,12 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         @Override
         public void afterRefresh(boolean didRefresh) throws IOException {
             if (didRefresh) {
+                var snapNumber = snap.incrementAndGet();
+                logger.info("--> starting segment size snapshot [{}]", snapNumber);
                 for (Segment segment : getEngine().segments()) {
-                    logger.info("--> segment {}", segment);
+                    logger.info("--> [{}] segment {}", snapNumber, segment);
                 }
+                logger.info("--> finished segment size snapshot [{}]", snapNumber);
             }
         }
     }
