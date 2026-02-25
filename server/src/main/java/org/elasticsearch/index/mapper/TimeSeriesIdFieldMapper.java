@@ -210,7 +210,11 @@ public class TimeSeriesIdFieldMapper extends MetadataFieldMapper {
         // for time-series indices the _id isn't available at that point.
         for (LuceneDocument doc : context.nonRootDocuments()) {
             assert doc.getField(IdFieldMapper.NAME) == null;
-            doc.add(new StringField(IdFieldMapper.NAME, uidEncoded, Field.Store.NO));
+            if (context.indexSettings().useTimeSeriesSyntheticId()) {
+                doc.add(new SyntheticIdField(uidEncoded));
+            } else {
+                doc.add(new StringField(IdFieldMapper.NAME, uidEncoded, Field.Store.NO));
+            }
         }
     }
 

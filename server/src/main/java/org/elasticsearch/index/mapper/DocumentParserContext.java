@@ -755,7 +755,11 @@ public abstract class DocumentParserContext {
         if (idField != null) {
             // We just need to store the id as indexed field, so that IndexWriter#deleteDocuments(term) can then
             // delete it when the root document is deleted too.
-            doc.add(new StringField(IdFieldMapper.NAME, idField.binaryValue(), Field.Store.NO));
+            if (nestedMapper.indexSettings().useTimeSeriesSyntheticId()) {
+                doc.add(new SyntheticIdField(idField.binaryValue()));
+            } else {
+                doc.add(new StringField(IdFieldMapper.NAME, idField.binaryValue(), Field.Store.NO));
+            }
         } else if (indexSettings().getMode() == IndexMode.TIME_SERIES) {
             // For time series indices, the _id is generated from the _tsid, which in turn is generated from the values of the configured
             // routing fields. At this point in document parsing, we can't guarantee that we've parsed all the routing fields yet, so the

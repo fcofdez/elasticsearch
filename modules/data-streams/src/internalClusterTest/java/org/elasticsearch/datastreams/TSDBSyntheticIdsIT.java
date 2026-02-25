@@ -9,6 +9,7 @@
 
 package org.elasticsearch.datastreams;
 
+import org.apache.lucene.search.join.ScoreMode;
 import org.apache.lucene.tests.util.LuceneTestCase;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.action.DocWriteRequest;
@@ -915,6 +916,112 @@ public class TSDBSyntheticIdsIT extends ESIntegTestCase {
         }
     }
 
+    public void testNestedFields() throws Exception {
+        assumeTrue("Test should only run with feature flag", IndexSettings.TSDB_SYNTHETIC_ID_FEATURE_FLAG);
+
+        final String indexName = "test";
+        var settings = indexSettings(1, 1).put(IndexSettings.MODE.getKey(), IndexMode.TIME_SERIES.getName())
+            .put("index.routing_path", "department")
+            .put("index.time_series.start_time", "2021-04-28T00:00:00Z")
+            .put("index.time_series.end_time", "2021-04-29T00:00:00Z")
+            .put(IndexSettings.SYNTHETIC_ID.getKey(), true)
+            .put("index.codec", "default");
+
+        final var mappings = """
+            {
+                "properties": {
+                    "@timestamp": {
+                        "type": "date"
+                    },
+                    "department": {
+                        "type": "keyword",
+                        "time_series_dimension": true
+                    },
+                    "staff": {
+                        "type": "integer"
+                    },
+                    "courses": {
+                        "type": "nested",
+                        "properties": {
+                            "name": {
+                                "type": "keyword"
+                            },
+                            "credits": {
+                                "type": "integer"
+                            }
+                        }
+                    }
+                }
+            }""";
+
+        assertAcked(indicesAdmin().prepareCreate(indexName).setSettings(settings).setMapping(mappings));
+
+        prepareIndex(indexName).setSource(
+            nestedDocument(
+                "2021-04-28T01:00:00Z",
+                "compsci",
+                12,
+                List.of(Map.of("name", "Object Oriented Programming", "credits", 3), Map.of("name", "Theory of Computation", "credits", 4))
+            )
+        ).get();
+
+        prepareIndex(indexName).setSource(
+            nestedDocument(
+                "2021-04-28T02:00:00Z",
+                "math",
+                20,
+                List.of(Map.of("name", "Precalculus", "credits", 1), Map.of("name", "Linear Algebra", "credits", 3))
+            )
+        ).get();
+
+        refresh(indexName);
+
+        assertHitCount(
+            client().prepareSearch(indexName)
+                .setTrackTotalHits(true)
+                .setSize(0)
+                .setQuery(
+                    QueryBuilders.nestedQuery(
+                        "courses",
+                        QueryBuilders.boolQuery()
+                            .must(QueryBuilders.termQuery("courses.name", "Precalculus"))
+                            .must(QueryBuilders.termQuery("courses.credits", 3)),
+                        ScoreMode.None
+                    )
+                ),
+            0L
+        );
+
+        assertCheckedResponse(
+            client().prepareSearch(indexName)
+                .setTrackTotalHits(true)
+                .setQuery(
+                    QueryBuilders.nestedQuery(
+                        "courses",
+                        QueryBuilders.boolQuery()
+                            .must(QueryBuilders.termQuery("courses.name", "Object Oriented Programming"))
+                            .must(QueryBuilders.termQuery("courses.credits", 3)),
+                        ScoreMode.None
+                    )
+                ),
+            searchResponse -> {
+                assertHitCount(searchResponse, 1L);
+                var hit = searchResponse.getHits().getHits()[0];
+                var source = hit.getSourceAsMap();
+                assertThat(source.get("@timestamp"), equalTo("2021-04-28T01:00:00.000Z"));
+                assertThat(source.get("department"), equalTo("compsci"));
+
+                @SuppressWarnings("unchecked")
+                var courses = (List<Map<String, Object>>) source.get("courses");
+                assertThat(courses, hasSize(2));
+                assertThat(courses.get(0).get("name"), equalTo("Object Oriented Programming"));
+                assertThat(courses.get(0).get("credits"), equalTo(3));
+                assertThat(courses.get(1).get("name"), equalTo("Theory of Computation"));
+                assertThat(courses.get(1).get("credits"), equalTo(4));
+            }
+        );
+    }
+
     private static void assertTranslogOperation(
         String indexName,
         DocumentMapper documentMapper,
@@ -1259,6 +1366,28 @@ public class TSDBSyntheticIdsIT extends ESIntegTestCase {
                     .build()
             );
         assertAcked(client().execute(TransportPutComposableIndexTemplateAction.TYPE, putTemplateRequest).actionGet());
+    }
+
+    private static XContentBuilder nestedDocument(String timestamp, String department, int staff, List<Map<String, Object>> courses)
+        throws IOException {
+        var source = XContentFactory.jsonBuilder();
+        source.startObject();
+        {
+            source.field("@timestamp", timestamp);
+            source.field("department", department);
+            source.field("staff", staff);
+            source.startArray("courses");
+            for (var course : courses) {
+                source.startObject();
+                for (var entry : course.entrySet()) {
+                    source.field(entry.getKey(), entry.getValue());
+                }
+                source.endObject();
+            }
+            source.endArray();
+        }
+        source.endObject();
+        return source;
     }
 
     private static IndexDiskUsageStats diskUsage(String indexName) {
