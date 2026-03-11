@@ -48,7 +48,7 @@ public class IndexingMemoryController implements IndexingOperationListener, Clos
     /** How much heap (% or bytes) we will share across all actively indexing shards on this node (default: 10%). */
     public static final Setting<ByteSizeValue> INDEX_BUFFER_SIZE_SETTING = Setting.memorySizeSetting(
         "indices.memory.index_buffer_size",
-        "10%",
+        "20%",
         Property.NodeScope
     );
 
