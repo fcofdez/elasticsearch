@@ -74,6 +74,11 @@ public interface BloomFilter extends Closeable {
                     public void close() throws IOException {
                         docValuesProducer.close();
                     }
+
+                    @Override
+                    public String toString() {
+                        return binaryDocValuesProducer.toString();
+                    }
                 };
             } else {
                 docValuesProducer.close();

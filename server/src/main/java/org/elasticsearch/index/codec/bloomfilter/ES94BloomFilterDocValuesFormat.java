@@ -502,7 +502,11 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
         private void initBitSetBufferForMerge(List<Integer> bloomFilterSizes) {
             var sizeInBytes = bloomFilterSizeInBytesForMergedSegment(bloomFilterSizes);
-            logger.info("--> bloom filter size for merge: {} ", ByteSizeValue.ofBytes(sizeInBytes).toString());
+            logger.info(
+                "--> bloom filter size for merge: {} -> {}",
+                ByteSizeValue.ofBytes(sizeInBytes).toString(),
+                bloomFilterSizes.stream().map(ByteSizeValue::ofBytes).toList()
+            );
             initBitSetBuffer(sizeInBytes);
         }
 
@@ -806,6 +810,10 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
         void checkIntegrity() throws IOException {
             checkIntegrityFn.run();
+        }
+
+        @Override public String toString() {
+            return "BloomFilterFieldReader{" + "bloomFilterBitSetSize=" + ByteSizeValue.ofBytes(sizeInBytes()).toString() + '}';
         }
     }
 
