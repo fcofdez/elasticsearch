@@ -234,6 +234,7 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                 BytesRef value = values.binaryValue();
                 addToBloomFilter(value);
             }
+            logSaturation("flush");
         }
 
         private void addToBloomFilter(BytesRef value) {
@@ -334,9 +335,14 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                         );
                     }
                 }
+                logSaturation("merge reader");
                 firstBloomFilter.set(false);
             });
 
+            logSaturation("total merge");
+        }
+
+        private void logSaturation(String event) {
             if (logger.isInfoEnabled()) {
                 final int totalBits = bitSetBuffer.sizeInBits;
                 long setBits = 0;
@@ -353,7 +359,8 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                     remaining -= pageLen;
                 }
                 logger.info(
-                    "--> bloom filter saturation after optimized merge: {}/{} bits set ({} %) {}",
+                    "--> bloom filter saturation after {}: {}/{} bits set ({} %) {}",
+                    event,
                     setBits,
                     totalBits,
                     String.format("%.2f", 100.0 * setBits / totalBits),
