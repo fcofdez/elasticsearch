@@ -297,6 +297,7 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
                 RandomAccessInput bloomFilterData = bloomFilterFieldReader.bloomFilterIn;
                 final int sourceSizeInBytes = bloomFilterFieldReader.getBloomFilterBitSetSizeInBytes();
+                logSourceSaturation(bloomFilterData, sourceSizeInBytes);
 
                 if (sourceSizeInBytes >= targetBitSetSizeInBytes) {
                     // Fold: source is larger (or equal), so we partition it into chunks
@@ -340,6 +341,32 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
             });
 
             logSaturation("total merge");
+        }
+
+        private void logSourceSaturation(RandomAccessInput source, int sizeInBytes) throws IOException {
+            if (logger.isInfoEnabled()) {
+                final int totalBits = sizeInBytes * Byte.SIZE;
+                long setBits = 0;
+                final byte[] scratch = new byte[PageCacheRecycler.PAGE_SIZE_IN_BYTES];
+                int remaining = sizeInBytes;
+                int offset = 0;
+                while (remaining > 0) {
+                    int pageLen = Math.min(PageCacheRecycler.PAGE_SIZE_IN_BYTES, remaining);
+                    source.readBytes(offset, scratch, 0, pageLen);
+                    for (int i = 0; i < pageLen; i++) {
+                        setBits += Integer.bitCount(scratch[i] & 0xFF);
+                    }
+                    offset += pageLen;
+                    remaining -= pageLen;
+                }
+                logger.info(
+                    "--> bloom filter source reader saturation: {}/{} bits set ({} %) {}",
+                    setBits,
+                    totalBits,
+                    String.format("%.2f", 100.0 * setBits / totalBits),
+                    ByteSizeValue.ofBytes(sizeInBytes).toString()
+                );
+            }
         }
 
         private void logSaturation(String event) {
