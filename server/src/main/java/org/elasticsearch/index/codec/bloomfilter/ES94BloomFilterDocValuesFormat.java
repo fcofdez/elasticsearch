@@ -103,7 +103,7 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
     //
     // Note: The bloom filter size is capped at MAX_BLOOM_FILTER_SIZE, so this false positive rate only holds for segments
     // with up to ~2.8 million documents. Larger segments will have higher false positive rates.
-    static final int DEFAULT_BLOOM_FILTER_OVERSIZE_FACTOR = 64;
+    static final int DEFAULT_BLOOM_FILTER_OVERSIZE_FACTOR = 1024;
     static final ByteSizeValue MAX_BLOOM_FILTER_SIZE = ByteSizeValue.ofMb(8);
 
     private final BigArrays bigArrays;
