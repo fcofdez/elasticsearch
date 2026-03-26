@@ -336,6 +336,30 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                 }
                 firstBloomFilter.set(false);
             });
+
+            if (logger.isInfoEnabled()) {
+                final int totalBits = bitSetBuffer.sizeInBits;
+                long setBits = 0;
+                final BytesRef pageRef = new BytesRef();
+                int remaining = bitSetBuffer.sizeInBytes;
+                int pageOffset = 0;
+                while (remaining > 0) {
+                    int pageLen = Math.min(PageCacheRecycler.PAGE_SIZE_IN_BYTES, remaining);
+                    bitSetBuffer.get(pageOffset, pageLen, pageRef);
+                    for (int i = 0; i < pageLen; i++) {
+                        setBits += Integer.bitCount(pageRef.bytes[pageRef.offset + i] & 0xFF);
+                    }
+                    pageOffset += pageLen;
+                    remaining -= pageLen;
+                }
+                logger.info(
+                    "--> bloom filter saturation after optimized merge: {}/{} bits set ({} %) {}",
+                    setBits,
+                    totalBits,
+                    String.format("%.2f", 100.0 * setBits / totalBits),
+                    ByteSizeValue.ofBytes(bitSetBuffer.sizeInBytes).toString()
+                );
+            }
         }
 
         private void orRegion(
