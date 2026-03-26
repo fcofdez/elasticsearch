@@ -41,6 +41,7 @@ import org.apache.lucene.store.RandomAccessInput;
 import org.apache.lucene.util.BitUtil;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.lucene.store.IndexOutputOutputStream;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
@@ -50,6 +51,8 @@ import org.elasticsearch.core.Assertions;
 import org.elasticsearch.core.CheckedConsumer;
 import org.elasticsearch.core.CheckedRunnable;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -85,6 +88,7 @@ import static org.elasticsearch.index.codec.bloomfilter.BloomFilterHashFunctions
  * </ol>
  */
 public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
+    private static final Logger logger = LogManager.getLogger(ES94BloomFilterDocValuesFormat.class);
     public static final String FORMAT_NAME = "ES94BloomFilterDocValuesFormat";
     public static final String STORED_FIELDS_BLOOM_FILTER_EXTENSION = "sfbf";
     public static final String STORED_FIELDS_METADATA_BLOOM_FILTER_EXTENSION = "sfbfm";
@@ -492,11 +496,13 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
         private void initBitSetBufferForNewSegment(int numDocs) {
             int sizeInBytes = bloomFilterSizeInBytesForNewSegment(numDocs);
+            logger.info("--> bloom filter size: {} ({} docs)", ByteSizeValue.ofBytes(sizeInBytes).toString(), numDocs);
             initBitSetBuffer(sizeInBytes);
         }
 
         private void initBitSetBufferForMerge(List<Integer> bloomFilterSizes) {
             var sizeInBytes = bloomFilterSizeInBytesForMergedSegment(bloomFilterSizes);
+            logger.info("--> bloom filter size for merge: {} ", ByteSizeValue.ofBytes(sizeInBytes).toString());
             initBitSetBuffer(sizeInBytes);
         }
 

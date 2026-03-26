@@ -45,7 +45,7 @@ public class DelegatingBloomFilterFieldsProducer extends FieldsProducer {
 
     @Override
     public void close() throws IOException {
-        logger.info("bloom filter stats: checks={}, hits={}, false positives={}", numChecks.sum(), numHits.sum(), numFalsePositives.sum());
+        logger.info("bloom filter stats: checks={}, hits={}, false positives={} {}", numChecks.sum(), numHits.sum(), numFalsePositives.sum(), bloomFilter);
         IOUtils.close(delegate, bloomFilter);
     }
 
