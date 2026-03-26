@@ -41,6 +41,7 @@ import org.apache.lucene.store.RandomAccessInput;
 import org.apache.lucene.util.BitUtil;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.lucene.store.IndexOutputOutputStream;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
@@ -50,6 +51,8 @@ import org.elasticsearch.core.Assertions;
 import org.elasticsearch.core.CheckedConsumer;
 import org.elasticsearch.core.CheckedRunnable;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -85,6 +88,7 @@ import static org.elasticsearch.index.codec.bloomfilter.BloomFilterHashFunctions
  * </ol>
  */
 public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
+    private static final Logger logger = LogManager.getLogger(ES94BloomFilterDocValuesFormat.class);
     public static final String FORMAT_NAME = "ES94BloomFilterDocValuesFormat";
     public static final String STORED_FIELDS_BLOOM_FILTER_EXTENSION = "sfbf";
     public static final String STORED_FIELDS_METADATA_BLOOM_FILTER_EXTENSION = "sfbfm";
@@ -230,6 +234,7 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                 BytesRef value = values.binaryValue();
                 addToBloomFilter(value);
             }
+            logSaturation("flush");
         }
 
         private void addToBloomFilter(BytesRef value) {
@@ -292,6 +297,7 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
                 RandomAccessInput bloomFilterData = bloomFilterFieldReader.bloomFilterIn;
                 final int sourceSizeInBytes = bloomFilterFieldReader.getBloomFilterBitSetSizeInBytes();
+                logSourceSaturation(bloomFilterData, sourceSizeInBytes);
 
                 if (sourceSizeInBytes >= targetBitSetSizeInBytes) {
                     // Fold: source is larger (or equal), so we partition it into chunks
@@ -330,8 +336,64 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                         );
                     }
                 }
+                logSaturation("merge reader");
                 firstBloomFilter.set(false);
             });
+
+            logSaturation("total merge");
+        }
+
+        private void logSourceSaturation(RandomAccessInput source, int sizeInBytes) throws IOException {
+            if (logger.isInfoEnabled()) {
+                final int totalBits = sizeInBytes * Byte.SIZE;
+                long setBits = 0;
+                final byte[] scratch = new byte[PageCacheRecycler.PAGE_SIZE_IN_BYTES];
+                int remaining = sizeInBytes;
+                int offset = 0;
+                while (remaining > 0) {
+                    int pageLen = Math.min(PageCacheRecycler.PAGE_SIZE_IN_BYTES, remaining);
+                    source.readBytes(offset, scratch, 0, pageLen);
+                    for (int i = 0; i < pageLen; i++) {
+                        setBits += Integer.bitCount(scratch[i] & 0xFF);
+                    }
+                    offset += pageLen;
+                    remaining -= pageLen;
+                }
+                logger.info(
+                    "--> bloom filter source reader saturation: {}/{} bits set ({} %) {}",
+                    setBits,
+                    totalBits,
+                    String.format("%.2f", 100.0 * setBits / totalBits),
+                    ByteSizeValue.ofBytes(sizeInBytes).toString()
+                );
+            }
+        }
+
+        private void logSaturation(String event) {
+            if (logger.isInfoEnabled()) {
+                final int totalBits = bitSetBuffer.sizeInBits;
+                long setBits = 0;
+                final BytesRef pageRef = new BytesRef();
+                int remaining = bitSetBuffer.sizeInBytes;
+                int pageOffset = 0;
+                while (remaining > 0) {
+                    int pageLen = Math.min(PageCacheRecycler.PAGE_SIZE_IN_BYTES, remaining);
+                    bitSetBuffer.get(pageOffset, pageLen, pageRef);
+                    for (int i = 0; i < pageLen; i++) {
+                        setBits += Integer.bitCount(pageRef.bytes[pageRef.offset + i] & 0xFF);
+                    }
+                    pageOffset += pageLen;
+                    remaining -= pageLen;
+                }
+                logger.info(
+                    "--> bloom filter saturation after {}: {}/{} bits set ({} %) {}",
+                    event,
+                    setBits,
+                    totalBits,
+                    String.format("%.2f", 100.0 * setBits / totalBits),
+                    ByteSizeValue.ofBytes(bitSetBuffer.sizeInBytes).toString()
+                );
+            }
         }
 
         private void orRegion(
@@ -492,11 +554,17 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
         private void initBitSetBufferForNewSegment(int numDocs) {
             int sizeInBytes = bloomFilterSizeInBytesForNewSegment(numDocs);
+            logger.info("--> bloom filter size: {} ({} docs)", ByteSizeValue.ofBytes(sizeInBytes).toString(), numDocs);
             initBitSetBuffer(sizeInBytes);
         }
 
         private void initBitSetBufferForMerge(List<Integer> bloomFilterSizes) {
             var sizeInBytes = bloomFilterSizeInBytesForMergedSegment(bloomFilterSizes);
+            logger.info(
+                "--> bloom filter size for merge: {} -> {}",
+                ByteSizeValue.ofBytes(sizeInBytes).toString(),
+                bloomFilterSizes.stream().map(ByteSizeValue::ofBytes).toList()
+            );
             initBitSetBuffer(sizeInBytes);
         }
 
@@ -800,6 +868,10 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
         void checkIntegrity() throws IOException {
             checkIntegrityFn.run();
+        }
+
+        @Override public String toString() {
+            return "BloomFilterFieldReader{" + "bloomFilterBitSetSize=" + ByteSizeValue.ofBytes(sizeInBytes()).toString() + '}';
         }
     }
 
