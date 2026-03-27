@@ -15,6 +15,7 @@ import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.mapper.IdFieldMapper;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
@@ -33,19 +34,35 @@ public class DelegatingBloomFilterFieldsProducer extends FieldsProducer {
     private static final Set<String> FIELD_NAMES = Set.of(IdFieldMapper.NAME);
     private final FieldsProducer delegate;
     private final BloomFilter bloomFilter;
+    private final long minTs;
+    private final long maxTs;
     private final LongAdder numChecks = new LongAdder();
     private final LongAdder numHits = new LongAdder();
     private final LongAdder numFalsePositives = new LongAdder();
     private static final Logger logger = LogManager.getLogger(DelegatingBloomFilterFieldsProducer.class);
+    private final long startedNs;
 
-    public DelegatingBloomFilterFieldsProducer(FieldsProducer delegate, BloomFilter bloomFilter) {
+    public DelegatingBloomFilterFieldsProducer(FieldsProducer delegate, BloomFilter bloomFilter, long minTs, long maxTs) {
         this.delegate = delegate;
         this.bloomFilter = bloomFilter;
+        this.minTs = minTs;
+        this.maxTs = maxTs;
+        this.startedNs = System.nanoTime();
     }
 
     @Override
     public void close() throws IOException {
-        logger.info("bloom filter stats: checks={}, hits={}, false positives={} {}", numChecks.sum(), numHits.sum(), numFalsePositives.sum(), bloomFilter);
+        logger.info(
+            "bloom filter stats: checks={}, hits={}, false positives={} {} [{}/{}] age={} saturation={}",
+            numChecks.sum(),
+            numHits.sum(),
+            numFalsePositives.sum(),
+            bloomFilter,
+            minTs,
+            maxTs,
+            TimeValue.timeValueNanos(System.nanoTime() - startedNs).getSecondsFrac(),
+            String.format("%.2f%%", bloomFilter.saturation() * 100)
+        );
         IOUtils.close(delegate, bloomFilter);
     }
 

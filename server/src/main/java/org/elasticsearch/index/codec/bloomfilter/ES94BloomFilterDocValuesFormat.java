@@ -41,7 +41,6 @@ import org.apache.lucene.store.RandomAccessInput;
 import org.apache.lucene.util.BitUtil;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.bytes.BytesReference;
-import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.lucene.store.IndexOutputOutputStream;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
@@ -831,6 +830,25 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
         @Override
         public long sizeInBytes() {
             return getBloomFilterBitSetSizeInBytes();
+        }
+
+        @Override
+        public double saturation() throws IOException {
+            final int sizeInBytes = getBloomFilterBitSetSizeInBytes();
+            long setBits = 0;
+            final byte[] scratch = new byte[PageCacheRecycler.PAGE_SIZE_IN_BYTES];
+            int remaining = sizeInBytes;
+            int offset = 0;
+            while (remaining > 0) {
+                int pageLen = Math.min(PageCacheRecycler.PAGE_SIZE_IN_BYTES, remaining);
+                bloomFilterIn.readBytes(offset, scratch, 0, pageLen);
+                for (int i = 0; i < pageLen; i++) {
+                    setBits += Integer.bitCount(scratch[i] & 0xFF);
+                }
+                offset += pageLen;
+                remaining -= pageLen;
+            }
+            return (double) setBits / bloomFilterBitSetSizeInBits;
         }
 
         @Override

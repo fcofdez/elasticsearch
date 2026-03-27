@@ -52,9 +52,13 @@ public class TSDBSyntheticIdPostingsFormat extends PostingsFormat {
 
             BloomFilter bloomFilter = BloomFilter.getBloomFilterForId(segmentReadState);
             docValuesProducer = codec.docValuesFormat().fieldsProducer(segmentReadState);
+
+            var tsFieldInfo = state.fieldInfos.fieldInfo(TSDBSyntheticIdPostingsFormat.TIMESTAMP);
+            var minTs = docValuesProducer.getSkipper(tsFieldInfo).minValue();
+            var maxTs = docValuesProducer.getSkipper(tsFieldInfo).maxValue();
             var fieldsProducer = new TSDBSyntheticIdFieldsProducer(state, docValuesProducer);
             success = true;
-            return new DelegatingBloomFilterFieldsProducer(fieldsProducer, bloomFilter);
+            return new DelegatingBloomFilterFieldsProducer(fieldsProducer, bloomFilter, minTs, maxTs);
         } finally {
             if (success == false) {
                 IOUtils.close(docValuesProducer);

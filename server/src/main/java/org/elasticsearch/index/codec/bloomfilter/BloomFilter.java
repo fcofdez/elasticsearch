@@ -32,6 +32,11 @@ public interface BloomFilter extends Closeable {
         public long sizeInBytes() {
             return 0;
         }
+
+        @Override
+        public double saturation() {
+            return Double.NaN;
+        }
     };
 
     /**
@@ -47,6 +52,12 @@ public interface BloomFilter extends Closeable {
      * Returns the size in bytes of the bloom filter data on disk.
      */
     long sizeInBytes();
+
+    /**
+     * Returns the saturation of the bloom filter as a value in [0, 1], i.e. the fraction of bits
+     * that are set. Higher saturation means a higher false positive rate.
+     */
+    double saturation() throws IOException;
 
     static BloomFilter getBloomFilterForId(SegmentReadState state) throws IOException {
         var codec = state.segmentInfo.getCodec();
@@ -68,6 +79,11 @@ public interface BloomFilter extends Closeable {
                     @Override
                     public long sizeInBytes() {
                         return bloomFilter.sizeInBytes();
+                    }
+
+                    @Override
+                    public double saturation() throws IOException {
+                        return bloomFilter.saturation();
                     }
 
                     @Override
