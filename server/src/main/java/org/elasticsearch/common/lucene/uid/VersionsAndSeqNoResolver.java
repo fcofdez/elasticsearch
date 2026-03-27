@@ -18,14 +18,22 @@ import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.core.Assertions;
 import org.elasticsearch.index.mapper.TsidExtractingIdFieldMapper;
 import org.elasticsearch.index.mapper.Uid;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.ConcurrentMap;
 
 /** Utility class to resolve the Lucene doc ID, version, seqNo and primaryTerms for a given uid. */
 public final class VersionsAndSeqNoResolver {
+    private static final Logger logger = LogManager.getLogger(VersionsAndSeqNoResolver.class);
+    private static final long LATE_ARRIVAL_THRESHOLD_MS = 60_000L;
+    // Per-thread state for late arrival detection.
+    private static final ThreadLocal<Long> callCounter = ThreadLocal.withInitial(() -> 0L);
+    private static final ThreadLocal<Long> sampledTimestamp = ThreadLocal.withInitial(() -> Long.MIN_VALUE);
 
     static final ConcurrentMap<IndexReader.CacheKey, CloseableThreadLocal<PerThreadIDVersionAndSeqNoLookup[]>> lookupStates =
         ConcurrentCollections.newConcurrentMapWithAggressiveConcurrency();
@@ -177,6 +185,20 @@ public final class VersionsAndSeqNoResolver {
         } else {
             byte[] idAsBytes = Base64.getUrlDecoder().decode(id);
             timestamp = TsidExtractingIdFieldMapper.extractTimestampFromId(idAsBytes);
+        }
+        long count = callCounter.get() + 1;
+        callCounter.set(count);
+        if ((count & 0x3FF) == 0 && logger.isInfoEnabled()) {
+            long last = sampledTimestamp.get();
+            if (last != Long.MIN_VALUE && Math.abs(last - timestamp) >= LATE_ARRIVAL_THRESHOLD_MS) {
+                logger.info(
+                    "Late arriving time series document: timestamp={} last sampled={} diff={}min",
+                    Instant.ofEpochMilli(timestamp),
+                    Instant.ofEpochMilli(last),
+                    String.format("%.2f", (last - timestamp) / 60_000.0)
+                );
+            }
+            sampledTimestamp.set(timestamp);
         }
         PerThreadIDVersionAndSeqNoLookup[] lookups = getLookupState(reader, true);
         List<LeafReaderContext> leaves = reader.leaves();
