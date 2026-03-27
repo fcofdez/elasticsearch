@@ -21,6 +21,7 @@ import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.Iterator;
 import java.util.Set;
 import java.util.concurrent.atomic.LongAdder;
@@ -53,14 +54,15 @@ public class DelegatingBloomFilterFieldsProducer extends FieldsProducer {
     @Override
     public void close() throws IOException {
         logger.info(
-            "bloom filter stats: checks={}, hits={}, false positives={} {} [{}/{}] age={} saturation={}",
+            "bloom filter stats: checks={}, hits={}, false positives={} {} [{}/{}] span={}min age={} saturation={}",
             numChecks.sum(),
             numHits.sum(),
             numFalsePositives.sum(),
             bloomFilter,
-            minTs,
-            maxTs,
-            TimeValue.timeValueNanos(System.nanoTime() - startedNs).getSecondsFrac(),
+            Instant.ofEpochMilli(minTs),
+            Instant.ofEpochMilli(maxTs),
+            String.format("%.2f", (maxTs - minTs) / 60_000.0),
+            TimeValue.timeValueNanos(System.nanoTime() - startedNs).getSeconds(),
             String.format("%.2f%%", bloomFilter.saturation() * 100)
         );
         IOUtils.close(delegate, bloomFilter);
