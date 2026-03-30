@@ -32,6 +32,11 @@ public interface BloomFilter extends Closeable {
         public long sizeInBytes() {
             return 0;
         }
+
+        @Override
+        public double saturation() {
+            return 0;
+        }
     };
 
     /**
@@ -47,6 +52,14 @@ public interface BloomFilter extends Closeable {
      * Returns the size in bytes of the bloom filter data on disk.
      */
     long sizeInBytes();
+
+    /**
+     * Returns the fraction of bits set in the filter's bit array, i.e. the number of set bits
+     * divided by the total number of bits. For a filter with {@code k} hash functions and
+     * {@code n} inserted elements over {@code m} bits, the expected value is
+     * {@code 1 - e^(-k*n/m)}. A higher saturation means a higher false-positive rate.
+     */
+    double saturation() throws IOException;
 
     static BloomFilter getBloomFilterForId(SegmentReadState state) throws IOException {
         var codec = state.segmentInfo.getCodec();
@@ -73,6 +86,11 @@ public interface BloomFilter extends Closeable {
                     @Override
                     public void close() throws IOException {
                         docValuesProducer.close();
+                    }
+
+                    @Override
+                    public double saturation() throws IOException {
+                        return bloomFilter.saturation();
                     }
                 };
             } else {
