@@ -13,6 +13,7 @@ import org.apache.lucene.store.IOContext;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.SubscribableListener;
 import org.elasticsearch.action.support.ThreadedActionListener;
+import org.elasticsearch.blobcache.common.ByteRange;
 import org.elasticsearch.cluster.metadata.IndexReshardingMetadata;
 import org.elasticsearch.cluster.project.ProjectResolver;
 import org.elasticsearch.cluster.routing.RecoverySource;
@@ -69,6 +70,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
@@ -272,15 +274,22 @@ class StatelessIndexEventListener implements IndexEventListener {
         assert indexShard.routingEntry().isPromotableToPrimary();
         final var recoveryInfoFromSource = statelessCommitService.getRecoveryInfoFromSourceEntry(indexShard.shardId());
         final var sourceBlobsInfo = recoveryInfoFromSource == null ? null : recoveryInfoFromSource.sourceBlobsInfo();
-        final var hasRecentIdLookup = recoveryInfoFromSource == null ? false : recoveryInfoFromSource.hasRecentIdLookup();
+        final var lastCommitBlobs = recoveryInfoFromSource == null ? null : recoveryInfoFromSource.lastCommitBlobs();
+        final var hasRecentIdLookup = recoveryInfoFromSource != null && recoveryInfoFromSource.hasRecentIdLookup();
         final long readIndexingShardStateStartMillis = threadPool.relativeTimeInMillis();
         SubscribableListener.<ObjectStoreService.IndexingShardState>newForked(l -> {
             if (shardContainer == null) {
                 ActionListener.completeWith(l, () -> ObjectStoreService.IndexingShardState.EMPTY);
                 return;
             }
+
+            final var directory = IndexBlobStoreCacheDirectory.unwrapDirectory(indexShard.store().directory());
+            if (lastCommitBlobs != null) {
+                warmingService.warmCacheForBCCHeadersRead(indexShard, directory, lastCommitBlobs, ActionListener.noop());
+            }
+
             ObjectStoreService.readIndexingShardState(
-                IndexBlobStoreCacheDirectory.unwrapDirectory(indexShard.store().directory()),
+                directory,
                 IOContext.DEFAULT,
                 shardContainer,
                 indexShard.getOperationPrimaryTerm(),
@@ -289,7 +298,6 @@ class StatelessIndexEventListener implements IndexEventListener {
                 bccHeaderReadExecutor,
                 true,
                 sourceBlobsInfo,
-                warmingService,
                 l
             );
         }).<Void>andThen((l, state) -> {
@@ -478,7 +486,6 @@ class StatelessIndexEventListener implements IndexEventListener {
                                     }
                                 );
                             },
-                            warmingService,
                             l2.map(aVoid -> new Tuple<>(blobFileRanges, offsetsToWarm))
                         );
                     } else {

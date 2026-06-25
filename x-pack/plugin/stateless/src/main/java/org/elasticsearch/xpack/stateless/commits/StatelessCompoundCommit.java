@@ -334,6 +334,30 @@ public record StatelessCompoundCommit(
         return commitBoundary;
     }
 
+    public record BlobFilesUpperBounds(Map<BlobFile, Long> blobs) implements Writeable {
+        public BlobFilesUpperBounds(StreamInput in) throws IOException {
+            this(in.readMap(BlobFile::new, StreamInput::readLong));
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeMap(blobs, (o, blobFile) -> blobFile.writeTo(o), StreamOutput::writeLong);
+        }
+    }
+
+    public BlobFilesUpperBounds getBlobFilesUpperBounds() {
+        Map<BlobFile, Long> blobFiles = new HashMap<>();
+        for (BlobLocation value : commitFiles.values()) {
+            blobFiles.compute(value.blobFile(), (ignored, existing) -> {
+                if (existing == null) {
+                    return value.offset() + value.fileLength();
+                }
+                return Math.max(existing, value.offset() + value.fileLength());
+            });
+        }
+        return new BlobFilesUpperBounds(Collections.unmodifiableMap(blobFiles));
+    }
+
     /**
      * Writes the StatelessCompoundCommit header to the given StreamOutput and returns the number of bytes written
      * @return the header size in bytes

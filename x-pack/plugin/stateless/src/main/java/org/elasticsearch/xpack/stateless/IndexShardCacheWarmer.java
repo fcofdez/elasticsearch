@@ -139,7 +139,6 @@ public class IndexShardCacheWarmer {
                     bccHeaderReadExecutor,
                     true,
                     sourceBlobsInfo,
-                    warmingService,
                     ActionListener.releaseAfter(ActionListener.wrap(state -> {
                         updateMetadataAndWarmCache(indexShard, warmingType, state, prewarmingDirectory, true, preWarmForIdLookup);
                     }, e -> logException(indexShard.shardId(), e)), store::decRef)
