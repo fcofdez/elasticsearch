@@ -52,6 +52,8 @@ import org.elasticsearch.core.Assertions;
 import org.elasticsearch.core.CheckedConsumer;
 import org.elasticsearch.core.CheckedRunnable;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -87,6 +89,7 @@ import static org.elasticsearch.index.codec.bloomfilter.BloomFilterHashFunctions
  * </ol>
  */
 public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
+    private static final Logger logger = LogManager.getLogger(ES94BloomFilterDocValuesFormat.class);
     public static final String FORMAT_NAME = "ES94BloomFilterDocValuesFormat";
     public static final String STORED_FIELDS_BLOOM_FILTER_EXTENSION = "sfbf";
     public static final String STORED_FIELDS_METADATA_BLOOM_FILTER_EXTENSION = "sfbfm";
@@ -346,6 +349,18 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                 return;
             }
 
+            if (logger.isInfoEnabled()) {
+                bloomFilterReaders.forEach(reader -> {
+                    reader.checkIntegrity();
+                    logger.info(
+                        "merge candidate bloom filter reader {} sizeInBytes=[{}] allZero=[{}]",
+                        reader.bloomFilterIn,
+                        reader.getBloomFilterBitSetSizeInBytes(),
+                        isAllZero(reader.bloomFilterIn, reader.getBloomFilterBitSetSizeInBytes())
+                    );
+                });
+            }
+
             List<Integer> bloomFilterSizes = bloomFilterReaders.sizesInBytes();
             initBitSetBufferForMerge(bloomFilterSizes);
 
@@ -400,6 +415,13 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                 }
                 firstBloomFilter.set(false);
             });
+            if (logger.isInfoEnabled()) {
+                logger.info(
+                    "mergeOptimized finished, targetSizeInBytes=[{}] targetAllZero=[{}]",
+                    bitSetBuffer.sizeInBytes,
+                    isAllZero(bitSetBuffer)
+                );
+            }
         }
 
         private void orRegion(
@@ -419,11 +441,15 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
             // throwaway, just to call bitSetBuffer.get()
             BytesRef scratchRef = new BytesRef();
 
+            boolean sourceAllZero = true;
             int offset = 0;
             while (offset < length) {
                 int pageLen = Math.min(PageCacheRecycler.PAGE_SIZE_IN_BYTES, length - offset);
 
                 source.readBytes(sourceOffset + offset, sourcePageScratch.bytes, 0, pageLen);
+                if (sourceAllZero && isAllZero(sourcePageScratch.bytes, pageLen) == false) {
+                    sourceAllZero = false;
+                }
                 var materialized = bitSetBuffer.get(targetOffset + offset, pageLen, scratchRef);
                 assert materialized == false : "Unexpected materialized array";
 
@@ -454,6 +480,17 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                 }
 
                 offset += pageLen;
+            }
+            if (logger.isInfoEnabled()) {
+                logger.info(
+                    "orRegion {} read sourceOffset=[{}] targetOffset=[{}] length=[{}] firstPass=[{}] sourceAllZero=[{}]",
+                    source,
+                    sourceOffset,
+                    targetOffset,
+                    length,
+                    firstPass,
+                    sourceAllZero
+                );
             }
         }
 
@@ -719,6 +756,20 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                     );
                 }
                 CodecUtil.retrieveChecksum(bloomFilterData);
+
+                var bloomFilterIn = bloomFilterData.randomAccessSlice(
+                    bloomFilterMetadata.fileOffset(),
+                    bloomFilterMetadata.sizeInBytes()
+                );
+                if (logger.isInfoEnabled()) {
+                    logger.info(
+                        "opened bloom filter reader {} fileOffset=[{}] sizeInBytes=[{}] allZero=[{}]",
+                        bloomFilterIn,
+                        bloomFilterMetadata.fileOffset(),
+                        bloomFilterMetadata.sizeInBytes(),
+                        isAllZero(bloomFilterIn, bloomFilterMetadata.sizeInBytes())
+                    );
+                }
 
                 this.bloomFilterData = bloomFilterData;
                 this.bloomFilterMetadata = bloomFilterMetadata;
@@ -988,5 +1039,50 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
     private int boundAndRoundBloomFilterSizeInBytes(long idealSizeInBytes) {
         long boundedSize = Math.min(maxBloomFilterSize.getBytes(), idealSizeInBytes);
         return closestPowerOfTwoBloomFilterSizeInBytes(Math.toIntExact(boundedSize));
+    }
+
+    private static boolean isAllZero(byte[] bytes, int length) {
+        return isAllZero(bytes, 0, length);
+    }
+
+    private static boolean isAllZero(byte[] bytes, int offset, int length) {
+        for (int i = 0; i < length; i++) {
+            if (bytes[offset + i] != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isAllZero(RandomAccessInput in, int lengthInBytes) throws IOException {
+        final byte[] scratch = new byte[PageCacheRecycler.PAGE_SIZE_IN_BYTES];
+        int remaining = lengthInBytes;
+        int offset = 0;
+        while (remaining > 0) {
+            int pageLen = Math.min(PageCacheRecycler.PAGE_SIZE_IN_BYTES, remaining);
+            in.readBytes(offset, scratch, 0, pageLen);
+            if (isAllZero(scratch, pageLen) == false) {
+                return false;
+            }
+            offset += pageLen;
+            remaining -= pageLen;
+        }
+        return true;
+    }
+
+    private static boolean isAllZero(BitSetBuffer bitSetBuffer) {
+        final BytesRef scratch = new BytesRef();
+        int remaining = bitSetBuffer.sizeInBytes;
+        int offset = 0;
+        while (remaining > 0) {
+            int pageLen = Math.min(PageCacheRecycler.PAGE_SIZE_IN_BYTES, remaining);
+            bitSetBuffer.get(offset, pageLen, scratch);
+            if (isAllZero(scratch.bytes, scratch.offset, pageLen) == false) {
+                return false;
+            }
+            offset += pageLen;
+            remaining -= pageLen;
+        }
+        return true;
     }
 }
