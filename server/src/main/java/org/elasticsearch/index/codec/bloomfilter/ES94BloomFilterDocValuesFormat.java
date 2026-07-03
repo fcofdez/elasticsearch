@@ -327,8 +327,10 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
         public void merge(MergeState mergeState) throws IOException {
             BloomFilterReaders bloomFilterReaders = new BloomFilterReaders(mergeState, bloomFilterFieldName);
             if (optimizedMergeEnabled && bloomFilterReaders.supportsOptimizedMerge()) {
+                logger.info("Optimized merge enabled for bloom filter field [{}]", bloomFilterFieldName);
                 mergeOptimized(bloomFilterReaders);
             } else {
+                logger.info("Optimized merge disabled for bloom filter field [{}]", bloomFilterFieldName);
                 rebuildBloomFilterFromSegments(mergeState);
             }
         }
