@@ -325,6 +325,7 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
         @Override
         public void merge(MergeState mergeState) throws IOException {
+            logger.info("Merging bloom filters for field [{}]", bloomFilterFieldName);
             BloomFilterReaders bloomFilterReaders = new BloomFilterReaders(mergeState, bloomFilterFieldName);
             if (optimizedMergeEnabled && bloomFilterReaders.supportsOptimizedMerge()) {
                 logger.info("Optimized merge enabled for bloom filter field [{}]", bloomFilterFieldName);
