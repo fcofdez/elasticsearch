@@ -523,16 +523,22 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
             var terms = mergedFields.terms(bloomFilterFieldName);
             if (terms == null) {
+                logger.info("bloom filter field [{}] not found in merged fields {}", bloomFilterFieldName, bitSetBuffer.sizeInBytes);
                 return;
             }
 
+            boolean termAdded = false;
             final TermsEnum termsEnum = terms.iterator();
             while (true) {
                 final BytesRef term = termsEnum.next();
                 if (term == null) {
                     break;
                 }
+                termAdded = true;
                 addToBloomFilter(term);
+            }
+            if (termAdded == false) {
+                logger.info("Terms iterator empty for bloom filter field [{}] in merged fields {}", bloomFilterFieldName, bitSetBuffer.sizeInBytes);
             }
         }
 
