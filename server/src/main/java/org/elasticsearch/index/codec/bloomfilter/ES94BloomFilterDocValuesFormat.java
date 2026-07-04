@@ -930,6 +930,7 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
         @Override
         public int nextDoc() {
+            logger.warn("Something is calling nextDoc() on a BloomFilterFieldReader. This is a bug.", new RuntimeException());
             return NO_MORE_DOCS;
         }
 
@@ -950,7 +951,6 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
         @Override
         public BytesRef binaryValue() {
-            logger.warn("Something is calling binaryValue() on a BloomFilterFieldReader. This is a bug.", new RuntimeException());
             return null;
         }
 
