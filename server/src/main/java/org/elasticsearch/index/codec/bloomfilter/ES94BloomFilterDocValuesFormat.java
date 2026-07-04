@@ -770,15 +770,15 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
                     bloomFilterMetadata.fileOffset(),
                     bloomFilterMetadata.sizeInBytes()
                 );
-                if (logger.isInfoEnabled()) {
-                    logger.info(
-                        "opened bloom filter reader {} fileOffset=[{}] sizeInBytes=[{}] allZero=[{}]",
-                        bloomFilterIn,
-                        bloomFilterMetadata.fileOffset(),
-                        bloomFilterMetadata.sizeInBytes(),
-                        isAllZero(bloomFilterIn, bloomFilterMetadata.sizeInBytes())
-                    );
-                }
+//                if (logger.isInfoEnabled()) {
+//                    logger.info(
+//                        "opened bloom filter reader {} fileOffset=[{}] sizeInBytes=[{}] allZero=[{}]",
+//                        bloomFilterIn,
+//                        bloomFilterMetadata.fileOffset(),
+//                        bloomFilterMetadata.sizeInBytes(),
+//                        isAllZero(bloomFilterIn, bloomFilterMetadata.sizeInBytes())
+//                    );
+//                }
 
                 this.bloomFilterData = bloomFilterData;
                 this.bloomFilterMetadata = bloomFilterMetadata;
@@ -950,6 +950,7 @@ public class ES94BloomFilterDocValuesFormat extends DocValuesFormat {
 
         @Override
         public BytesRef binaryValue() {
+            logger.warn("Something is calling binaryValue() on a BloomFilterFieldReader. This is a bug.", new RuntimeException());
             return null;
         }
 
