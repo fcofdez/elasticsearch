@@ -336,6 +336,9 @@ class AzureClientProvider extends AbstractLifecycleComponent {
                 .option(ChannelOption.ALLOCATOR, byteBufAllocator);
 
             final NettyAsyncHttpClientBuilder httpClientBuilder = new NettyAsyncHttpClientBuilder(nettyHttpClient).disableBufferCopy(true)
+                .writeTimeout(Duration.ofSeconds(20))
+                .readTimeout(Duration.ofSeconds(20))
+                .responseTimeout(Duration.ofSeconds(20))
                 .proxy(proxyOptions);
             if (settings.getReadTimeout().equals(TimeValue.MINUS_ONE) == false) {
                 httpClientBuilder.readTimeout(Duration.ofMillis(settings.getReadTimeout().millis()));
