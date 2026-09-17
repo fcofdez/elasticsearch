@@ -73,6 +73,7 @@ import org.elasticsearch.xpack.stateless.commits.BlobLocation;
 import org.elasticsearch.xpack.stateless.commits.InternalFilesReplicatedRanges;
 import org.elasticsearch.xpack.stateless.commits.StatelessCommitService;
 import org.elasticsearch.xpack.stateless.commits.StatelessCompoundCommit;
+import org.elasticsearch.xpack.stateless.commits.StatelessCompoundCommitTestUtils;
 import org.elasticsearch.xpack.stateless.commits.VirtualBatchedCompoundCommit;
 import org.elasticsearch.xpack.stateless.commits.VirtualBatchedCompoundCommitTestUtils;
 import org.elasticsearch.xpack.stateless.engine.PrimaryTermAndGeneration;
@@ -653,6 +654,135 @@ public class SharedBlobCacheWarmingServiceTests extends ESTestCase {
 
             // Ensure that all the referenced Commit headers can be read without cache misses
             assertThat(fakeNode.sharedCacheService.getStats().missCount(), equalTo(0L));
+        }
+    }
+
+    /**
+     * The streaming blob-file-ranges read must return exactly what fully deserializing every referenced compound commit
+     * returns, both for the blob already held in memory and for blobs that have to be read back from the object store.
+     */
+    public void testStreamingBlobFileRangesMatchesFullParse() throws Exception {
+        final long primaryTerm = randomLongBetween(10, 42);
+        long regionSizeInBytes = ByteSizeValue.ofKb(256).getBytes();
+        try (
+            var fakeNode = new FakeStatelessNode(
+                this::newEnvironment,
+                this::newNodeEnvironment,
+                xContentRegistry(),
+                primaryTerm,
+                TestProjectResolvers.DEFAULT_PROJECT_ONLY,
+                new RecordingMeterRegistry()
+            ) {
+                @Override
+                protected Settings nodeSettings() {
+                    return Settings.builder()
+                        .put(super.nodeSettings())
+                        .put(SharedBlobCacheService.SHARED_CACHE_SIZE_SETTING.getKey(), ByteSizeValue.ofMb(4))
+                        .put(SharedBlobCacheService.SHARED_CACHE_REGION_SIZE_SETTING.getKey(), ByteSizeValue.ofBytes(regionSizeInBytes))
+                        .put(SharedBlobCacheService.SHARED_CACHE_RANGE_SIZE_SETTING.getKey(), ByteSizeValue.ofBytes(regionSizeInBytes))
+                        .build();
+                }
+            }
+        ) {
+            Map<String, BlobLocation> uploadedBlobLocations = new HashMap<>();
+            BatchedCompoundCommit latestBcc = null;
+            for (int i = 0; i < randomIntBetween(2, 3); i++) {
+                var indexCommits = fakeNode.generateIndexCommits(
+                    // at least two commits per blob, so that the second one sits at a non-zero offset within it
+                    randomIntBetween(2, 3),
+                    false, // no force-merge: old segments stay in earlier blobs so the last commit spans multiple of them
+                    randomBoolean(),
+                    generation -> {}
+                );
+                try (
+                    var vbcc = new VirtualBatchedCompoundCommit(
+                        fakeNode.shardId,
+                        "fake-node-id",
+                        primaryTerm,
+                        indexCommits.getFirst().getGeneration(),
+                        uploadedBlobLocations::get,
+                        ESTestCase::randomNonNegativeLong,
+                        fakeNode.sharedCacheService.getRegionSize(),
+                        // a header estimate that fills the region forces every internal file to be replicated, so the
+                        // comparison below covers replicated ranges instead of only the degenerate empty-range shape
+                        fakeNode.sharedCacheService.getRegionSize()
+                    )
+                ) {
+                    for (StatelessCommitRef ref : indexCommits) {
+                        assertTrue(vbcc.appendCommit(ref, true, StatelessCompoundCommitTestUtils.randomTimestampFieldValueRange()));
+                    }
+                    vbcc.freeze();
+                    try (var vbccInputStream = vbcc.getFrozenInputStreamForUpload()) {
+                        fakeNode.getShardContainer()
+                            .writeBlobAtomic(
+                                OperationPurpose.INDICES,
+                                vbcc.getBlobName(),
+                                vbccInputStream,
+                                vbcc.getTotalSizeInBytes(),
+                                true
+                            );
+                    }
+                    uploadedBlobLocations.putAll(vbcc.lastCompoundCommit().commitFiles());
+                    latestBcc = vbcc.getFrozenBatchedCompoundCommit();
+                }
+            }
+            assertThat(latestBcc, is(notNullValue()));
+
+            var lastCommit = latestBcc.lastCompoundCommit();
+            assertThat(lastCommit.getBlobFiles().toString(), lastCommit.getBlobFiles().size(), greaterThan(1));
+            // guard the coverage: without replicated ranges and a timestamp the comparison degenerates to blob
+            // locations plus size arithmetic, and per-commit offset errors go undetected
+            for (var compoundCommit : latestBcc.compoundCommits()) {
+                assertFalse(compoundCommit.internalFilesReplicatedRanges().isEmpty());
+                assertNotNull(compoundCommit.getTimestampFieldValueRange());
+            }
+            var directory = IndexBlobStoreCacheDirectory.unwrapDirectory(fakeNode.indexingDirectory);
+            final boolean useReplicatedRanges = randomBoolean();
+
+            // Exercise both arms every run: passing the latest BCC lets the reader reuse its already-parsed commits,
+            // passing null forces every blob through the streaming parser. Randomizing would leave one arm uncovered
+            // half the time, and the in-memory arm is the only one that computes per-commit offsets itself.
+            for (BatchedCompoundCommit inMemoryBcc : Arrays.asList(latestBcc, null)) {
+                Map<String, BlobFileRanges> expected = new HashMap<>();
+                Map<BlobFile, Long> expectedBlobSizes = new HashMap<>();
+                PlainActionFuture<Void> fullParseFuture = new PlainActionFuture<>();
+                ObjectStoreService.readReferencedCompoundCommitsUsingCache(
+                    lastCommit.commitFiles(),
+                    inMemoryBcc,
+                    directory,
+                    IOContext.DEFAULT,
+                    EsExecutors.DIRECT_EXECUTOR_SERVICE,
+                    referencedCC -> expected.putAll(
+                        BlobFileRanges.computeBlobFileRanges(
+                            useReplicatedRanges,
+                            referencedCC.statelessCompoundCommitReference().compoundCommit(),
+                            referencedCC.statelessCompoundCommitReference().headerOffsetInTheBccBlobFile(),
+                            referencedCC.referencedInternalFiles()
+                        )
+                    ),
+                    expectedBlobSizes::put,
+                    fullParseFuture
+                );
+                safeGet(fullParseFuture);
+
+                Map<BlobFile, Long> actualBlobSizes = new HashMap<>();
+                PlainActionFuture<Map<String, BlobFileRanges>> streamingFuture = new PlainActionFuture<>();
+                ObjectStoreService.readReferencedBlobFileRangesStreamingUsingCache(
+                    lastCommit.commitFiles(),
+                    inMemoryBcc,
+                    directory,
+                    IOContext.DEFAULT,
+                    EsExecutors.DIRECT_EXECUTOR_SERVICE,
+                    useReplicatedRanges,
+                    actualBlobSizes::put,
+                    streamingFuture
+                );
+                Map<String, BlobFileRanges> actual = safeGet(streamingFuture);
+
+                assertThat(actual.keySet(), equalTo(lastCommit.commitFiles().keySet()));
+                assertThat(actual, equalTo(expected));
+                assertThat(actualBlobSizes, equalTo(expectedBlobSizes));
+            }
         }
     }
 

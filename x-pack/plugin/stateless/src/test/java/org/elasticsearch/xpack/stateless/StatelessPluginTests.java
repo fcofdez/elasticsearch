@@ -10,6 +10,7 @@ import org.elasticsearch.cluster.node.DiscoveryNodeRole;
 import org.elasticsearch.cluster.routing.allocation.DiskThresholdSettings;
 import org.elasticsearch.common.breaker.CircuitBreaker;
 import org.elasticsearch.common.breaker.NoopCircuitBreaker;
+import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.license.License;
 import org.elasticsearch.license.XPackLicenseState;
@@ -17,8 +18,11 @@ import org.elasticsearch.license.internal.XPackLicenseStatus;
 import org.elasticsearch.node.NodeRoleSettings;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.xpack.stateless.engine.StatelessReaderHeapBreaker;
+import org.elasticsearch.xpack.stateless.objectstore.ObjectStoreService;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static org.elasticsearch.xpack.stateless.StatelessPlugin.STATELESS_ENABLED;
@@ -122,6 +126,23 @@ public class StatelessPluginTests extends ESTestCase {
             .build();
         IllegalArgumentException ex = expectThrows(IllegalArgumentException.class, () -> createStatelessPlugin(nodeInvalidSettings));
         assertThat(ex.getMessage(), containsString("does not support cluster.routing.allocation.disk.threshold_enabled"));
+    }
+
+    public void testStreamingBccHeaderReadSettingIsRegistered() throws Exception {
+        final var setting = ObjectStoreService.STREAMING_BCC_HEADER_READ_ENABLED_SETTING;
+        final var plugin = createStatelessPlugin(Settings.builder().put(STATELESS_ENABLED.getKey(), true).build());
+
+        // an unregistered node-scoped setting makes the node fail to start when it is set, so the fallback would be unusable
+        assertTrue("STREAMING_BCC_HEADER_READ_ENABLED_SETTING must be advertised by getSettings()", plugin.getSettings().contains(setting));
+        assertTrue(setting.get(Settings.EMPTY));
+
+        // it is a kill switch, so it has to be flippable without restarting nodes
+        assertTrue("STREAMING_BCC_HEADER_READ_ENABLED_SETTING must be dynamic", setting.isDynamic());
+        var clusterSettings = new ClusterSettings(Settings.EMPTY, Set.copyOf(plugin.getSettings()));
+        var updated = new AtomicReference<Boolean>();
+        clusterSettings.addSettingsUpdateConsumer(setting, updated::set);
+        clusterSettings.applySettings(Settings.builder().put(setting.getKey(), false).build());
+        assertEquals(Boolean.FALSE, updated.get());
     }
 
     public void testReaderHeapBreakerWiring() throws Exception {

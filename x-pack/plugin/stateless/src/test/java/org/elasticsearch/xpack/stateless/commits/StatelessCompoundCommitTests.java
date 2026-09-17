@@ -353,7 +353,7 @@ public class StatelessCompoundCommitTests extends AbstractWireSerializingTestCas
     }
 
     // This method is moved from StatelessCompoundCommit since the production code only needs to write commit blobs with current version
-    private static long writeBwcHeader(
+    static long writeBwcHeader(
         StreamOutput positionTracking,
         ShardId shardId,
         long generation,

@@ -45,6 +45,8 @@ public record InternalFilesReplicatedRanges(List<InternalFileReplicatedRange> re
     public static final short REPLICATED_CONTENT_MAX_SINGLE_FILE_SIZE = (short) (REPLICATED_CONTENT_HEADER_SIZE
         + REPLICATED_CONTENT_FOOTER_SIZE);
 
+    public static final String REPLICATED_RANGES_FIELD = "internal_files_replicated_ranges";
+
     public static InternalFilesReplicatedRanges EMPTY = new InternalFilesReplicatedRanges(List.of(), 0L);
 
     public InternalFilesReplicatedRanges {
@@ -78,7 +80,7 @@ public record InternalFilesReplicatedRanges(List<InternalFileReplicatedRange> re
 
     @Override
     public XContentBuilder toXContent(XContentBuilder builder, ToXContent.Params params) throws IOException {
-        builder.startArray("internal_files_replicated_ranges");
+        builder.startArray(REPLICATED_RANGES_FIELD);
         for (var r : replicatedRanges) {
             r.toXContent(builder, ToXContent.EMPTY_PARAMS);
         }

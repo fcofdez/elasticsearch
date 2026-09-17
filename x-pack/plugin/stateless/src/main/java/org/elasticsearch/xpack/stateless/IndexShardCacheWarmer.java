@@ -131,6 +131,7 @@ public class IndexShardCacheWarmer {
                     useReplicatedRanges,
                     bccHeaderReadExecutor,
                     true,
+                    objectStoreService.streamingBccHeaderRead(),
                     sourceBlobsInfo,
                     ActionListener.releaseAfter(ActionListener.wrap(state -> {
                         updateMetadataAndWarmCache(indexShard, warmingType, state, prewarmingDirectory, true, preWarmForIdLookup);

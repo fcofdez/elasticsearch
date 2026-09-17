@@ -175,11 +175,35 @@ public class BlobFileRanges implements Writeable {
         long blobOffset,
         Set<String> internalFiles
     ) {
-        long replicatedRangesOffset = blobOffset + compoundCommit.headerSizeInBytes();
-        long internalFilesOffset = replicatedRangesOffset + compoundCommit.internalFilesReplicatedRanges().dataSizeInBytes();
+        return computeBlobFileRanges(
+            useReplicatedRanges,
+            blobOffset,
+            compoundCommit.headerSizeInBytes(),
+            compoundCommit.internalFilesReplicatedRanges(),
+            compoundCommit.getTimestampFieldValueRange(),
+            compoundCommit.commitFiles(),
+            internalFiles
+        );
+    }
+
+    /**
+     * Computes the {@link BlobFileRanges} for a given set of internal files without requiring a fully materialized
+     * {@link StatelessCompoundCommit}. Used by the streaming read path to avoid allocating the full {@code commitFiles} map.
+     */
+    static Map<String, BlobFileRanges> computeBlobFileRanges(
+        boolean useReplicatedRanges,
+        long blobOffset,
+        long headerSizeInBytes,
+        InternalFilesReplicatedRanges internalFilesReplicatedRanges,
+        @Nullable StatelessCompoundCommit.TimestampFieldValueRange timestampRange,
+        Map<String, BlobLocation> commitFiles,
+        Set<String> internalFiles
+    ) {
+        long replicatedRangesOffset = blobOffset + headerSizeInBytes;
+        long internalFilesOffset = replicatedRangesOffset + internalFilesReplicatedRanges.dataSizeInBytes();
 
         var replicatedRanges = new TreeMap<Long, ReplicatedByteRange>();
-        for (var range : compoundCommit.internalFilesReplicatedRanges().replicatedRanges()) {
+        for (var range : internalFilesReplicatedRanges.replicatedRanges()) {
             long position = Math.addExact(internalFilesOffset, range.position());
             var previous = replicatedRanges.put(position, new ReplicatedByteRange(position, range.length(), replicatedRangesOffset));
             assert previous == null : "replicated range already exists: " + previous;
@@ -187,10 +211,9 @@ public class BlobFileRanges implements Writeable {
         }
         assert assertNoOverlappingReplicatedRanges(replicatedRanges);
 
-        final var timestampRange = compoundCommit.getTimestampFieldValueRange();
         var blobFileRanges = HashMap.<String, BlobFileRanges>newHashMap(internalFiles.size());
         for (var internalFile : internalFiles) {
-            var blobLocation = compoundCommit.commitFiles().get(internalFile);
+            var blobLocation = commitFiles.get(internalFile);
             assert blobLocation != null : internalFile;
             if (useReplicatedRanges == false || replicatedRanges.isEmpty()) {
                 blobFileRanges.put(internalFile, new BlobFileRanges(blobLocation, Collections.emptyNavigableMap(), timestampRange));

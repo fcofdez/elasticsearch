@@ -17,6 +17,7 @@ import org.apache.lucene.store.OutputStreamDataOutput;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.io.Streams;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
@@ -38,6 +39,8 @@ import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.stateless.engine.PrimaryTermAndGeneration;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -79,6 +82,15 @@ public record StatelessCompoundCommit(
 
     public static final String TRANSLOG_RECOVERY_START_FILE = "translog_recovery_start_file";
     public static long HOLLOW_TRANSLOG_RECOVERY_START_FILE = Long.MAX_VALUE;
+
+    static final String SHARD_ID_FIELD = "shard_id";
+    static final String GENERATION_FIELD = "generation";
+    static final String PRIMARY_TERM_FIELD = "primary_term";
+    static final String NODE_EPHEMERAL_ID_FIELD = "node_ephemeral_id";
+    static final String TIMESTAMP_FIELD_VALUE_RANGE_FIELD = "timestamp_field_value_range";
+    static final String COMMIT_FILES_FIELD = "commit_files";
+    static final String INTERNAL_FILES_FIELD = "internal_files";
+    static final String EXTRA_CONTENT_FIELD = "extra_content";
 
     public StatelessCompoundCommit {
         assert commitFiles.keySet().containsAll(internalFiles);
@@ -383,21 +395,21 @@ public record StatelessCompoundCommit(
             b.startObject();
             {
                 shardIdXContent(shardId, b);
-                b.field("generation", generation);
-                b.field("primary_term", primaryTerm);
-                b.field("node_ephemeral_id", nodeEphemeralId);
+                b.field(GENERATION_FIELD, generation);
+                b.field(PRIMARY_TERM_FIELD, primaryTerm);
+                b.field(NODE_EPHEMERAL_ID_FIELD, nodeEphemeralId);
                 b.field(TRANSLOG_RECOVERY_START_FILE, translogRecoveryStartFile);
                 if (timestampFieldValueRange != null) {
                     // the CC XContentHeader is always serialized under the last version,
                     // so the timestamp field value range always has the right to be present
-                    b.startObject("timestamp_field_value_range");
+                    b.startObject(TIMESTAMP_FIELD_VALUE_RANGE_FIELD);
                     {
                         b.field("min_millis", timestampFieldValueRange.minMillis);
                         b.field("max_millis", timestampFieldValueRange.maxMillis);
                     }
                     b.endObject();
                 }
-                b.startObject("commit_files");
+                b.startObject(COMMIT_FILES_FIELD);
                 {
                     for (Map.Entry<String, BlobLocation> e : referencedBlobFiles.entrySet()) {
                         b.field(e.getKey());
@@ -405,7 +417,7 @@ public record StatelessCompoundCommit(
                     }
                 }
                 b.endObject();
-                b.startArray("internal_files");
+                b.startArray(INTERNAL_FILES_FIELD);
                 {
                     for (InternalFile f : internalFiles) {
                         f.toXContent(b, ToXContent.EMPTY_PARAMS);
@@ -415,7 +427,7 @@ public record StatelessCompoundCommit(
                 if (useInternalFilesReplicatedContent) {
                     internalFilesReplicatedRanges.toXContent(b, ToXContent.EMPTY_PARAMS);
                 }
-                b.startArray("extra_content");
+                b.startArray(EXTRA_CONTENT_FIELD);
                 {
                     for (InternalFile f : extraContent) {
                         f.toXContent(b, ToXContent.EMPTY_PARAMS);
@@ -455,8 +467,6 @@ public record StatelessCompoundCommit(
     private static final Logger logger = LogManager.getLogger(StatelessCompoundCommit.class);
 
     /**
-     * Reads the compound commit header from the data store at the specified offset within the input stream.
-     * It's expected that the input stream is already positioned at the specified offset.
      * The {@param offset} parameter is utilized to construct the {@link StatelessCompoundCommit} instance,
      * referring to the compound commit at the given offset within the {@link BatchedCompoundCommit}.
      * @param in the input stream to read from
@@ -586,27 +596,27 @@ public record StatelessCompoundCommit(
                 }
             );
             static {
-                PARSER.declareObject(constructorArg(), SHARD_ID_PARSER, new ParseField("shard_id"));
-                PARSER.declareLong(constructorArg(), new ParseField("generation"));
-                PARSER.declareLong(constructorArg(), new ParseField("primary_term"));
+                PARSER.declareObject(constructorArg(), SHARD_ID_PARSER, new ParseField(SHARD_ID_FIELD));
+                PARSER.declareLong(constructorArg(), new ParseField(GENERATION_FIELD));
+                PARSER.declareLong(constructorArg(), new ParseField(PRIMARY_TERM_FIELD));
                 PARSER.declareLong(optionalConstructorArg(), new ParseField(TRANSLOG_RECOVERY_START_FILE));
-                PARSER.declareString(constructorArg(), new ParseField("node_ephemeral_id"));
+                PARSER.declareString(constructorArg(), new ParseField(NODE_EPHEMERAL_ID_FIELD));
                 PARSER.declareObject(
                     constructorArg(),
                     (p, c) -> p.map(HashMap::new, BlobLocation::fromXContent),
-                    new ParseField("commit_files")
+                    new ParseField(COMMIT_FILES_FIELD)
                 );
-                PARSER.declareObjectArray(constructorArg(), InternalFile.PARSER, new ParseField("internal_files"));
+                PARSER.declareObjectArray(constructorArg(), InternalFile.PARSER, new ParseField(INTERNAL_FILES_FIELD));
                 PARSER.declareObjectArray(
                     optionalConstructorArg(),
                     InternalFilesReplicatedRanges.InternalFileReplicatedRange.PARSER,
-                    new ParseField("internal_files_replicated_ranges")
+                    new ParseField(InternalFilesReplicatedRanges.REPLICATED_RANGES_FIELD)
                 );
-                PARSER.declareObjectArray(optionalConstructorArg(), InternalFile.PARSER, new ParseField("extra_content"));
+                PARSER.declareObjectArray(optionalConstructorArg(), InternalFile.PARSER, new ParseField(EXTRA_CONTENT_FIELD));
                 PARSER.declareObject(
                     optionalConstructorArg(),
                     TimestampFieldValueRange.TIMESTAMP_FIELD_VALUE_RANGE_PARSER,
-                    new ParseField("timestamp_field_value_range")
+                    new ParseField(TIMESTAMP_FIELD_VALUE_RANGE_FIELD)
                 );
             }
         }
@@ -634,6 +644,171 @@ public record StatelessCompoundCommit(
                 c.timestampFieldValueRange
             );
         }
+    }
+
+    /**
+     * Reads a compound commit header at the current position in {@code in}, directly computing
+     * {@link BlobFileRanges} for files in {@code referencedFiles} that are internal to this CC,
+     * and putting the results into {@code output}. The full {@link #commitFiles()} map is never
+     * materialized — only the filtered subset intersecting {@code referencedFiles} is retained.
+     * Returns the CC's size in bytes so the caller can advance to the next CC's offset.
+     */
+    static long readBlobFileRangesAtOffset(
+        StreamInput in,
+        long blobOffset,
+        boolean useReplicatedRanges,
+        Set<String> referencedFiles,
+        Map<String, BlobLocation> commitFilesForBlob,
+        Map<String, BlobFileRanges> output
+    ) throws IOException {
+        try (BufferedChecksumStreamInput input = new BufferedChecksumStreamInput(in, SHARD_COMMIT_CODEC)) {
+            int version = CodecUtil.checkHeader(
+                new InputStreamDataInput(input),
+                SHARD_COMMIT_CODEC,
+                VERSION_WITH_COMMIT_FILES,
+                CURRENT_VERSION
+            );
+            if (version < VERSION_WITH_XCONTENT_ENCODING) {
+                TransportVersion.readVersion(input);
+                ShardId shardId = new ShardId(input);
+                long generation = input.readVLong();
+                long primaryTerm = input.readVLong();
+                input.readString();
+
+                // TODO: remove logging after confirming that no compound commits exist at obsolete versions
+                logger.info(
+                    "{} with UUID [{}] reading compound commit {} of obsolete version [{}]",
+                    shardId,
+                    shardId.getIndex().getUUID(),
+                    new PrimaryTermAndGeneration(primaryTerm, generation),
+                    version
+                );
+
+                // commit_files result discarded — blob locations come from commitFilesForBlob
+                input.readMap(StreamInput::readString, (is) -> BlobLocation.readFromStore(is, version == VERSION_WITH_BLOB_LENGTH));
+                List<InternalFile> internalFiles = input.readCollectionAsList(InternalFile::new);
+                long headerSizeInBytes = input.readLong();
+                verifyChecksum(input);
+                long cumulativeLength = 0;
+                for (var internalFile : internalFiles) {
+                    if (referencedFiles.contains(internalFile.name())) {
+                        var blobLocation = commitFilesForBlob.get(internalFile.name());
+                        assert blobLocation != null : internalFile.name();
+                        output.put(internalFile.name(), new BlobFileRanges(blobLocation));
+                    }
+                    cumulativeLength += internalFile.length();
+                }
+                return headerSizeInBytes + cumulativeLength;
+            }
+
+            assert version == VERSION_WITH_XCONTENT_ENCODING;
+            int xContentLength = input.readInt();
+            verifyChecksum(input);
+
+            long headerSizeInBytes = CodecUtil.headerLength(SHARD_COMMIT_CODEC) + 4 + 4 + xContentLength + 4;
+            // noCloseStream must stay the outermost wrapper: both the parser and the drain below close what they are
+            // given, and closing through to the checksummed stream would break the verification that follows.
+            var smileStream = Streams.noCloseStream(Streams.limitStream(input, xContentLength));
+            long sizeInBytes = streamParseBlobFileRanges(
+                smileStream,
+                blobOffset,
+                headerSizeInBytes,
+                useReplicatedRanges,
+                referencedFiles,
+                commitFilesForBlob,
+                output
+            );
+            // The writer appends an end marker after the root object that the parser never consumes, and the parser may
+            // stop on any buffer boundary. Drain the rest so that the checksum covers exactly the whole xContent region.
+            long drained = Streams.consumeFully(smileStream);
+            assert drained <= 1 : "parser left " + drained + " bytes of the header unread, expected at most the end marker";
+            verifyChecksum(input);
+            return sizeInBytes;
+        } catch (Exception e) {
+            throw new IOException("Failed to read shard commit", e);
+        }
+    }
+
+    private static long streamParseBlobFileRanges(
+        InputStream smileStream,
+        long blobOffset,
+        long headerSizeInBytes,
+        boolean useReplicatedRanges,
+        Set<String> referencedFiles,
+        Map<String, BlobLocation> commitFilesForBlob,
+        Map<String, BlobFileRanges> output
+    ) throws IOException {
+        List<String> matchedNames = new ArrayList<>();
+        long totalInternalFilesLength = 0;
+        long totalExtraContentLength = 0;
+        TimestampFieldValueRange timestampRange = null;
+        List<InternalFilesReplicatedRanges.InternalFileReplicatedRange> replicatedRangeList = new ArrayList<>();
+
+        try (XContentParser parser = XContentType.SMILE.xContent().createParser(XContentParserConfiguration.EMPTY, smileStream)) {
+            if (parser.nextToken() != XContentParser.Token.START_OBJECT) {
+                throw new IOException("expected START_OBJECT in compound commit SMILE header");
+            }
+            while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
+                String fieldName = parser.currentName();
+                parser.nextToken();
+                switch (fieldName) {
+                    case TIMESTAMP_FIELD_VALUE_RANGE_FIELD -> timestampRange = TimestampFieldValueRange.TIMESTAMP_FIELD_VALUE_RANGE_PARSER
+                        .parse(parser, null);
+                    case INTERNAL_FILES_FIELD -> {
+                        while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                            var internalFile = InternalFile.PARSER.parse(parser, null);
+                            if (referencedFiles.contains(internalFile.name())) {
+                                matchedNames.add(internalFile.name());
+                            }
+                            totalInternalFilesLength += internalFile.length();
+                        }
+                    }
+                    case InternalFilesReplicatedRanges.REPLICATED_RANGES_FIELD -> {
+                        while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                            replicatedRangeList.add(InternalFilesReplicatedRanges.InternalFileReplicatedRange.PARSER.parse(parser, null));
+                        }
+                    }
+                    case EXTRA_CONTENT_FIELD -> {
+                        while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                            totalExtraContentLength += InternalFile.PARSER.parse(parser, null).length();
+                        }
+                    }
+                    // fields that occupy no blob bytes beyond the header and contribute nothing to the blob file ranges
+                    case SHARD_ID_FIELD, GENERATION_FIELD, PRIMARY_TERM_FIELD, NODE_EPHEMERAL_ID_FIELD, TRANSLOG_RECOVERY_START_FILE,
+                        COMMIT_FILES_FIELD -> parser.skipChildren();
+                    // Header fields have historically been added within a version, so an unknown one must stay readable.
+                    // It is only safe to skip while it occupies no blob bytes: one that did would under-compute the
+                    // compound commit size and mis-position every subsequent compound commit in the batched blob.
+                    default -> {
+                        assert false : "unknown field [" + fieldName + "] in compound commit header, check it occupies no blob bytes";
+                        parser.skipChildren();
+                    }
+                }
+            }
+        }
+
+        var replicatedRanges = InternalFilesReplicatedRanges.from(replicatedRangeList);
+        if (matchedNames.isEmpty() == false) {
+            var filteredCommitFiles = Maps.<String, BlobLocation>newHashMapWithExpectedSize(matchedNames.size());
+            for (var name : matchedNames) {
+                filteredCommitFiles.put(name, commitFilesForBlob.get(name));
+            }
+            // a later commit overwriting an earlier one here would silently resolve the file at the wrong blob offset
+            assert Collections.disjoint(output.keySet(), filteredCommitFiles.keySet())
+                : "some commits contain the same internal file names between them";
+            output.putAll(
+                BlobFileRanges.computeBlobFileRanges(
+                    useReplicatedRanges,
+                    blobOffset,
+                    headerSizeInBytes,
+                    replicatedRanges,
+                    timestampRange,
+                    filteredCommitFiles,
+                    filteredCommitFiles.keySet()
+                )
+            );
+        }
+        return headerSizeInBytes + replicatedRanges.dataSizeInBytes() + totalInternalFilesLength + totalExtraContentLength;
     }
 
     // visible for testing
@@ -755,7 +930,7 @@ public record StatelessCompoundCommit(
 
     private static void shardIdXContent(ShardId shardId, XContentBuilder b) throws IOException {
         // Can't use Shard#toXContent because it loses index_uuid
-        b.startObject("shard_id").field("index", shardId.getIndex()).field("id", shardId.id()).endObject();
+        b.startObject(SHARD_ID_FIELD).field("index", shardId.getIndex()).field("id", shardId.id()).endObject();
     }
 
     private static final ConstructingObjectParser<ShardId, Void> SHARD_ID_PARSER = new ConstructingObjectParser<>(

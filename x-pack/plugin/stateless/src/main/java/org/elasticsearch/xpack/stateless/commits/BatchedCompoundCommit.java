@@ -20,6 +20,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -221,6 +222,44 @@ public record BatchedCompoundCommit(PrimaryTermAndGeneration primaryTermAndGener
             }
         }
         return true;
+    }
+
+    /**
+     * Reads all compound commit headers in a batched compound commit blob, streaming each one to compute
+     * {@link BlobFileRanges} for files in {@code referencedFiles}. Only the matching subset is retained per
+     * header — the full {@code commitFiles} map is never materialized.
+     *
+     * @return the actual blob size in bytes (offset of last CC + its unpadded size)
+     */
+    public static long readBlobFileRangesFromStore(
+        String blobName,
+        long maxBlobLength,
+        BlobReader blobReader,
+        Set<String> referencedFiles,
+        Map<String, BlobLocation> commitFilesForBlob,
+        boolean useReplicatedRanges,
+        Map<String, BlobFileRanges> output
+    ) throws IOException {
+        long offset = 0;
+        long lastSizeInBytes = 0;
+        while (offset < maxBlobLength) {
+            assert offset == BlobCacheUtils.toPageAlignedSize(offset);
+            try (StreamInput streamInput = blobReader.readBlobAtOffset(blobName, offset, maxBlobLength - offset)) {
+                lastSizeInBytes = StatelessCompoundCommit.readBlobFileRangesAtOffset(
+                    streamInput,
+                    offset,
+                    useReplicatedRanges,
+                    referencedFiles,
+                    commitFilesForBlob,
+                    output
+                );
+            }
+            offset += BlobCacheUtils.toPageAlignedSize(lastSizeInBytes);
+        }
+        if (lastSizeInBytes == 0) {
+            return 0;
+        }
+        return offset - BlobCacheUtils.toPageAlignedSize(lastSizeInBytes) + lastSizeInBytes;
     }
 
     /**

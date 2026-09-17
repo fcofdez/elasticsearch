@@ -207,6 +207,7 @@ public class StatelessIndexNodeRecoveryListener extends AbstractStatelessRecover
                 statelessCommitService.useReplicatedRanges(),
                 bccHeaderReadExecutor,
                 true,
+                objectStoreService.streamingBccHeaderRead(),
                 sourceBlobsInfo,
                 l
             );

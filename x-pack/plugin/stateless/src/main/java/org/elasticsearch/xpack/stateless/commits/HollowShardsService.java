@@ -478,6 +478,7 @@ public class HollowShardsService extends AbstractLifecycleComponent implements M
                             commitService.useReplicatedRanges(),
                             bccHeaderReadExecutor,
                             false,
+                            objectStoreService.streamingBccHeaderRead(),
                             blobsInfo,
                             listener
                         );

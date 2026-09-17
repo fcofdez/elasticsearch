@@ -39,6 +39,7 @@ import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
+import org.elasticsearch.common.util.Maps;
 import org.elasticsearch.common.util.concurrent.AbstractRunnable;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
@@ -320,6 +321,17 @@ public class ObjectStoreService extends AbstractLifecycleComponent implements Cl
         "stateless.search.cache_recovery_bcc.enabled",
         true,
         Setting.Property.NodeScope
+    );
+
+    /**
+     * Whether to stream compound commit headers when building blob file ranges, instead of fully deserializing each
+     * compound commit. Dynamic so that it can be turned off without restarting nodes.
+     */
+    public static final Setting<Boolean> STREAMING_BCC_HEADER_READ_ENABLED_SETTING = Setting.boolSetting(
+        "stateless.object_store.streaming_bcc_header_read.enabled",
+        true,
+        Setting.Property.NodeScope,
+        Setting.Property.Dynamic
     );
 
     /**
@@ -636,6 +648,10 @@ public class ObjectStoreService extends AbstractLifecycleComponent implements Cl
             .blobContainer(objectStore.basePath().add("nodes"))
             .children(OperationPurpose.TRANSLOG)
             .keySet();
+    }
+
+    public boolean streamingBccHeaderRead() {
+        return clusterService.getClusterSettings().get(STREAMING_BCC_HEADER_READ_ENABLED_SETTING);
     }
 
     @FixForMultiProject(description = "ES-10099")
@@ -1100,6 +1116,7 @@ public class ObjectStoreService extends AbstractLifecycleComponent implements Cl
         boolean useReplicatedRanges,
         Executor bccHeaderReadExecutor,
         boolean readSingleBlobIfHollow,
+        boolean streamingBccHeaderRead,
         @Nullable StatelessCommitService.SourceBlobsInfo blobsInfo,
         ActionListener<IndexingShardState> listener
     ) {
@@ -1151,9 +1168,19 @@ public class ObjectStoreService extends AbstractLifecycleComponent implements Cl
                         ).collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> new BlobFileRanges(e.getValue()), (v1, v2) -> v2));
                         return new IndexingShardState(latestBcc, otherBlobs, hollowCommitBlobFileRanges);
                     });
+                } else if (streamingBccHeaderRead) {
+                    readReferencedBlobFileRangesStreamingUsingCache(
+                        latestBcc.lastCompoundCommit().commitFiles(),
+                        latestBcc,
+                        directory,
+                        context,
+                        bccHeaderReadExecutor,
+                        useReplicatedRanges,
+                        (blobFile, bccSize) -> {},
+                        l.map(bfr -> new IndexingShardState(latestBcc, otherBlobs, bfr))
+                    );
                 } else {
                     Map<String, BlobFileRanges> blobFileRanges = new ConcurrentHashMap<>();
-
                     readReferencedCompoundCommitsUsingCache(
                         latestBcc.lastCompoundCommit().commitFiles(),
                         latestBcc,
@@ -1397,6 +1424,90 @@ public class ObjectStoreService extends AbstractLifecycleComponent implements Cl
             bccBlobSizeConsumer,
             listener
         );
+    }
+
+    /**
+     * Streaming alternative to {@link #readReferencedCompoundCommitsUsingCache}: reads each referenced BCC blob
+     * without materializing the full {@code commitFiles} map per CC. Only the subset of internal files that
+     * intersect {@code referencedFiles} is retained in memory, bounding heap usage proportional to the number of
+     * referenced files rather than all commit files across all concurrent parse jobs.
+     * <p>
+     * When the referenced blob matches the in-memory {@code bcc}, its already-parsed {@link StatelessCompoundCommit}
+     * objects are used directly (zero extra I/O). For other blobs the raw bytes are streamed via
+     * {@link BatchedCompoundCommit#readBlobFileRangesFromStore}.
+     */
+    public static void readReferencedBlobFileRangesStreamingUsingCache(
+        Map<String, BlobLocation> commitFiles,
+        @Nullable BatchedCompoundCommit bcc,
+        BlobStoreCacheDirectory metadataReadDirectory,
+        IOContext context,
+        Executor bccHeaderReadExecutor,
+        boolean useReplicatedRanges,
+        ObjLongConsumer<BlobFile> bccBlobSizeConsumer,
+        ActionListener<Map<String, BlobFileRanges>> listener
+    ) {
+        var referencedFilesByBlob = groupReferencedFilesByBlob(commitFiles);
+        var output = new ConcurrentHashMap<String, BlobFileRanges>();
+        try (var listeners = new RefCountingListener(listener.map(ignored -> output))) {
+            for (var entry : referencedFilesByBlob.entrySet()) {
+                var referencedBlob = entry.getKey();
+                var referencedFiles = entry.getValue().files();
+                bccHeaderReadExecutor.execute(ActionRunnable.run(listeners.acquire(), () -> {
+                    if (bcc != null && referencedBlob.termAndGeneration().equals(bcc.primaryTermAndGeneration())) {
+                        long offsetInBlob = 0L;
+                        long lastCCSizeInBytes = 0L;
+                        // only used for asserts
+                        Set<String> resolvedInternalFiles = Assertions.ENABLED ? new HashSet<>(referencedFiles.size()) : null;
+                        for (var compoundCommit : bcc.compoundCommits()) {
+                            var commitInternalFiles = Sets.intersection(compoundCommit.internalFiles(), referencedFiles);
+                            if (commitInternalFiles.isEmpty() == false) {
+                                output.putAll(
+                                    computeBlobFileRanges(useReplicatedRanges, compoundCommit, offsetInBlob, commitInternalFiles)
+                                );
+                            }
+                            lastCCSizeInBytes = compoundCommit.sizeInBytes();
+                            offsetInBlob += BlobCacheUtils.toPageAlignedSize(lastCCSizeInBytes);
+                            if (Assertions.ENABLED) {
+                                assert Sets.intersection(resolvedInternalFiles, commitInternalFiles).isEmpty()
+                                    : "some commits contain the same internal file names between them";
+                                resolvedInternalFiles.addAll(commitInternalFiles);
+                            }
+                        }
+                        if (lastCCSizeInBytes > 0) {
+                            bccBlobSizeConsumer.accept(
+                                referencedBlob,
+                                offsetInBlob - BlobCacheUtils.toPageAlignedSize(lastCCSizeInBytes) + lastCCSizeInBytes
+                            );
+                        }
+                    } else {
+                        var commitFilesForBlob = Maps.<String, BlobLocation>newHashMapWithExpectedSize(referencedFiles.size());
+                        for (var name : referencedFiles) {
+                            commitFilesForBlob.put(name, commitFiles.get(name));
+                        }
+                        var blobReader = getBlobReader(
+                            metadataReadDirectory,
+                            context,
+                            referencedBlob.termAndGeneration(),
+                            entry.getValue().maxBlobOffset()
+                        );
+                        long blobSize = BatchedCompoundCommit.readBlobFileRangesFromStore(
+                            referencedBlob.blobName(),
+                            entry.getValue().maxBlobOffset(),
+                            blobReader,
+                            referencedFiles,
+                            commitFilesForBlob,
+                            useReplicatedRanges,
+                            output
+                        );
+                        if (blobSize > 0) {
+                            bccBlobSizeConsumer.accept(referencedBlob, blobSize);
+                        }
+                    }
+                    // blobs partition the referenced files, so any name this task was asked for and did not resolve is missing
+                    assert output.keySet().containsAll(referencedFiles) : "could not find some internal file names";
+                }));
+            }
+        }
     }
 
     private static void readReferencedCompoundCommits(

@@ -12,10 +12,12 @@ import org.apache.lucene.index.CorruptIndexException;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.ResourceNotFoundException;
+import org.elasticsearch.blobcache.BlobCacheUtils;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
 import org.elasticsearch.common.io.stream.FilterStreamInput;
 import org.elasticsearch.common.lucene.store.BytesReferenceIndexInput;
+import org.elasticsearch.common.util.set.Sets;
 import org.elasticsearch.core.Streams;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.xpack.stateless.engine.PrimaryTermAndGeneration;
@@ -29,6 +31,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -632,6 +635,101 @@ public class VirtualBatchedCompoundCommitTests extends ESTestCase {
                 }
             }
             virtualBatchedCompoundCommit.close();
+        }
+    }
+
+    /**
+     * Streaming a whole batched blob for blob file ranges must agree, commit by commit, with fully deserializing every
+     * compound commit in it and computing the ranges from each one, including the blob size it reports back.
+     */
+    public void testReadBlobFileRangesFromStoreMatchesFullParse() throws Exception {
+        var primaryTerm = 1;
+        try (var fakeNode = createFakeNode(primaryTerm)) {
+            var commits = fakeNode.generateIndexCommits(randomIntBetween(2, 4));
+            var virtualBatchedCompoundCommit = new VirtualBatchedCompoundCommit(
+                fakeNode.shardId,
+                "node-id",
+                primaryTerm,
+                commits.getFirst().getGeneration(),
+                (fileName) -> {
+                    throw new AssertionError("Unexpected call");
+                },
+                ESTestCase::randomNonNegativeLong,
+                fakeNode.sharedCacheService.getRegionSize(),
+                // a header estimate that fills the region forces every internal file to be replicated, so the comparison
+                // below covers replicated ranges instead of only the degenerate empty-range shape
+                fakeNode.sharedCacheService.getRegionSize()
+            );
+            for (StatelessCommitRef statelessCommitRef : commits) {
+                assertTrue(
+                    virtualBatchedCompoundCommit.appendCommit(
+                        statelessCommitRef,
+                        true,
+                        StatelessCompoundCommitTestUtils.randomTimestampFieldValueRange()
+                    )
+                );
+            }
+            virtualBatchedCompoundCommit.freeze();
+
+            try (BytesStreamOutput output = new BytesStreamOutput()) {
+                try (var frozenInputStream = virtualBatchedCompoundCommit.getFrozenInputStreamForUpload()) {
+                    Streams.copy(frozenInputStream, output, false);
+                }
+                var blobName = virtualBatchedCompoundCommit.getBlobName();
+                var bcc = deserializeBatchedCompoundCommit(blobName, output);
+                // guard the coverage: without replicated ranges and a timestamp the comparison degenerates to blob
+                // locations plus size arithmetic, and offset errors in the range computation go undetected
+                for (var compoundCommit : bcc.compoundCommits()) {
+                    assertFalse(compoundCommit.internalFilesReplicatedRanges().isEmpty());
+                    assertNotNull(compoundCommit.getTimestampFieldValueRange());
+                }
+                BatchedCompoundCommit.BlobReader blobReader = (ignored, offset, length) -> output.bytes()
+                    .slice((int) offset, (int) length)
+                    .streamInput();
+
+                // production resolves locations out of the latest commit, for the files this blob actually holds
+                var lastCommitFiles = bcc.lastCompoundCommit().commitFiles();
+                var referencedFiles = new HashSet<String>();
+                for (var compoundCommit : bcc.compoundCommits()) {
+                    for (var internalFile : compoundCommit.internalFiles()) {
+                        if (lastCommitFiles.containsKey(internalFile)) {
+                            referencedFiles.add(internalFile);
+                        }
+                    }
+                }
+                var commitFilesForBlob = new HashMap<String, BlobLocation>();
+                for (var name : referencedFiles) {
+                    commitFilesForBlob.put(name, lastCommitFiles.get(name));
+                }
+
+                var useReplicatedRanges = randomBoolean();
+                var streamed = new HashMap<String, BlobFileRanges>();
+                long blobSize = BatchedCompoundCommit.readBlobFileRangesFromStore(
+                    blobName,
+                    output.size(),
+                    blobReader,
+                    referencedFiles,
+                    commitFilesForBlob,
+                    useReplicatedRanges,
+                    streamed
+                );
+
+                var expected = new HashMap<String, BlobFileRanges>();
+                long offsetInBlob = 0;
+                for (var compoundCommit : bcc.compoundCommits()) {
+                    var internalFiles = Sets.intersection(compoundCommit.internalFiles(), referencedFiles);
+                    if (internalFiles.isEmpty() == false) {
+                        expected.putAll(
+                            BlobFileRanges.computeBlobFileRanges(useReplicatedRanges, compoundCommit, offsetInBlob, internalFiles)
+                        );
+                    }
+                    offsetInBlob += BlobCacheUtils.toPageAlignedSize(compoundCommit.sizeInBytes());
+                }
+
+                assertEquals(bcc.calculateBccBlobLength(), blobSize);
+                assertEquals(referencedFiles, streamed.keySet());
+                assertEquals(expected, streamed);
+            }
         }
     }
 
