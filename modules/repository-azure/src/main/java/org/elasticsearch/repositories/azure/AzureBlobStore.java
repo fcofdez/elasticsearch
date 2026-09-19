@@ -50,6 +50,7 @@ import com.azure.storage.blob.options.BlockBlobSimpleUploadOptions;
 import com.azure.storage.blob.specialized.BlobLeaseClient;
 import com.azure.storage.blob.specialized.BlobLeaseClientBuilder;
 import com.azure.storage.blob.specialized.BlockBlobAsyncClient;
+import com.azure.storage.common.Utility;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -70,6 +71,7 @@ import org.elasticsearch.common.blobstore.support.BlobContainerUtils;
 import org.elasticsearch.common.blobstore.support.BlobMetadata;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.io.Streams;
 import org.elasticsearch.common.unit.ByteSizeUnit;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.BigArrays;
@@ -864,71 +866,11 @@ public class AzureBlobStore implements BlobStore {
      */
     private Flux<ByteBuffer> convertStreamToByteBuffer(InputStream delegate, long length, int chunkSize) {
         assert delegate.markSupported() : "An InputStream with mark support was expected";
-        // We need to introduce a read barrier in order to provide visibility for the underlying
-        // input stream state as the input stream can be read from different threads.
-        final InputStream inputStream = new FilterInputStream(delegate) {
-            @Override
-            public synchronized int read(byte[] b, int off, int len) throws IOException {
-                return super.read(b, off, len);
-            }
-
-            @Override
-            public synchronized int read() throws IOException {
-                return super.read();
-            }
-        };
-        // We need to mark the InputStream as it's possible that we need to retry for the same chunk
-        inputStream.mark(Integer.MAX_VALUE);
-        return Flux.defer(() -> {
-            final AtomicLong currentTotalLength = new AtomicLong(0);
-            try {
-                inputStream.reset();
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-            // This flux is subscribed by a downstream operator that finally queues the
-            // buffers into netty output queue. Sadly we are not able to get a signal once
-            // the buffer has been flushed, so we have to allocate those and let the GC to
-            // reclaim them (see MonoSendMany). Additionally, that very same operator requests
-            // 128 elements (that's hardcoded) once it's subscribed (later on, it requests
-            // by 64 elements), that's why we provide 64kb buffers.
-
-            // length is at most 100MB so it's safe to cast back to an integer in this case
-            final int parts = (int) length / chunkSize;
-            final long remaining = length % chunkSize;
-            return Flux.range(0, remaining == 0 ? parts : parts + 1).map(i -> i * chunkSize).concatMap(pos -> Mono.fromCallable(() -> {
-                long count = pos + chunkSize > length ? length - pos : chunkSize;
-                int numOfBytesRead = 0;
-                int offset = 0;
-                int len = (int) count;
-                final byte[] buffer = new byte[len];
-                while (numOfBytesRead != -1 && offset < count) {
-                    numOfBytesRead = inputStream.read(buffer, offset, len);
-                    offset += numOfBytesRead;
-                    len -= numOfBytesRead;
-                    if (numOfBytesRead != -1) {
-                        currentTotalLength.addAndGet(numOfBytesRead);
-                    }
-                }
-                if (numOfBytesRead == -1 && currentTotalLength.get() < length) {
-                    throw new IllegalStateException(
-                        "InputStream provided " + currentTotalLength.get() + " bytes, less than the expected" + length + " bytes"
-                    );
-                }
-                return ByteBuffer.wrap(buffer);
-            })).doOnComplete(() -> {
-                if (currentTotalLength.get() > length) {
-                    throw new IllegalStateException(
-                        "Read more data than was requested. Size of data read: "
-                            + currentTotalLength.get()
-                            + "."
-                            + " Size of data requested: "
-                            + length
-                    );
-                }
-            });
-        }).subscribeOn(Schedulers.boundedElastic()); // We need to subscribe on a different scheduler to avoid blocking the io threads when
-                                                     // we read the input stream (i.e. when it's rate limited)
+        // The SDK marks the stream and resets it on every subscribe, so a retry re-reads the same bytes, and probes one byte past the
+        // expected length to detect a longer stream. The parts of a multipart upload are read from one shared stream, so each part is
+        // limited to its length: the probe then stops at the part boundary instead of consuming the first byte of the next part, and
+        // the limit is restored on reset.
+        return Utility.convertStreamToByteBuffer(Streams.limitStream(delegate, length), length, chunkSize, true);
     }
 
     /**
@@ -1013,59 +955,14 @@ public class AzureBlobStore implements BlobStore {
      * @param byteBufferSize    the size of the ByteBuffers to be created
      */
     private static Flux<ByteBuffer> toFlux(Callable<InputStream> openStream, long length, final int byteBufferSize) {
-        // Flux.using creates the stream per subscriber so retries resubscribe with a new InputStream.
-        // subscribeOn a different scheduler to avoid blocking the network io threads when reading bytes from disk
-        return Flux.using(openStream, stream -> {
-            // the number of bytes read is updated in a thread pool (repository_azure) and later compared to the expected length in another
-            // thread pool (azure_event_loop), so we need this to be atomic.
-            final var bytesRead = new AtomicLong(0L);
-
-            assert length <= ByteSizeValue.ofMb(100L).getBytes() : length;
-            // length is at most 100MB so it's safe to cast back to an integer
-            final int parts = Math.toIntExact(length / byteBufferSize);
-            final long remaining = length % byteBufferSize;
-
-            // This flux is subscribed by a downstream subscriber (reactor.netty.channel.MonoSendMany) that queues the buffers into netty
-            // output queue. Sadly we are not able to get a signal once the buffer has been flushed, so we have to allocate those and let
-            // the GC to reclaim them. Additionally, the MonoSendMany subscriber requests 128 elements from the flux when it subscribes to
-            // it. This 128 value is hardcoded in reactor.netty.channel.MonoSend.MAX_SIZE). After 128 byte buffers have been published by
-            // the flux, the MonoSendMany subscriber requests 64 more byte buffers (see reactor.netty.channel.MonoSend.REFILL_SIZE) and so
-            // on.
-            //
-            // So this flux instantiates 128 ByteBuffer objects of DEFAULT_UPLOAD_BUFFERS_SIZE bytes in heap every time the NettyOutbound in
-            // the Azure's Netty event loop requests byte buffers to write to the network channel. That represents 128 * 64kb = 8 mb per
-            // flux which is aligned with BlobAsyncClient.BLOB_DEFAULT_HTBB_UPLOAD_BLOCK_SIZE. The creation of the ByteBuffer objects are
-            // forked to the repository_azure thread pool, which has a maximum of 15 threads (most of the time, can be less than that for
-            // nodes with less than 750mb heap). It means that max. 15 * 8 = 120mb bytes are allocated on heap at a time here (omitting the
-            // ones already created and pending garbage collection).
-            return Flux.range(0, remaining == 0 ? parts : parts + 1).map(i -> i * byteBufferSize).concatMap(pos -> Mono.fromCallable(() -> {
-                long count = pos + byteBufferSize > length ? length - pos : byteBufferSize;
-                int numOfBytesRead = 0;
-                int offset = 0;
-                int len = (int) count;
-                final byte[] buffer = new byte[len];
-                while (numOfBytesRead != -1 && offset < count) {
-                    numOfBytesRead = stream.read(buffer, offset, len);
-                    offset += numOfBytesRead;
-                    len -= numOfBytesRead;
-                    if (numOfBytesRead != -1) {
-                        bytesRead.addAndGet(numOfBytesRead);
-                    }
-                }
-                if (numOfBytesRead == -1 && bytesRead.get() < length) {
-                    throw new IllegalStateException(
-                        format("Input stream [%s] emitted %d bytes, less than the expected %d bytes.", stream, bytesRead.get(), length)
-                    );
-                }
-                return ByteBuffer.wrap(buffer);
-            })).doOnComplete(() -> {
-                if (bytesRead.get() > length) {
-                    throw new IllegalStateException(
-                        format("Input stream [%s] emitted %d bytes, more than the expected %d bytes.", stream, bytesRead.get(), length)
-                    );
-                }
-            });
-        }, IOUtils::closeWhileHandlingException).subscribeOn(Schedulers.boundedElastic());
+        // Flux.using creates the stream per subscriber so retries resubscribe with a new InputStream, which the SDK therefore need not
+        // mark and reset. subscribeOn a different scheduler to avoid opening the stream and reading bytes from disk on the network io
+        // threads.
+        return Flux.using(
+            openStream,
+            stream -> Utility.convertStreamToByteBuffer(stream, length, byteBufferSize, false),
+            IOUtils::closeWhileHandlingException
+        ).subscribeOn(Schedulers.boundedElastic());
     }
 
     /**

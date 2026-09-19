@@ -400,7 +400,13 @@ class AzureClientProvider extends AbstractLifecycleComponent {
 
             @Override
             public Scheduler newBoundedElastic(int threadCap, int queuedTaskCap, ThreadFactory threadFactory, int ttlSeconds) {
-                return Schedulers.fromExecutor(executorService);
+                // Reactor's own boundedElastic workers run their tasks one at a time, and subscribeOn relies on that to keep the request
+                // calls it hands to its worker serial (Reactive Streams rule 2.7). Schedulers.fromExecutor(ExecutorService) submits every
+                // task to the pool independently, so two requests of one subscription can run concurrently on two pool threads. The
+                // trampolining scheduler queues each worker's tasks and drains them on the pool one after another, serializing them per
+                // subscription while different subscriptions still run in parallel. It cannot schedule delayed tasks, which the SDK only
+                // does on the parallel scheduler.
+                return Schedulers.fromExecutor(executorService, true);
             }
 
             @Override
