@@ -47,16 +47,9 @@ import java.util.function.Function;
 import static org.hamcrest.Matchers.equalTo;
 
 /**
- * The upload flux of {@link AzureBlobStore} is consumed by reactor-netty's {@code MonoSendMany}, which requests 128 buffers up front and
- * 64 more from the netty event loop each time its outstanding demand drops to 64. {@code subscribeOn} runs every such request as a task on
- * its scheduler worker, and when the pool that runs them is busy two refills can be queued and then start on two pool threads at the same
- * instant, which Reactive Streams rule 2.7 forbids upstream.
- * <p>
- * Two things keep that from corrupting an upload, each tested on its own here with {@code request} pairs released together from two
- * threads. {@link AzureClientProvider} installs a {@code boundedElastic} scheduler whose workers serialize their tasks, so the requests
- * never overlap even for a {@code concatMap} chain, whose parked one-shot scalar would otherwise emit a buffer twice and skip the next.
- * And the SDK's {@link Utility#convertStreamToByteBuffer}, which {@link AzureBlobStore} reads its streams with, is built on
- * {@link Flux#generate}, which delivers the right sequence even when the requests do overlap on a scheduler that does not serialize them.
+ * reactor-netty refills the upload flux with {@code request} calls from the netty event loop, which {@code subscribeOn} runs as tasks on
+ * its worker; on a busy pool two of them can start together. Each test releases request pairs from two threads at once: the scheduler
+ * {@link AzureClientProvider} installs keeps them serial, and the SDK's {@link Utility#convertStreamToByteBuffer} tolerates them anyway.
  */
 public class AzureUploadFluxConcurrentRequestTests extends ESTestCase {
 
@@ -85,10 +78,6 @@ public class AzureUploadFluxConcurrentRequestTests extends ESTestCase {
         ThreadPool.terminate(threadPool, 10L, TimeUnit.SECONDS);
     }
 
-    /**
-     * The scheduler installed for the SDK by {@link AzureClientProvider} serializes the requests of a subscription: even a chain that
-     * cannot cope with concurrent requests delivers the right sequence, and none of the paired requests overlap upstream of subscribeOn.
-     */
     public void testInstalledBoundedElasticSchedulerSerializesRequests() throws Exception {
         final AzureClientProvider clientProvider = AzureClientProvider.create(threadPool, Settings.EMPTY);
         clientProvider.start();
@@ -104,10 +93,6 @@ public class AzureUploadFluxConcurrentRequestTests extends ESTestCase {
         }
     }
 
-    /**
-     * The SDK's stream reader delivers the right sequence even when {@code boundedElastic} is backed by a scheduler that does not
-     * serialize the requests of a subscription, so that the paired requests reach it concurrently.
-     */
     public void testSdkStreamReaderToleratesConcurrentRequests() throws Exception {
         final Scheduler nonSerializing = Schedulers.fromExecutor(threadPool.executor(AzureRepositoryPlugin.REPOSITORY_THREAD_POOL_NAME));
         Schedulers.setFactory(new Schedulers.Factory() {
@@ -132,11 +117,7 @@ public class AzureUploadFluxConcurrentRequestTests extends ESTestCase {
         }
     }
 
-    /**
-     * The shape {@link AzureBlobStore} used before it moved to the SDK's reader: a {@code concatMap} over {@link Mono#fromCallable} reads.
-     * It parks each buffer it has read in a one-shot scalar subscription guarded by a plain flag, which two concurrent requests can both
-     * fire.
-     */
+    /** The shape {@link AzureBlobStore} used before: concurrent requests can make it emit a buffer twice and skip the next. */
     private static Flux<ByteBuffer> concatMapChunks(InputStream stream) {
         return Flux.range(0, CHUNKS).map(i -> (long) i * CHUNK_SIZE).concatMap(pos -> Mono.fromCallable(() -> {
             final byte[] buffer = new byte[CHUNK_SIZE];
@@ -152,10 +133,6 @@ public class AzureUploadFluxConcurrentRequestTests extends ESTestCase {
         }));
     }
 
-    /**
-     * One upload: the consumer takes {@link #MAX_SIZE} buffers up front, then asks for the rest one pair at a time, each pair as two
-     * {@code request(1)} calls released together from two threads once the producer has caught up with the previous pair.
-     */
     private final class Run {
         private final Function<InputStream, Flux<ByteBuffer>> chunks;
         private final Scheduler subscribeOn;
@@ -168,10 +145,6 @@ public class AzureUploadFluxConcurrentRequestTests extends ESTestCase {
         private int stuckAt = -1;
         private boolean completed;
 
-        /**
-         * @param chunks      builds the flux under test from the upload stream
-         * @param subscribeOn scheduler to subscribe on after the overlap detector, or {@code null} when {@code chunks} subscribes on one itself
-         */
         Run(Function<InputStream, Flux<ByteBuffer>> chunks, Scheduler subscribeOn) {
             this.chunks = chunks;
             this.subscribeOn = subscribeOn;
@@ -181,7 +154,7 @@ public class AzureUploadFluxConcurrentRequestTests extends ESTestCase {
             final long length = (long) CHUNKS * CHUNK_SIZE;
             Flux<ByteBuffer> flux = Flux.using(() -> new ChunkStream(length), stream -> {
                 final Flux<ByteBuffer> reads = chunks.apply(stream);
-                // sits right above the flux under test, and counts request calls that overlap in time
+                // counts request calls that overlap in time
                 return Flux.<ByteBuffer>from(actual -> reads.subscribe(new CoreSubscriber<ByteBuffer>() {
                     @Override
                     public void onSubscribe(Subscription s) {
@@ -233,7 +206,7 @@ public class AzureUploadFluxConcurrentRequestTests extends ESTestCase {
                 final int expected = Math.min(CHUNKS, delivered + 2);
                 subscriber.requestPair();
                 if (subscriber.awaitDelivered(expected) == false) {
-                    // a dropped buffer leaves the consumer one short: ask again so the run can finish and report the sequence
+                    // ask again after a dropped buffer so the run finishes and reports the sequence
                     subscriber.requestPair();
                     if (subscriber.awaitDelivered(expected) == false) {
                         stuckAt = receivedCount.get();
@@ -290,10 +263,7 @@ public class AzureUploadFluxConcurrentRequestTests extends ESTestCase {
             return "wrong sequence (" + overlappingRequests.get() + " overlapping upstream request() calls):" + description;
         }
 
-        /**
-         * Requests {@link #MAX_SIZE} on subscribe. {@link #requestPair()} then releases two {@code request(1)} calls from two threads at
-         * the same instant, like two refills whose tasks were queued behind other work and start together.
-         */
+        /** Requests {@link #MAX_SIZE} on subscribe, then {@link #requestPair()} releases two {@code request(1)} calls at once. */
         private final class PairedRequestSubscriber extends BaseSubscriber<ByteBuffer> {
 
             @Override

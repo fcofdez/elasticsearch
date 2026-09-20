@@ -866,10 +866,7 @@ public class AzureBlobStore implements BlobStore {
      */
     private Flux<ByteBuffer> convertStreamToByteBuffer(InputStream delegate, long length, int chunkSize) {
         assert delegate.markSupported() : "An InputStream with mark support was expected";
-        // The SDK marks the stream and resets it on every subscribe, so a retry re-reads the same bytes, and probes one byte past the
-        // expected length to detect a longer stream. The parts of a multipart upload are read from one shared stream, so each part is
-        // limited to its length: the probe then stops at the part boundary instead of consuming the first byte of the next part, and
-        // the limit is restored on reset.
+        // the parts of a multipart upload share the stream, and the SDK reads one byte past the length to detect a longer stream
         return Utility.convertStreamToByteBuffer(Streams.limitStream(delegate, length), length, chunkSize, true);
     }
 
@@ -955,9 +952,8 @@ public class AzureBlobStore implements BlobStore {
      * @param byteBufferSize    the size of the ByteBuffers to be created
      */
     private static Flux<ByteBuffer> toFlux(Callable<InputStream> openStream, long length, final int byteBufferSize) {
-        // Flux.using creates the stream per subscriber so retries resubscribe with a new InputStream, which the SDK therefore need not
-        // mark and reset. subscribeOn a different scheduler to avoid opening the stream and reading bytes from disk on the network io
-        // threads.
+        // Flux.using creates the stream per subscriber so retries resubscribe with a new InputStream.
+        // subscribeOn a different scheduler to avoid blocking the network io threads when reading bytes from disk
         return Flux.using(
             openStream,
             stream -> Utility.convertStreamToByteBuffer(stream, length, byteBufferSize, false),

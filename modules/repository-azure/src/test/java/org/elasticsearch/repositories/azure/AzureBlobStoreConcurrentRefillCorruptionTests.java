@@ -36,20 +36,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.elasticsearch.repositories.blobstore.BlobStoreTestUtil.randomPurpose;
 
 /**
- * Reproduces the BCC corruption of incident stateless_commit_3431 through {@link AzureBlobStore#writeBlobAtomic}: a blob stored by a single
- * {@code PUT Blob} in which one 64KB upload buffer appears twice and the following one is missing, with the length intact.
- * <p>
- * The upload {@code Flux} reads the stream in bursts of 64 buffers, each burst produced by one {@code request} that reactor-netty's
- * {@code MonoSendMany} issues from the netty event loop once 64 earlier buffers have been written. {@code FluxSubscribeOn} runs every such
- * request as its own task on the {@code repository_azure} pool, and {@link AzureClientProvider} backs that scheduler with a pool whose
- * workers do not serialize tasks. When a refill's task waits in the pool queue while netty drains the buffers already in flight, the next
- * refill is issued too, and once threads free up both requests run concurrently. Inside {@code FluxConcatMap} the pending buffer's
- * one-shot flag is a plain field, so the two requests can emit the same buffer twice and complete the inner twice, which makes the drain
- * skip the next buffer.
- * <p>
- * The test forces that queueing: the upload stream, which is under the test's control, blocks both pool threads for a moment at the end of
- * every burst. Netty keeps completing writes meanwhile, the two following refills queue up, and releasing the blockers starts them
- * together. Each stored blob is compared 64KB chunk by 64KB chunk with the source; the test fails on the first blob that holds a chunk twice.
+ * Uploads blobs with {@link AzureBlobStore#writeBlobAtomic} while the upload stream blocks both {@code repository_azure} threads at the
+ * end of every burst of buffers, so that the two refill requests reactor-netty issues meanwhile queue up and start together. Before the
+ * fix that made the flux emit one 64KB buffer twice and skip the next, with the length intact. Every stored blob is compared with the
+ * source.
  */
 @SuppressForbidden(reason = "use a http server")
 public class AzureBlobStoreConcurrentRefillCorruptionTests extends AbstractAzureServerTestCase {
@@ -58,16 +48,12 @@ public class AzureBlobStoreConcurrentRefillCorruptionTests extends AbstractAzure
     private static final int BUFFER_SIZE = ByteSizeUnit.KB.toIntBytes(64);
     // reactor.netty.channel.MonoSend.REFILL_SIZE: buffers produced per refill request
     private static final int REFILL_SIZE = 64;
-    // about the size of the corrupted BCC: 643 buffers, so about ten refills per upload
     private static final int BLOB_SIZE = ByteSizeUnit.MB.toIntBytes(42);
-    // before the fix a run like this stored a corrupted blob within a few dozen uploads
     private static final int MAX_UPLOADS = 100;
-    // long enough for netty to drain all in-flight buffers to the local server while the pool is blocked
     private static final TimeValue BLOCK = TimeValue.timeValueMillis(40);
 
     @Override
     protected ByteSizeValue maxSinglePartUploadSize() {
-        // the incident's node had a 31GB heap: parts of 100MB, so a 42MB BCC is one PUT Blob
         return ByteSizeValue.of(256, ByteSizeUnit.MB);
     }
 
@@ -78,7 +64,6 @@ public class AzureBlobStoreConcurrentRefillCorruptionTests extends AbstractAzure
 
     @Override
     protected ExecutorBuilder<?> repositoryExecutorBuilder(Settings settings) {
-        // two threads: both are held by the blockers, and both then pick up a queued refill at the same time
         return new ScalingExecutorBuilder(AzureRepositoryPlugin.REPOSITORY_THREAD_POOL_NAME, 0, 2, TimeValue.timeValueSeconds(30L), false);
     }
 
@@ -101,7 +86,7 @@ public class AzureBlobStoreConcurrentRefillCorruptionTests extends AbstractAzure
                     return new BurstBlockingInputStream(data, Math.toIntExact(offset), Math.toIntExact(length), pool, pairings);
                 }, false, Runnable::run);
             } catch (IOException e) {
-                // a dropped buffer that is not paired with a duplicate leaves the request one buffer short: the SDK times out and retries
+                // a dropped buffer without a duplicate leaves the body short, which the SDK rejects
                 failedUploads.add(blobName + ": " + e.getCause());
                 continue;
             }
@@ -145,10 +130,7 @@ public class AzureBlobStoreConcurrentRefillCorruptionTests extends AbstractAzure
         );
     }
 
-    /**
-     * Lists every 64KB chunk of the committed blob that differs from the source and, for each, the source chunk it holds instead. Returns
-     * {@code null} when the blob equals the source.
-     */
+    /** Lists the differing 64KB chunks and the source chunk each holds instead, or {@code null} if the blob equals the source. */
     @Nullable
     private static String describeCorruption(String blobName, byte[] data, byte[] committedBytes) {
         StringBuilder description = null;
@@ -180,10 +162,7 @@ public class AzureBlobStoreConcurrentRefillCorruptionTests extends AbstractAzure
         return description == null ? null : description.toString();
     }
 
-    /**
-     * Serves the blob bytes and, whenever a read completes a burst of {@link #REFILL_SIZE} buffers, holds both pool threads for
-     * {@link #BLOCK} so that the refills netty issues meanwhile queue up and start together once the threads are released.
-     */
+    /** Holds both pool threads for {@link #BLOCK} whenever a read completes a burst of {@link #REFILL_SIZE} buffers. */
     private final class BurstBlockingInputStream extends InputStream {
         private final byte[] data;
         private final int end;
@@ -201,7 +180,6 @@ public class AzureBlobStoreConcurrentRefillCorruptionTests extends AbstractAzure
             this.pairings = pairings;
         }
 
-        // mark/reset are what the pre-#159365 upload path (convertStreamToByteBuffer) requires of its stream
         @Override
         public boolean markSupported() {
             return true;

@@ -10,7 +10,14 @@ package org.elasticsearch.xpack.stateless.objectstore;
 import fixture.azure.AzureHttpHandler;
 import fixture.azure.MockAzureBlobStore;
 
+import com.sun.net.httpserver.Headers;
+import com.sun.net.httpserver.HttpContext;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpPrincipal;
+
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.io.Streams;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.settings.MockSecureSettings;
 import org.elasticsearch.common.settings.Settings;
@@ -24,12 +31,16 @@ import org.elasticsearch.xpack.stateless.AbstractStatelessPluginIntegTestCase;
 import org.elasticsearch.xpack.stateless.commits.StatelessCommitService;
 import org.elasticsearch.xpack.stateless.commits.StatelessCompoundCommit;
 import org.junit.AfterClass;
+import org.junit.Before;
 import org.junit.BeforeClass;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.HashMap;
@@ -47,20 +58,10 @@ import java.util.zip.CRC32;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 
 /**
- * Reproduces the BCC corruption of incident stateless_commit_3431 with a real indexing node uploading real BCCs to a mock Azure server: a
- * stored BCC in which one 64KB upload buffer appears twice and the following one is missing, with the blob length intact.
- * <p>
- * The Azure upload {@code Flux} in {@code AzureBlobStore#toFlux} reads the BCC stream in bursts of 64 buffers, each burst produced by one
- * {@code request} that reactor-netty issues from the netty event loop once 64 earlier buffers have been written. {@code FluxSubscribeOn}
- * runs every such request as its own task on the {@code repository_azure} pool, and {@code AzureClientProvider} backs that scheduler with a
- * pool whose workers do not serialize tasks. When a refill's task waits in the pool queue while netty drains the buffers already in flight,
- * the next refill is issued too, and once threads free up both requests run concurrently. Inside {@code FluxConcatMap} the pending buffer's
- * one-shot flag is a plain field, so the two requests can emit the same buffer twice and complete the inner twice, which makes the drain
- * skip the next buffer. The upload's own byte count only counts stream reads, so it stays right and the SDK reports success.
- * <p>
- * A busy indexing node queues refills like that on its own. This test does it from outside: while the index is being flushed repeatedly,
- * a thread keeps occupying every {@code repository_azure} thread for a moment and releasing them together. After each flush every new BCC
- * in the mock store is scanned for a non-zero 64KB-aligned chunk that appears twice, which does not happen in a well-formed BCC.
+ * Flushes an index repeatedly while a thread keeps occupying every {@code repository_azure} thread of the index node for a moment and
+ * releasing them together, so that the refill requests reactor-netty issues for the BCC uploads meanwhile queue up and start concurrently.
+ * Before the fix that made an upload emit one 64KB buffer twice and skip the next, or emit a body of the wrong length. Every uploaded
+ * BCC is scanned for a 64KB-aligned chunk that appears twice, and aborted uploads fail the test.
  */
 @SuppressForbidden(reason = "uses HttpServer to emulate Azure storage")
 public class AzureBccUploadRefillRaceIT extends AbstractStatelessPluginIntegTestCase {
@@ -70,24 +71,60 @@ public class AzureBccUploadRefillRaceIT extends AbstractStatelessPluginIntegTest
 
     // AzureBlobStore.DEFAULT_UPLOAD_BUFFERS_SIZE
     private static final int BUFFER_SIZE = 64 * 1024;
-    // before the fix the ninth flush of a run like this uploaded a corrupted BCC
+    // build.gradle sets reactor.netty.send.maxPrefetchSize to 8 for this task, so a BCC goes through many refills
     private static final int ROUNDS = 30;
     private static final int ROUNDS_PER_INDEX = 5;
     private static final int DOCS_PER_ROUND = 300;
     private static final int DOC_SIZE = 48 * 1024;
-    // how long the pool is held: long enough for netty to drain the in-flight buffers of an upload to the local server
-    private static final long SQUEEZE_MILLIS = 30;
-    private static final long GAP_MILLIS = 20;
+    private static final long SQUEEZE_MILLIS = 5;
+    private static final long GAP_MILLIS = 1;
+    private static final int SHARDS = 4;
 
     private static TestObjectStoreServer testServer;
     private static AzureHttpHandler azureHandler;
+    private static final AtomicInteger bccUploadsInFlight = new AtomicInteger();
+    /** BCC uploads the client closed before the body announced by Content-Length had arrived: the SDK rejected a body of the wrong length. */
+    private static final AtomicInteger abortedBccUploads = new AtomicInteger();
+
+    // a path per execution, so that a later cluster does not find the cluster state of the previous one in the mock store
+    private static final AtomicInteger executions = new AtomicInteger();
+    private String basePath;
+
+    @Before
+    public void chooseBasePath() {
+        basePath = "execution-" + executions.incrementAndGet();
+        abortedBccUploads.set(0);
+    }
 
     @BeforeClass
     public static void startServer() throws IOException {
         testServer = new TestObjectStoreServer();
         azureHandler = new AzureHttpHandler(ACCOUNT, CONTAINER, null, MockAzureBlobStore.LeaseExpiryPredicate.NEVER_EXPIRE);
         testServer.start();
-        testServer.setUp(Map.of("/" + ACCOUNT, azureHandler));
+        final HttpHandler bccUploadWatchingHandler = exchange -> {
+            final boolean bccUpload = "PUT".equals(exchange.getRequestMethod())
+                && exchange.getRequestURI().getPath().contains(StatelessCompoundCommit.PREFIX);
+            if (bccUpload == false) {
+                azureHandler.handle(exchange);
+                return;
+            }
+            bccUploadsInFlight.incrementAndGet();
+            try {
+                // the fixture fails the test on a connection closed mid-body
+                final BytesReference body;
+                try {
+                    body = Streams.readFully(exchange.getRequestBody());
+                } catch (IOException e) {
+                    abortedBccUploads.incrementAndGet();
+                    exchange.close();
+                    return;
+                }
+                azureHandler.handle(new BufferedBodyExchange(exchange, body.streamInput()));
+            } finally {
+                bccUploadsInFlight.decrementAndGet();
+            }
+        };
+        testServer.setUp(Map.of("/" + ACCOUNT, bccUploadWatchingHandler));
     }
 
     @AfterClass
@@ -125,6 +162,7 @@ public class AzureBccUploadRefillRaceIT extends AbstractStatelessPluginIntegTest
             .put(StatelessCommitService.STATELESS_UPLOAD_MAX_AMOUNT_COMMITS.getKey(), 1)
             .put(ObjectStoreService.TYPE_SETTING.getKey(), ObjectStoreService.ObjectStoreType.AZURE)
             .put(ObjectStoreService.BUCKET_SETTING.getKey(), CONTAINER)
+            .put(ObjectStoreService.BASE_PATH_SETTING.getKey(), basePath)
             .put(ObjectStoreService.CLIENT_SETTING.getKey(), "test")
             .put("azure.client.test.endpoint_suffix", endpoint)
             .put("azure.client.test.max_retries", 2)
@@ -144,12 +182,11 @@ public class AzureBccUploadRefillRaceIT extends AbstractStatelessPluginIntegTest
             int blobsScanned = 0;
             for (int round = 0; round < ROUNDS; round++) {
                 if (round > 0 && round % ROUNDS_PER_INDEX == 0) {
-                    // the mock store shares the test JVM's heap with the node and keeps every live BCC: start over with a fresh index and
-                    // drop the old one's blobs
+                    // the mock store keeps every live BCC in the test JVM's heap
                     final String indexUUID = resolveIndex(indexName).getUUID();
                     assertAcked(indicesAdmin().prepareDelete(indexName));
                     final MockAzureBlobStore blobStore = azureHandler.getMockBlobStore();
-                    for (String path : blobStore.listBlobs("indices/" + indexUUID + "/", null).keySet()) {
+                    for (String path : blobStore.listBlobs(basePath + "/indices/" + indexUUID + "/", null).keySet()) {
                         try {
                             blobStore.deleteBlob(path, null);
                         } catch (MockAzureBlobStore.AzureBlobStoreError e) {
@@ -159,7 +196,6 @@ public class AzureBccUploadRefillRaceIT extends AbstractStatelessPluginIntegTest
                     indexName = randomIndexName();
                     createIndex(indexName, noMergesIndexSettings());
                 }
-                // random alphanumerics do not compress well, so each flush uploads a BCC of several hundred 64KB buffers
                 indexDocs(
                     indexName,
                     DOCS_PER_ROUND,
@@ -168,6 +204,18 @@ public class AzureBccUploadRefillRaceIT extends AbstractStatelessPluginIntegTest
                     () -> Map.of("data", randomAlphanumericOfLength(DOC_SIZE))
                 );
                 flush(indexName);
+                if (abortedBccUploads.get() > 0) {
+                    fail(
+                        abortedBccUploads.get()
+                            + " BCC upload(s) were aborted by the client because the body did not match its Content-Length, after "
+                            + (round + 1)
+                            + " flushes, "
+                            + blobsScanned
+                            + " BCC blobs scanned, "
+                            + squeezer.squeezes.get()
+                            + " pool squeezes"
+                    );
+                }
                 for (Map.Entry<String, BytesReference> blob : azureHandler.blobs().entrySet()) {
                     if (blob.getKey().contains(StatelessCompoundCommit.PREFIX) == false || scanned.add(blob.getKey()) == false) {
                         continue;
@@ -202,18 +250,12 @@ public class AzureBccUploadRefillRaceIT extends AbstractStatelessPluginIntegTest
         }
     }
 
-    /**
-     * One shard, and segments larger than half a megabyte are never merged: a merge would re-upload the merged data in the next BCC, which
-     * grows the blobs the mock store has to keep with every flush.
-     */
+    // merges would re-upload the merged data, growing the blobs the mock store keeps
     private static Settings noMergesIndexSettings() {
-        return indexSettings(1, 0).put(MergePolicyConfig.INDEX_MERGE_POLICY_MAX_MERGED_SEGMENT_SETTING.getKey(), "1mb").build();
+        return indexSettings(SHARDS, 0).put(MergePolicyConfig.INDEX_MERGE_POLICY_MAX_MERGED_SEGMENT_SETTING.getKey(), "1mb").build();
     }
 
-    /**
-     * Finds 64KB-aligned chunks that appear twice in a BCC blob, ignoring all-zero padding, reading the blob through one reusable buffer
-     * rather than copying it. Returns {@code null} when there are none.
-     */
+    /** Finds 64KB-aligned chunks that appear twice in a BCC blob, ignoring all-zero padding, or {@code null} if there are none. */
     private static String describeDuplicateChunks(String blobName, BytesReference blob) throws IOException {
         final Map<Long, Integer> firstChunkByCrc = new HashMap<>();
         final byte[] bytes = new byte[BUFFER_SIZE];
@@ -260,11 +302,102 @@ public class AzureBccUploadRefillRaceIT extends AbstractStatelessPluginIntegTest
         return true;
     }
 
-    /**
-     * Occupies every {@code repository_azure} thread of the index node for {@link #SQUEEZE_MILLIS}, releases them together, waits
-     * {@link #GAP_MILLIS} and repeats. Refills that reactor-netty issues while the threads are held queue up behind the blockers and start
-     * concurrently once they are released.
-     */
+    private static final class BufferedBodyExchange extends HttpExchange {
+        private final HttpExchange delegate;
+        private final InputStream body;
+
+        BufferedBodyExchange(HttpExchange delegate, InputStream body) {
+            this.delegate = delegate;
+            this.body = body;
+        }
+
+        @Override
+        public InputStream getRequestBody() {
+            return body;
+        }
+
+        @Override
+        public Headers getRequestHeaders() {
+            return delegate.getRequestHeaders();
+        }
+
+        @Override
+        public Headers getResponseHeaders() {
+            return delegate.getResponseHeaders();
+        }
+
+        @Override
+        public URI getRequestURI() {
+            return delegate.getRequestURI();
+        }
+
+        @Override
+        public String getRequestMethod() {
+            return delegate.getRequestMethod();
+        }
+
+        @Override
+        public HttpContext getHttpContext() {
+            return delegate.getHttpContext();
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
+        }
+
+        @Override
+        public OutputStream getResponseBody() {
+            return delegate.getResponseBody();
+        }
+
+        @Override
+        public void sendResponseHeaders(int rCode, long responseLength) throws IOException {
+            delegate.sendResponseHeaders(rCode, responseLength);
+        }
+
+        @Override
+        public InetSocketAddress getRemoteAddress() {
+            return delegate.getRemoteAddress();
+        }
+
+        @Override
+        public int getResponseCode() {
+            return delegate.getResponseCode();
+        }
+
+        @Override
+        public InetSocketAddress getLocalAddress() {
+            return delegate.getLocalAddress();
+        }
+
+        @Override
+        public String getProtocol() {
+            return delegate.getProtocol();
+        }
+
+        @Override
+        public Object getAttribute(String name) {
+            return delegate.getAttribute(name);
+        }
+
+        @Override
+        public void setAttribute(String name, Object value) {
+            delegate.setAttribute(name, value);
+        }
+
+        @Override
+        public void setStreams(InputStream i, OutputStream o) {
+            delegate.setStreams(i, o);
+        }
+
+        @Override
+        public HttpPrincipal getPrincipal() {
+            return delegate.getPrincipal();
+        }
+    }
+
+    /** While a BCC is being uploaded, holds every {@code repository_azure} thread for {@link #SQUEEZE_MILLIS} and releases them together. */
     private static final class PoolSqueezer implements Runnable {
         private final Executor pool;
         private final int threads;
@@ -289,6 +422,15 @@ public class AzureBccUploadRefillRaceIT extends AbstractStatelessPluginIntegTest
         @Override
         public void run() {
             while (running.get()) {
+                if (bccUploadsInFlight.get() == 0) {
+                    try {
+                        Thread.sleep(GAP_MILLIS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    continue;
+                }
                 final CountDownLatch release = new CountDownLatch(1);
                 for (int i = 0; i < threads; i++) {
                     pool.execute(() -> {

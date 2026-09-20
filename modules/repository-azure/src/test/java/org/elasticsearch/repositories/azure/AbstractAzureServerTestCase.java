@@ -183,7 +183,7 @@ public abstract class AbstractAzureServerTestCase extends ESTestCase {
 
             @Override
             long getUploadBlockSize() {
-                return uploadBlockSize();
+                return ByteSizeUnit.MB.toBytes(1);
             }
 
             @Override
@@ -218,31 +218,14 @@ public abstract class AbstractAzureServerTestCase extends ESTestCase {
         );
     }
 
-    /**
-     * Size of the parts of a multipart upload, see {@link AzureStorageService#getUploadBlockSize()}.
-     */
-    protected long uploadBlockSize() {
-        return ByteSizeUnit.MB.toBytes(1);
-    }
-
-    /**
-     * Blobs up to this size are uploaded with a single {@code PUT Blob}, larger ones in parts, see
-     * {@link AzureRepository.Repository#MAX_SINGLE_PART_UPLOAD_SIZE_SETTING}.
-     */
     protected ByteSizeValue maxSinglePartUploadSize() {
         return ByteSizeValue.of(1, ByteSizeUnit.MB);
     }
 
-    /**
-     * Node settings used to size the netty event loop and to create the {@link AzureClientProvider}.
-     */
     protected Settings clientSettings() {
         return Settings.EMPTY;
     }
 
-    /**
-     * Builder of the {@link AzureRepositoryPlugin#REPOSITORY_THREAD_POOL_NAME} executor, which reads the input streams during uploads.
-     */
     protected ExecutorBuilder<?> repositoryExecutorBuilder(Settings settings) {
         return AzureRepositoryPlugin.executorBuilder(settings);
     }
