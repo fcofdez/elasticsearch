@@ -47,6 +47,7 @@ import org.elasticsearch.xcontent.XContentType;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -625,6 +626,55 @@ public class MapperService extends AbstractIndexComponent implements Closeable {
         // TODO: can we even have concurrent updates here?
         synchronized (this) {
             Mapping mapping = mergeBuilders(incomingBuilder, reason);
+            DocumentMapper newMapper = newDocumentMapper(mapping, reason, mapping.toCompressedXContent());
+            this.mapper = newMapper;
+            assert assertSerialization(newMapper, reason);
+            return newMapper;
+        }
+    }
+
+    /**
+     * Merges the given mapping sources in order into the current mapping and publishes a single resulting mapper. If any source fails
+     * to parse or merge, or the result fails validation, the exception is propagated and this service is left unchanged.
+     */
+    public DocumentMapper mergeBatch(String type, List<CompressedXContent> mappingSources, MergeReason reason) {
+        assert reason != MergeReason.MAPPING_AUTO_UPDATE_PREFLIGHT;
+        assert mappingSources.isEmpty() == false;
+        List<MappingBuilder> incomingBuilders = new ArrayList<>(mappingSources.size());
+        for (CompressedXContent mappingSource : mappingSources) {
+            try {
+                incomingBuilders.add(mappingParser.parseToBuilder(type, reason, MappingParser.convertToMap(mappingSource)));
+            } catch (Exception e) {
+                throw new MapperParsingException("Failed to parse mapping: {}", e, e.getMessage());
+            }
+        }
+        synchronized (this) {
+            final DocumentMapper currentMapper = this.mapper;
+            NewFieldsBudget budget = getBudget(currentMapper, indexSettings, reason);
+            Mapping mapping;
+            try {
+                MappingBuilder accumulated;
+                ParseFieldLimits fieldLimits;
+                if (currentMapper == null) {
+                    accumulated = incomingBuilders.get(0).withoutMappers();
+                    fieldLimits = ParseFieldLimits.withBudget(budget);
+                } else {
+                    long nestedFieldsLimit = reason == MergeReason.MAPPING_RECOVERY
+                        ? Long.MAX_VALUE
+                        : indexSettings.getMappingNestedFieldsLimit();
+                    long existingNestedCount = currentMapper.mappers().nestedLookup().getNestedMappers().size();
+                    fieldLimits = ParseFieldLimits.forMerge(nestedFieldsLimit, existingNestedCount, budget);
+                    accumulated = mappingParser.parseToBuilder(currentMapper.type(), reason, currentMapper.mappingSource());
+                }
+                for (MappingBuilder incomingBuilder : incomingBuilders) {
+                    accumulated.merge(incomingBuilder, reason, fieldLimits);
+                }
+                mapping = buildMapping(accumulated, reason);
+            } catch (MapperParsingException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new MapperParsingException("Failed to parse mapping: {}", e, e.getMessage());
+            }
             DocumentMapper newMapper = newDocumentMapper(mapping, reason, mapping.toCompressedXContent());
             this.mapper = newMapper;
             assert assertSerialization(newMapper, reason);

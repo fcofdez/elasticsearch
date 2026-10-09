@@ -42,17 +42,21 @@ import org.mockito.Mockito;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.mockito.ArgumentMatchers.any;
 
 public class MetadataMappingServiceTests extends ESSingleNodeTestCase {
@@ -490,6 +494,263 @@ public class MetadataMappingServiceTests extends ESSingleNodeTestCase {
         final CompressedXContent preUpdateSource = service.documentMapper() != null ? service.documentMapper().mappingSource() : null;
         service.merge(MapperService.SINGLE_MAPPING_NAME, new CompressedXContent(mapping), MergeReason.MAPPING_UPDATE);
         return new PreflightCacheEntry(mappingVersion, settingsVersion, preUpdateSource, service);
+    }
+
+    private record ExecutionOutcome(ClusterState state, List<String> taskResults) {}
+
+    private ExecutionOutcome execute(ClusterState state, boolean batchingEnabled, List<PutMappingClusterStateUpdateRequest> requests)
+        throws Exception {
+        return execute(state, batchingEnabled, IndexSettingProviders.EMPTY, requests);
+    }
+
+    private ExecutionOutcome execute(
+        ClusterState state,
+        boolean batchingEnabled,
+        IndexSettingProviders providers,
+        List<PutMappingClusterStateUpdateRequest> requests
+    ) throws Exception {
+        final MetadataMappingService mappingService = getInstanceFromNode(MetadataMappingService.class);
+        final List<PutMappingClusterStateUpdateTask> tasks = requests.stream()
+            .map(r -> new PutMappingClusterStateUpdateTask(r, ActionListener.noop(), new HashMap<>()))
+            .toList();
+        final String[] results = new String[tasks.size()];
+        final ClusterState resultingState = ClusterStateTaskExecutorUtils.executeHandlingResults(
+            state,
+            mappingService.new PutMappingExecutor(providers, batchingEnabled),
+            tasks,
+            task -> results[identityIndexOf(tasks, task)] = "success",
+            (task, e) -> results[identityIndexOf(tasks, task)] = e.getClass().getName() + ": " + e.getMessage()
+        );
+        return new ExecutionOutcome(resultingState, Arrays.asList(results));
+    }
+
+    private static int identityIndexOf(List<PutMappingClusterStateUpdateTask> tasks, PutMappingClusterStateUpdateTask task) {
+        for (int i = 0; i < tasks.size(); i++) {
+            if (tasks.get(i) == task) {
+                return i;
+            }
+        }
+        throw new AssertionError("unknown task");
+    }
+
+    private static PutMappingClusterStateUpdateRequest request(boolean autoUpdate, String properties, Index... indices) throws IOException {
+        return new PutMappingClusterStateUpdateRequest(
+            TEST_REQUEST_TIMEOUT,
+            TEST_REQUEST_TIMEOUT,
+            "{\"properties\":{" + properties + "}}",
+            autoUpdate,
+            indices
+        );
+    }
+
+    private static String field(String name, String type) {
+        return "\"" + name + "\":{\"type\":\"" + type + "\"}";
+    }
+
+    private Index createIndexWithExistingField(String name) {
+        return createIndex(name, client().admin().indices().prepareCreate(name).setMapping("existing", "type=keyword")).index();
+    }
+
+    private static CompressedXContent mappingSource(ClusterState state, Index index) {
+        return state.metadata().getProject().index(index).mapping().source();
+    }
+
+    public void testBatchedAutoUpdatesForOneIndexBumpMappingVersionOnce() throws Exception {
+        final Index index = createIndexWithExistingField("test");
+        final ClusterState initial = getInstanceFromNode(ClusterService.class).state();
+        final long previousVersion = initial.metadata().getProject().index(index).getMappingVersion();
+        final List<PutMappingClusterStateUpdateRequest> requests = new ArrayList<>();
+        for (int i = 0; i < randomIntBetween(2, 10); i++) {
+            requests.add(request(true, field("field" + i, randomFrom("long", "keyword")), index));
+        }
+
+        final ExecutionOutcome batched = execute(initial, true, requests);
+        final ExecutionOutcome sequential = execute(initial, false, requests);
+
+        assertThat(batched.taskResults(), equalTo(Collections.nCopies(requests.size(), "success")));
+        assertThat(batched.taskResults(), equalTo(sequential.taskResults()));
+        assertThat(mappingSource(batched.state(), index), equalTo(mappingSource(sequential.state(), index)));
+        assertThat(batched.state().metadata().getProject().index(index).getMappingVersion(), equalTo(previousVersion + 1));
+        assertThat(sequential.state().metadata().getProject().index(index).getMappingVersion(), equalTo(previousVersion + requests.size()));
+    }
+
+    public void testBatchedAutoUpdatesForInterleavedIndices() throws Exception {
+        final List<Index> indices = List.of(
+            createIndexWithExistingField("test1"),
+            createIndexWithExistingField("test2"),
+            createIndexWithExistingField("test3")
+        );
+        final ClusterState initial = getInstanceFromNode(ClusterService.class).state();
+        final List<PutMappingClusterStateUpdateRequest> requests = new ArrayList<>();
+        for (int i = 0; i < 12; i++) {
+            requests.add(request(true, field("field" + i, "long"), indices.get(i % indices.size())));
+        }
+
+        final ExecutionOutcome batched = execute(initial, true, requests);
+        final ExecutionOutcome sequential = execute(initial, false, requests);
+
+        assertThat(batched.taskResults(), equalTo(Collections.nCopies(requests.size(), "success")));
+        for (Index index : indices) {
+            assertThat(mappingSource(batched.state(), index), equalTo(mappingSource(sequential.state(), index)));
+            assertThat(
+                batched.state().metadata().getProject().index(index).getMappingVersion(),
+                equalTo(initial.metadata().getProject().index(index).getMappingVersion() + 1)
+            );
+        }
+    }
+
+    public void testFailingTaskInGroupFallsBackToPerTaskBehavior() throws Exception {
+        final Index index = createIndexWithExistingField("test");
+        final ClusterState initial = getInstanceFromNode(ClusterService.class).state();
+        final List<PutMappingClusterStateUpdateRequest> requests = List.of(
+            request(true, field("field1", "long"), index),
+            request(true, field("field2", "long"), index),
+            request(true, "\"existing\":{\"type\":\"object\",\"properties\":{\"sub\":{\"type\":\"long\"}}}", index),
+            request(true, field("field3", "long"), index)
+        );
+
+        final ExecutionOutcome batched = execute(initial, true, requests);
+        final ExecutionOutcome sequential = execute(initial, false, requests);
+
+        assertThat(batched.taskResults(), equalTo(sequential.taskResults()));
+        assertThat(batched.taskResults().get(0), equalTo("success"));
+        assertThat(batched.taskResults().get(2), not(equalTo("success")));
+        assertThat(batched.taskResults().get(3), equalTo("success"));
+        assertThat(mappingSource(batched.state(), index), equalTo(mappingSource(sequential.state(), index)));
+    }
+
+    public void testNonAutoAndMultiIndexTasksAreBarriers() throws Exception {
+        final Index index1 = createIndexWithExistingField("test1");
+        final Index index2 = createIndexWithExistingField("test2");
+        final ClusterState initial = getInstanceFromNode(ClusterService.class).state();
+
+        // a conflicting explicit update that only fails if the preceding auto update has already been applied
+        final List<PutMappingClusterStateUpdateRequest> nonAuto = List.of(
+            request(true, field("field1", "long"), index1),
+            request(true, field("field2", "long"), index1),
+            request(false, field("field1", "keyword"), index1),
+            request(true, field("field3", "long"), index1)
+        );
+        ExecutionOutcome batched = execute(initial, true, nonAuto);
+        ExecutionOutcome sequential = execute(initial, false, nonAuto);
+        assertThat(batched.taskResults(), equalTo(sequential.taskResults()));
+        assertThat(batched.taskResults().get(2), not(equalTo("success")));
+        assertThat(mappingSource(batched.state(), index1), equalTo(mappingSource(sequential.state(), index1)));
+
+        final List<PutMappingClusterStateUpdateRequest> multiIndex = List.of(
+            request(true, field("field1", "long"), index2),
+            request(true, field("field2", "long"), index2),
+            request(false, field("field1", "keyword"), index1, index2),
+            request(true, field("field3", "long"), index2)
+        );
+        batched = execute(initial, true, multiIndex);
+        sequential = execute(initial, false, multiIndex);
+        assertThat(batched.taskResults(), equalTo(sequential.taskResults()));
+        assertThat(batched.taskResults().get(2), not(equalTo("success")));
+        for (Index index : List.of(index1, index2)) {
+            assertThat(mappingSource(batched.state(), index), equalTo(mappingSource(sequential.state(), index)));
+        }
+    }
+
+    public void testGroupOfNoOpUpdatesChangesNothing() throws Exception {
+        final Index index = createIndexWithExistingField("test");
+        final ClusterState initial = getInstanceFromNode(ClusterService.class).state();
+        final List<PutMappingClusterStateUpdateRequest> requests = List.of(
+            request(true, field("existing", "keyword"), index),
+            request(true, field("existing", "keyword"), index),
+            request(true, field("existing", "keyword"), index)
+        );
+
+        final ExecutionOutcome outcome = execute(initial, true, requests);
+
+        assertThat(outcome.taskResults(), equalTo(Collections.nCopies(3, "success")));
+        assertSame(initial, outcome.state());
+    }
+
+    /**
+     * A real {@link IndexSettingProvider} that records its invocations so the test can assert how often it is called and with what mapper.
+     */
+    private static class RecordingIndexSettingProvider implements IndexSettingProvider {
+        final List<DocumentMapper> mappers = new ArrayList<>();
+
+        @Override
+        public void provideAdditionalSettings(
+            String indexName,
+            String dataStreamName,
+            IndexMode templateIndexMode,
+            boolean registryInstalledTemplate,
+            ProjectMetadata projectMetadata,
+            Instant resolvedAt,
+            Settings indexTemplateAndCreateRequestSettings,
+            List<CompressedXContent> combinedTemplateMappings,
+            IndexVersion indexVersion,
+            Settings.Builder additionalSettings
+        ) {}
+
+        @Override
+        public void onUpdateMappings(IndexMetadata indexMetadata, DocumentMapper documentMapper, Settings.Builder additionalSettings) {
+            mappers.add(documentMapper);
+        }
+    }
+
+    public void testIndexSettingProviderIsInvokedOncePerChangedGroup() throws Exception {
+        final Index index = createIndexWithExistingField("test");
+        final ClusterState initial = getInstanceFromNode(ClusterService.class).state();
+        final RecordingIndexSettingProvider provider = new RecordingIndexSettingProvider();
+        final List<PutMappingClusterStateUpdateRequest> requests = List.of(
+            request(true, field("field1", "long"), index),
+            request(true, field("field2", "long"), index),
+            request(true, field("field3", "long"), index)
+        );
+
+        final ExecutionOutcome outcome = execute(initial, true, new IndexSettingProviders(Set.of(provider)), requests);
+
+        assertThat(outcome.taskResults(), equalTo(Collections.nCopies(3, "success")));
+        assertThat(provider.mappers.size(), equalTo(1));
+        assertThat(provider.mappers.get(0).mappingSource(), equalTo(mappingSource(outcome.state(), index)));
+        assertThat(provider.mappers.get(0).mappers().getMapper("field3"), notNullValue());
+    }
+
+    public void testRandomizedBatchesMatchPerTaskExecution() throws Exception {
+        final List<Index> indices = List.of(
+            createIndexWithExistingField("test1"),
+            createIndexWithExistingField("test2"),
+            createIndexWithExistingField("test3")
+        );
+        final ClusterState initial = getInstanceFromNode(ClusterService.class).state();
+        for (int iteration = 0; iteration < 10; iteration++) {
+            final List<PutMappingClusterStateUpdateRequest> requests = new ArrayList<>();
+            for (int i = randomIntBetween(1, 40); i > 0; i--) {
+                final String properties = switch (randomIntBetween(0, 5)) {
+                    case 0 -> "\"existing\":{\"type\":\"object\",\"properties\":{\"sub\":{\"type\":\"long\"}}}";
+                    case 1 -> field("field" + randomIntBetween(0, 5) + ".sub", randomFrom("long", "keyword"));
+                    case 2, 3 -> field("field" + randomIntBetween(0, 5), randomFrom("long", "keyword", "boolean"));
+                    case 4 -> field("existing", randomFrom("keyword", "long"));
+                    case 5 -> field("other" + randomIntBetween(0, 20), "long");
+                    default -> throw new AssertionError();
+                };
+                final boolean autoUpdate = randomIntBetween(0, 9) != 0;
+                if (randomIntBetween(0, 9) == 0) {
+                    // multi-index tasks only add non-conflicting fields: a multi-index task that fails on a later index leaves the
+                    // earlier indices' in-memory mapper services merged, so which later tasks see that leak depends on service reuse
+                    final Index[] targets = randomSubsetOf(randomIntBetween(2, 3), indices).toArray(Index[]::new);
+                    requests.add(request(autoUpdate, field("multi" + randomIntBetween(0, 5), "long"), targets));
+                } else {
+                    requests.add(request(autoUpdate, properties, randomFrom(indices)));
+                }
+            }
+
+            final ExecutionOutcome batched = execute(initial, true, requests);
+            final ExecutionOutcome sequential = execute(initial, false, requests);
+
+            final String description = requests.stream()
+                .map(r -> r.autoUpdate() + " " + Arrays.toString(r.indices()) + " " + r.source())
+                .collect(Collectors.joining("\n"));
+            assertThat(description, batched.taskResults(), equalTo(sequential.taskResults()));
+            for (Index index : indices) {
+                assertThat(description, mappingSource(batched.state(), index), equalTo(mappingSource(sequential.state(), index)));
+            }
+        }
     }
 
     private static List<PutMappingClusterStateUpdateTask> singleTask(PutMappingClusterStateUpdateRequest request) {

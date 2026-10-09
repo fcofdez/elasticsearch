@@ -29,6 +29,7 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentFactory;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -2252,5 +2253,105 @@ public class MapperServiceTests extends MapperServiceTestCase {
                 )
             );
         }
+    }
+
+    private static CompressedXContent compressed(String json) throws IOException {
+        return CompressedXContent.fromJSON(json);
+    }
+
+    private static String randomAdditiveUpdate() {
+        String parent = randomBoolean() ? "" : "obj" + randomIntBetween(0, 3) + ".";
+        String type = randomFrom("keyword", "long", "text", "boolean");
+        String name = parent + "f" + randomIntBetween(0, 12);
+        return "{\"properties\":{\"" + name + "\":{\"type\":\"" + type + "\"}}}";
+    }
+
+    public void testMergeBatchEqualsSequentialMerge() throws IOException {
+        for (int iter = 0; iter < 20; iter++) {
+            MapperService sequential = createMapperService(mapping(b -> b.startObject("seed").field("type", "keyword").endObject()));
+            MapperService batched = createMapperService(mapping(b -> b.startObject("seed").field("type", "keyword").endObject()));
+            List<CompressedXContent> sources = new ArrayList<>();
+            for (int i = randomIntBetween(1, 15); i > 0; i--) {
+                sources.add(compressed(randomAdditiveUpdate()));
+            }
+            for (CompressedXContent source : sources) {
+                sequential.merge(MapperService.SINGLE_MAPPING_NAME, source, MergeReason.MAPPING_AUTO_UPDATE);
+            }
+            DocumentMapper result = batched.mergeBatch(MapperService.SINGLE_MAPPING_NAME, sources, MergeReason.MAPPING_AUTO_UPDATE);
+            assertSame(result, batched.documentMapper());
+            assertEquals(sequential.documentMapper().mappingSource(), batched.documentMapper().mappingSource());
+            Map<String, MappedFieldType> expected = sequential.mappingLookup().fieldTypesLookup().getFullNameToFieldType();
+            Map<String, MappedFieldType> actual = batched.mappingLookup().fieldTypesLookup().getFullNameToFieldType();
+            assertEquals(expected.keySet(), actual.keySet());
+            for (var entry : expected.entrySet()) {
+                assertEquals(entry.getValue().typeName(), actual.get(entry.getKey()).typeName());
+            }
+        }
+    }
+
+    public void testMergeBatchFieldTypeConflictFirstWinsUnderAutoUpdate() throws IOException {
+        MapperService sequential = createMapperService(mapping(b -> b.startObject("existing").field("type", "long").endObject()));
+        MapperService batched = createMapperService(mapping(b -> b.startObject("existing").field("type", "long").endObject()));
+        List<CompressedXContent> sources = List.of(
+            compressed("{\"properties\":{\"existing\":{\"type\":\"keyword\"},\"fresh\":{\"type\":\"long\"}}}"),
+            compressed("{\"properties\":{\"fresh\":{\"type\":\"keyword\"}}}")
+        );
+        for (CompressedXContent source : sources) {
+            sequential.merge(MapperService.SINGLE_MAPPING_NAME, source, MergeReason.MAPPING_AUTO_UPDATE);
+        }
+        batched.mergeBatch(MapperService.SINGLE_MAPPING_NAME, sources, MergeReason.MAPPING_AUTO_UPDATE);
+        assertEquals(sequential.documentMapper().mappingSource(), batched.documentMapper().mappingSource());
+        assertEquals("long", batched.fieldType("existing").typeName());
+        assertEquals("long", batched.fieldType("fresh").typeName());
+    }
+
+    public void testMergeBatchObjectVsFieldConflictLeavesServiceUnchanged() throws IOException {
+        MapperService mapperService = createMapperService(mapping(b -> b.startObject("existing").field("type", "keyword").endObject()));
+        CompressedXContent before = mapperService.documentMapper().mappingSource();
+        List<CompressedXContent> sources = List.of(
+            compressed("{\"properties\":{\"added\":{\"type\":\"long\"}}}"),
+            compressed("{\"properties\":{\"existing\":{\"type\":\"object\",\"properties\":{\"sub\":{\"type\":\"long\"}}}}}")
+        );
+        expectThrows(
+            RuntimeException.class,
+            () -> mapperService.mergeBatch(MapperService.SINGLE_MAPPING_NAME, sources, MergeReason.MAPPING_AUTO_UPDATE)
+        );
+        assertEquals(before, mapperService.documentMapper().mappingSource());
+        expectThrows(
+            RuntimeException.class,
+            () -> mapperService.merge(MapperService.SINGLE_MAPPING_NAME, sources.get(1), MergeReason.MAPPING_AUTO_UPDATE)
+        );
+    }
+
+    public void testMergeBatchTotalFieldsLimitLeavesServiceUnchanged() throws IOException {
+        Settings settings = Settings.builder().put(MapperService.INDEX_MAPPING_TOTAL_FIELDS_LIMIT_SETTING.getKey(), 3).build();
+        MapperService mapperService = createMapperService(settings, mapping(b -> b.startObject("a").field("type", "long").endObject()));
+        CompressedXContent before = mapperService.documentMapper().mappingSource();
+        List<CompressedXContent> sources = List.of(
+            compressed("{\"properties\":{\"b\":{\"type\":\"long\"}}}"),
+            compressed("{\"properties\":{\"c\":{\"type\":\"long\"}}}"),
+            compressed("{\"properties\":{\"d\":{\"type\":\"long\"}}}")
+        );
+        Exception e = expectThrows(
+            Exception.class,
+            () -> mapperService.mergeBatch(MapperService.SINGLE_MAPPING_NAME, sources, MergeReason.MAPPING_AUTO_UPDATE)
+        );
+        assertThat(e.getMessage(), containsString("Limit of total fields [3] has been exceeded"));
+        assertEquals(before, mapperService.documentMapper().mappingSource());
+    }
+
+    public void testMergeBatchInvalidSourceLeavesServiceUnchanged() throws IOException {
+        MapperService mapperService = createMapperService(mapping(b -> b.startObject("a").field("type", "long").endObject()));
+        CompressedXContent before = mapperService.documentMapper().mappingSource();
+        List<CompressedXContent> sources = List.of(
+            compressed("{\"properties\":{\"b\":{\"type\":\"long\"}}}"),
+            compressed("{\"properties\":{\"c\":{\"type\":\"no_such_type\"}}}"),
+            compressed("{\"properties\":{\"d\":{\"type\":\"long\"}}}")
+        );
+        expectThrows(
+            MapperParsingException.class,
+            () -> mapperService.mergeBatch(MapperService.SINGLE_MAPPING_NAME, sources, MergeReason.MAPPING_AUTO_UPDATE)
+        );
+        assertEquals(before, mapperService.documentMapper().mappingSource());
     }
 }
