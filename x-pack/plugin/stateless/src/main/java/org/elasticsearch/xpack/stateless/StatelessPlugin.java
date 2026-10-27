@@ -1717,7 +1717,7 @@ public class StatelessPlugin extends Plugin
 
     @Override
     public Optional<EngineFactory> getEngineFactory(IndexSettings indexSettings) {
-        return Optional.of(config -> {
+        final EngineFactory factory = config -> {
             TranslogReplicator replicator = translogReplicator.get();
             TranslogConfig translogConfig = config.getTranslogConfig();
             replicator.setBigArrays(translogConfig.getBigArrays());
@@ -1820,6 +1820,20 @@ public class StatelessPlugin extends Plugin
                     reshardSearchFilters.get()
                 );
             }
+        };
+        if (hasIndexRole == false) {
+            return Optional.of(factory);
+        }
+        return Optional.of(new EngineFactory() {
+            @Override
+            public Engine newReadWriteEngine(EngineConfig config) {
+                return factory.newReadWriteEngine(config);
+            }
+
+            @Override
+            public SegmentInfos readLastCommittedSegmentsInfo(Store store) throws IOException {
+                return recoverySegmentInfosOrReadStore(store);
+            }
         });
     }
 
@@ -1880,10 +1894,15 @@ public class StatelessPlugin extends Plugin
 
     private SegmentInfos lastCommittedSegmentsInfo(EngineConfig config) {
         try {
-            return config.getStore().readLastCommittedSegmentsInfo();
+            return recoverySegmentInfosOrReadStore(config.getStore());
         } catch (IOException e) {
             throw new EngineCreationFailureException(config.getShardId(), "failed to read last segments info", e);
         }
+    }
+
+    private SegmentInfos recoverySegmentInfosOrReadStore(Store store) throws IOException {
+        final var segmentInfos = getCommitService().getRecoverySegmentInfos(store.shardId());
+        return segmentInfos == null ? store.readLastCommittedSegmentsInfo() : segmentInfos;
     }
 
     @Override

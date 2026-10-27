@@ -187,6 +187,16 @@ public class StatelessIndexNodeRecoveryListener extends AbstractStatelessRecover
         }
         final long readIndexingShardStateStartMillis = threadPool.relativeTimeInMillis();
         SubscribableListener.<ObjectStoreService.IndexingShardState>newForked(l -> {
+            if (recoveryInfoFromSource != null && recoveryInfoFromSource.hollowCommit() != null) {
+                ActionListener.completeWith(
+                    l,
+                    () -> ObjectStoreService.IndexingShardState.forHollowCommit(
+                        recoveryInfoFromSource.hollowCommit(),
+                        sourceBlobsInfo.otherBlobs()
+                    )
+                );
+                return;
+            }
             if (shardContainer == null) {
                 ActionListener.completeWith(l, () -> ObjectStoreService.IndexingShardState.EMPTY);
                 return;
@@ -320,7 +330,10 @@ public class StatelessIndexNodeRecoveryListener extends AbstractStatelessRecover
                     );
                 }
             }
-            final var segmentInfos = SegmentInfos.readLatestCommit(indexDirectory);
+            final var recoveryInfo = statelessCommitService.getRecoveryInfoFromSourceEntry(indexShard.shardId());
+            final var segmentInfos = recoveryInfo != null && recoveryInfo.segmentInfos() != null
+                ? recoveryInfo.segmentInfos()
+                : SegmentInfos.readLatestCommit(indexDirectory);
             final var translogUUID = segmentInfos.userData.get(Translog.TRANSLOG_UUID_KEY);
             final var checkPoint = segmentInfos.userData.get(SequenceNumbers.LOCAL_CHECKPOINT_KEY);
             if (translogUUID != null) {

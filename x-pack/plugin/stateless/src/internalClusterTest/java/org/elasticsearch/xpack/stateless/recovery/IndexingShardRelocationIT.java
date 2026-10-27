@@ -97,6 +97,7 @@ import org.elasticsearch.xpack.stateless.commits.StatelessCommitService;
 import org.elasticsearch.xpack.stateless.commits.StatelessCompoundCommit;
 import org.elasticsearch.xpack.stateless.commits.TestStatelessCommitService;
 import org.elasticsearch.xpack.stateless.commits.VirtualBatchedCompoundCommit;
+import org.elasticsearch.xpack.stateless.engine.HollowIndexEngine;
 import org.elasticsearch.xpack.stateless.engine.IndexEngine;
 import org.elasticsearch.xpack.stateless.engine.PrimaryTermAndGeneration;
 import org.elasticsearch.xpack.stateless.lucene.BlobStoreCacheDirectory;
@@ -1492,10 +1493,9 @@ public class IndexingShardRelocationIT extends AbstractStatelessPluginIntegTestC
         ensureGreen(indexName);
 
         var cacheService = internalCluster().getInstance(StatelessPlugin.SharedBlobCacheServiceSupplier.class, indexNode2).get();
-        // In case of hollow being disabled, we expect to have created one BCC which fits in one region, and thus we expect one cache write.
-        // In case of hollow being enabled, we expect to have 2 BCCs, due to one more being created due to the hollow flush, and only the
-        // 2nd hollow BCC to be read.
-        assertThat(cacheService.getStats().writeCount(), equalTo(1L));
+        // Hollow relocation carries the commit and SegmentInfos in its handoff; only non-hollow recovery reads the first region.
+        final boolean recoveredHollow = findIndexShard(resolveIndex(indexName), 0).getEngineOrNull() instanceof HollowIndexEngine;
+        assertThat(cacheService.getStats().writeCount(), equalTo(recoveredHollow ? 0L : 1L));
         // Region 0 prewarming races with the BCC header read to fill region 0, and only the read records a miss.
         assertThat(cacheService.getStats().missCount(), lessThanOrEqualTo(1L));
         assertThat(cacheService.getStats().numberOfRegions(), greaterThan(1));

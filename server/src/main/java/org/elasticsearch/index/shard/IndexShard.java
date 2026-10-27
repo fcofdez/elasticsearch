@@ -2471,7 +2471,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             // we have to set it before we open an engine and recover from the translog because
             // acquiring a snapshot from the translog causes a sync which causes the global checkpoint to be pulled in,
             // and an engine can be forced to close in ctor which also causes the global checkpoint to be pulled in.
-            final long globalCheckpoint = readGlobalCheckpointForRecovery(store.readLastCommittedSegmentsInfo().getUserData());
+            final long globalCheckpoint = readGlobalCheckpointForRecovery(engineFactory.readLastCommittedSegmentsInfo(store).getUserData());
             replicationTracker.updateGlobalCheckpointOnReplica(globalCheckpoint, "read from translog checkpoint");
         } else {
             replicationTracker.updateGlobalCheckpointOnReplica(globalCheckPointIfUnpromotable, "from CleanFilesRequest");
@@ -2571,7 +2571,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      * Asserts that the latest Lucene commit contains expected information about sequence numbers or ES version.
      */
     private boolean assertLastestCommitUserData() throws IOException {
-        final SegmentInfos segmentCommitInfos = store.readLastCommittedSegmentsInfo();
+        final SegmentInfos segmentCommitInfos = engineFactory.readLastCommittedSegmentsInfo(store);
         final Map<String, String> userData = segmentCommitInfos.getUserData();
         // Ensure sequence numbers are present in commit data
         assert userData.containsKey(SequenceNumbers.LOCAL_CHECKPOINT_KEY) : "commit point doesn't contains a local checkpoint";

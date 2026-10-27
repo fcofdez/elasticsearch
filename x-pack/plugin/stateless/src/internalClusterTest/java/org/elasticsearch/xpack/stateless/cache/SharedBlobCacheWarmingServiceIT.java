@@ -28,7 +28,6 @@ import org.elasticsearch.cluster.routing.IndexShardRoutingTable;
 import org.elasticsearch.cluster.routing.allocation.decider.MaxRetryAllocationDecider;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Strings;
-import org.elasticsearch.common.blobstore.OperationPurpose;
 import org.elasticsearch.common.regex.Regex;
 import org.elasticsearch.common.settings.ClusterSettings;
 import org.elasticsearch.common.settings.Setting;
@@ -131,7 +130,6 @@ import static org.elasticsearch.xpack.stateless.commits.HollowShardsService.STAT
 import static org.elasticsearch.xpack.stateless.commits.StatelessCommitService.STATELESS_COMMIT_USE_INTERNAL_FILES_REPLICATED_CONTENT;
 import static org.elasticsearch.xpack.stateless.objectstore.ObjectStoreTestUtils.getObjectStoreMockRepository;
 import static org.elasticsearch.xpack.stateless.recovery.TransportStatelessPrimaryRelocationAction.ID_LOOKUP_RECENCY_THRESHOLD_SETTING;
-import static org.elasticsearch.xpack.stateless.recovery.TransportStatelessPrimaryRelocationHandoffAction.PRIMARY_CONTEXT_HANDOFF_ACTION_NAME;
 import static org.elasticsearch.xpack.stateless.recovery.TransportStatelessPrimaryRelocationPrewarmAction.PREWARM_RELOCATION_ACTION_NAME;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.equalTo;
@@ -1423,7 +1421,7 @@ public class SharedBlobCacheWarmingServiceIT extends AbstractStatelessPluginInte
         }
     }
 
-    public void testBccIsPrewarmedForHollowShardRelocation() throws Exception {
+    public void testHollowShardRelocationTransfersMetadataWithoutBlobReads() throws Exception {
         startMasterOnlyNode();
 
         var nodeSettings = Settings.builder()
@@ -1485,62 +1483,64 @@ public class SharedBlobCacheWarmingServiceIT extends AbstractStatelessPluginInte
 
         MockTransportService.getInstance(indexNodeA).clearAllRules();
 
-        // Start node C and block the primary context handoff so that we can assert cache writes from prewarm
-        // before recovery itself populates the cache
+        final var shardOnB = findIndexShard(resolveIndex(indexName), 0);
+        final long documentCount = shardOnB.docStats().getCount();
+        assertHollowRecoveryDidNotReadBlobs(shardOnB, indexNodeB);
+        final var sourceInfos = shardOnB.getEngineOrNull().getLastCommittedSegmentInfos();
+
+        // Relocate an already hollow shard as well as the hollowable shard covered above.
         var indexNodeC = startIndexNode(nodeSettings);
         ensureStableCluster(4);
-
-        final var prewarmCachePopulated = new CountDownLatch(1);
-        MockTransportService.getInstance(indexNodeC)
-            .addRequestHandlingBehavior(PRIMARY_CONTEXT_HANDOFF_ACTION_NAME, (handler, request, channel, task) -> {
-                safeAwait(prewarmCachePopulated);
-                handler.messageReceived(request, channel, task);
-            });
-
-        var plugin = getTelemetryPlugin(indexNodeC);
-        plugin.resetMeter();
-        // Relocate hollow shard from B to C: prewarm SHOULD be sent because the shard is hollow (not hollowable)
+        var prewarmSentDuringHollowRelocation = new AtomicBoolean();
+        MockTransportService.getInstance(indexNodeB).addSendBehavior((connection, requestId, action, request, options) -> {
+            if (PREWARM_RELOCATION_ACTION_NAME.equals(action)) {
+                prewarmSentDuringHollowRelocation.set(true);
+            }
+            connection.sendRequest(requestId, action, request, options);
+        });
         updateIndexSettings(
             Settings.builder().putNull("index.routing.allocation.exclude._name").put("index.routing.allocation.require._name", indexNodeC),
             indexName
         );
-
-        // The prewarm's readIndexingShardState reads the BCC through the cache directory, populating the cache. Wait for those cache writes
-        // to appear before letting recovery proceed. The files of a hollow commit are not warmed, only region 0 of its root blob is
-        // prewarmed (see below).
-        assertBusy(() -> {
-            plugin.collect();
-            long warmingBytes = plugin.getLongCounterMeasurement("es.blob_cache.population.bytes.total")
-                .stream()
-                .filter(m -> BlobCacheMetrics.CachePopulationReason.Warming.name().equals(m.attributes().get("reason")))
-                .mapToLong(Measurement::getLong)
-                .sum();
-            assertThat(warmingBytes, greaterThan(0L));
-        });
-        prewarmCachePopulated.countDown();
-
         ensureGreen(indexName);
-        assertThat(findIndexShard(resolveIndex(indexName), 0).routingEntry().currentNodeId(), equalTo(getNodeId(indexNodeC)));
+        final var shardOnC = findIndexShard(resolveIndex(indexName), 0);
+        assertThat(shardOnC.routingEntry().currentNodeId(), equalTo(getNodeId(indexNodeC)));
+        assertFalse("Hollow relocation should not send prewarm", prewarmSentDuringHollowRelocation.get());
+        assertHollowRecoveryDidNotReadBlobs(shardOnC, indexNodeC);
+        final var targetInfos = shardOnC.getEngineOrNull().getLastCommittedSegmentInfos();
+        assertEquals(sourceInfos.getGeneration(), targetInfos.getGeneration());
+        assertEquals(sourceInfos.getUserData(), targetInfos.getUserData());
+        assertArrayEquals(sourceInfos.getId(), targetInfos.getId());
+        assertEquals(documentCount, shardOnC.docStats().getCount());
+        MockTransportService.getInstance(indexNodeB).clearAllRules();
 
-        // The hollow target prewarms region 0 of the root blob, the latest BCC blob of the shard, before reading the BCC header.
-        final var bccHeaderReadWarmedBlobs = getSharedBlobCacheWarmingService(indexNodeC).bccHeaderReadWarmedBlobs();
-        assertThat(bccHeaderReadWarmedBlobs, hasSize(1));
-        assertThat(bccHeaderReadWarmedBlobs.getFirst(), hasSize(1));
-        final BlobFile warmedBlob = bccHeaderReadWarmedBlobs.getFirst().iterator().next();
-        final var shardBlobs = getObjectStoreService(indexNodeC).getProjectBlobContainer(
-            findIndexShard(resolveIndex(indexName), 0).shardId(),
-            warmedBlob.primaryTerm()
-        ).listBlobs(OperationPurpose.INDICES).keySet();
-        final long latestBccGeneration = shardBlobs.stream()
-            .filter(BatchedCompoundCommit::startsWithBlobPrefix)
-            .mapToLong(BatchedCompoundCommit::parseGenerationFromBlobName)
-            .max()
-            .orElseThrow();
-        assertThat(warmedBlob.blobName(), equalTo(BatchedCompoundCommit.blobNameFromGeneration(latestBccGeneration)));
+        // Ingestion must still unhollow the recovered engine and read the segment data through the normal blob-backed directory.
+        final int moreDocs = randomIntBetween(2, 10);
+        indexDocs(indexName, moreDocs);
+        refresh(indexName);
+        internalCluster().getInstance(HollowShardsService.class, indexNodeC).ensureHollowShard(shardOnC.shardId(), false);
+        assertEquals(documentCount + moreDocs, shardOnC.docStats().getCount());
+    }
+
+    private void assertHollowRecoveryDidNotReadBlobs(IndexShard shard, String node) throws Exception {
+        final var directory = BlobStoreCacheDirectory.unwrapDirectory(shard.store().directory());
+        assertEquals("hollow recovery should not fetch from object store", 0L, directory.totalBytesReadFromObjectStore());
+        assertEquals("hollow recovery should not prewarm from object store", 0L, directory.totalBytesWarmedFromObjectStore());
+        assertThat(getSharedBlobCacheWarmingService(node).bccHeaderReadWarmedBlobs(), hasSize(0));
+        assertBusy(
+            () -> assertNull(internalCluster().getInstance(StatelessCommitService.class, node).getRecoverySegmentInfos(shard.shardId()))
+        );
     }
 
     public void testRelocateIndexingShardWithMultipleBlobsPrewarmsRegionZero() throws Exception {
-        final var hollowShardEnabled = randomBoolean();
+        relocateShardWithMultipleBlobs(false);
+    }
+
+    public void testRelocateHollowShardWithMultipleBlobsSkipsRegionZero() throws Exception {
+        relocateShardWithMultipleBlobs(true);
+    }
+
+    private void relocateShardWithMultipleBlobs(boolean hollowShardEnabled) throws Exception {
         final Settings nodeSettings = Settings.builder()
             .put(disableIndexingDiskAndMemoryControllersNodeSettings())
             .put(SharedBlobCacheService.SHARED_CACHE_SIZE_SETTING.getKey(), CACHE_SIZE)
@@ -1582,8 +1582,8 @@ public class SharedBlobCacheWarmingServiceIT extends AbstractStatelessPluginInte
                     .stream()
                     .filter(m -> Type.INDEXING_BCC_HEADER_PREWARM.name().equals(m.attributes().get("prewarming_type")))
                     .count(),
-                // When hollow shards are enabled and the shard is hollowed during relocations, only the root blob is prewarmed.
-                equalTo(1L)
+                // Transferred hollow metadata allows opening the engine without warming any blob regions.
+                equalTo(hollowShardEnabled ? 0L : 1L)
             )
         );
     }

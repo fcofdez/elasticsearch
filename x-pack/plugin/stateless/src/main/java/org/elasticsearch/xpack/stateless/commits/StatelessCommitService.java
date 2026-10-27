@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.stateless.commits;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.index.IndexFileNames;
+import org.apache.lucene.index.SegmentInfos;
 import org.apache.lucene.store.AlreadyClosedException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.ActionListener;
@@ -1459,8 +1460,17 @@ public class StatelessCommitService extends AbstractLifecycleComponent implement
         @Nullable SourceBlobsInfo sourceBlobsInfo,
         Set<BlobFile> lastCommitBlobs,
         boolean lastCommitIsHollow,
-        boolean hasRecentIdLookup
+        boolean hasRecentIdLookup,
+        @Nullable BatchedCompoundCommit hollowCommit,
+        @Nullable SegmentInfos segmentInfos
     ) {}
+
+    /** Supplies transferred engine metadata only while a hollow primary handoff is in progress. */
+    public @Nullable SegmentInfos getRecoverySegmentInfos(ShardId shardId) {
+        final var state = shardsCommitsStates.get(shardId);
+        final var recoveryInfo = state == null ? null : state.recoveryInfoFromSource;
+        return recoveryInfo == null ? null : recoveryInfo.segmentInfos();
+    }
 
     public record SourceBlobsInfo(BlobFile latestBlobFile, long latestBlobFileLength, Set<BlobFile> otherBlobs) {}
 

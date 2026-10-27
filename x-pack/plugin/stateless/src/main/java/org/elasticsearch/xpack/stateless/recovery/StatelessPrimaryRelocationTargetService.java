@@ -119,18 +119,16 @@ public class StatelessPrimaryRelocationTargetService {
             }
         };
 
-        final var recoveryHintsFromSource = request.recoveryInfoFromSource();
-        if (recoveryHintsFromSource != null) {
-            statelessCommitService.putRecoveryInfoFromSourceEntry(request.shardId(), recoveryHintsFromSource);
-        }
-
         final var blobCacheDirectory = BlobStoreCacheDirectory.unwrapDirectory(indexShard.store().directory());
         final long bytesReadBeforeHandoff = blobCacheDirectory.totalBytesReadFromObjectStore();
         final long bytesWarmedBeforeHandoff = blobCacheDirectory.totalBytesWarmedFromObjectStore();
         final long preRecoveryStartMillis = threadPool.relativeTimeInMillis();
-        ActionListener.run(
-            ActionListener.releaseAfter(listener, cleanUpStatelessCommitService),
-            l -> indexShard.preRecovery(l.map(ignored -> {
+        ActionListener.run(ActionListener.releaseAfter(listener, cleanUpStatelessCommitService), l -> {
+            final var recoveryHintsFromSource = request.recoveryInfoFromSource(indexShard.store().directory());
+            if (recoveryHintsFromSource != null) {
+                statelessCommitService.putRecoveryInfoFromSourceEntry(request.shardId(), recoveryHintsFromSource);
+            }
+            indexShard.preRecovery(l.map(ignored -> {
                 final long preRecoveryEndMillis = threadPool.relativeTimeInMillis();
                 final long preRecoveryDuration = preRecoveryEndMillis - preRecoveryStartMillis;
                 relocationMetricsCollectorProvider.get().recordRelocationTargetPreRecoveryDuration(preRecoveryDuration);
@@ -209,7 +207,7 @@ public class StatelessPrimaryRelocationTargetService {
                     logger.log(Level.INFO, message);
                 }
                 return null;
-            }))
-        );
+            }));
+        });
     }
 }

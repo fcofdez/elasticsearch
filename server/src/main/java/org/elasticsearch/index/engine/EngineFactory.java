@@ -8,6 +8,11 @@
  */
 package org.elasticsearch.index.engine;
 
+import org.apache.lucene.index.SegmentInfos;
+import org.elasticsearch.index.store.Store;
+
+import java.io.IOException;
+
 /**
  * Simple Engine Factory
  */
@@ -15,5 +20,13 @@ package org.elasticsearch.index.engine;
 public interface EngineFactory {
 
     Engine newReadWriteEngine(EngineConfig config);
+
+    /**
+     * Supplies the committed metadata used to initialize recovery. An engine factory may already have this metadata from a
+     * relocation source, allowing checkpoint initialization and engine creation to share it without reading the store.
+     */
+    default SegmentInfos readLastCommittedSegmentsInfo(Store store) throws IOException {
+        return store.readLastCommittedSegmentsInfo();
+    }
 
 }

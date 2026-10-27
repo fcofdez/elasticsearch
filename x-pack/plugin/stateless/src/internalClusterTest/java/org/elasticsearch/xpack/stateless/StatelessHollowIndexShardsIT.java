@@ -3436,10 +3436,9 @@ public class StatelessHollowIndexShardsIT extends AbstractStatelessPluginIntegTe
         assertTrue(Stream.of(nonRealTimeMultiGetResponse.getResponses()).map(e -> e.getResponse()).allMatch(GetResponse::isExists));
     }
 
-    public void testRelocationOfHollowReadsSingleRegion() throws Exception {
+    public void testRelocationOfHollowDoesNotReadBlobs() throws Exception {
 
-        // This test ensures that the source node of a hollow shard relocation does not perform extra read from the blob store during
-        // hollowing.
+        // Hollowing reads segment metadata from memory on the source, and the handoff transfers it to the target.
         final var regionSize = ByteSizeValue.ofMb(1);
         final var nodeSettings = Settings.builder()
             .put(SharedBlobCacheService.SHARED_CACHE_REGION_SIZE_SETTING.getKey(), regionSize)
@@ -3482,10 +3481,8 @@ public class StatelessHollowIndexShardsIT extends AbstractStatelessPluginIntegTe
             assertThat(indexShard.getEngineOrNull(), instanceOf(HollowIndexEngine.class));
         }
 
-        // TODO for ES-13400
-        // assert that node A's blob accesses were just the number of shards (1 region read per shard),
-        // since replicated .si files should be in the hollow commit blob
-        // assertThat(nodeABccAccesses.get(0), equalTo(clusterInfo.numberOfShards));
+        // The target opens its hollow engines from the transferred metadata, including after the caches were evicted.
+        assertThat(nodeABccAccesses.get(), equalTo(0));
 
         // assert that node B's blob accesses are 0, since the .si files should be read from memory
         assertThat(nodeBBccAccesses.get(), equalTo(0));

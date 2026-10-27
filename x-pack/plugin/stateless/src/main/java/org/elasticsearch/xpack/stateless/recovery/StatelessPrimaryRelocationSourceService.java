@@ -252,9 +252,9 @@ public class StatelessPrimaryRelocationSourceService extends AbstractLifecycleCo
             final var engine = indexShard.getEngineOrNull();
             boolean hasRecentIdLookup = engine != null && engine.hasRecentIdLookup(idLookupRecencyThreshold);
 
-            // If the shard is not about to be hollowed, then send an action to the target node to begin warming the cache immediately.
-            // Note that if the shard is already hollow, the target warming will just read a single region.
-            if (hollowShardsService.isHollowableIndexShard(indexShard) == false) {
+            // Hollow shards transfer their metadata in the handoff. Older targets can read the root blob during recovery.
+            // A non-hollow shard may still become hollow before handoff; retain early warming unless it is already hollowable.
+            if (engine instanceof HollowIndexEngine == false && hollowShardsService.isHollowableIndexShard(indexShard) == false) {
                 parentClient.execute(
                     TransportStatelessPrimaryRelocationPrewarmAction.TYPE,
                     new TransportStatelessPrimaryRelocationPrewarmAction.PrewarmRequest(
@@ -534,9 +534,19 @@ public class StatelessPrimaryRelocationSourceService extends AbstractLifecycleCo
                     latestBccBlobLength.set(blobLength);
                     otherBlobFilesCount.set(otherBlobFiles.size());
 
-                    if (indexShard.getEngineOrNull() == null) {
+                    final var handoffEngine = indexShard.getEngineOrNull();
+                    if (handoffEngine == null) {
                         finalHandoffListener.onFailure(new AlreadyClosedException("shard " + shardId + " closed during relocation"));
                         return;
+                    }
+                    HollowShardRecoveryState hollowRecoveryState = null;
+                    if (handoffEngine instanceof HollowIndexEngine && lastCommitIsHollow) {
+                        try {
+                            hollowRecoveryState = HollowShardRecoveryState.capture(latestBcc, handoffEngine.getLastCommittedSegmentInfos());
+                        } catch (UnsupportedOperationException e) {
+                            // Older Lucene segment-info formats can be read but cannot be written. Retain object-store recovery for them.
+                            logger.debug("{} cannot serialize hollow segment metadata, recovering through the object store", shardId, e);
+                        }
                     }
                     parentClient.execute(
                         TransportStatelessPrimaryRelocationHandoffAction.TYPE,
@@ -556,7 +566,8 @@ public class StatelessPrimaryRelocationSourceService extends AbstractLifecycleCo
                                 otherBlobFiles,
                                 hasRecentIdLookup,
                                 lastCommitBlobs,
-                                lastCommitIsHollow
+                                lastCommitIsHollow,
+                                hollowRecoveryState
                             )
                         ),
                         finalHandoffListener
