@@ -42,6 +42,23 @@ the other. This will run with `interval` set to `calendar year` then
 gradlew -p benchmarks/ run --args 'RoundingBenchmark.round -prounder=es -prange="2000-10-01 to 2000-11-01" -pzone=America/New_York -pcount=1000000'
 ```
 
+## Dynamic mapping updates
+
+`org.elasticsearch.benchmark.index.mapper.MappingMergeBenchmark` compares merging dynamic mapping updates individually with merging them
+in one batch. `existingFields` controls the initial mapping size and `updateCount` controls the number of distinct one-field additions.
+One operation applies all updates to an already loaded mapping, including parsing, merging, validation, and serialization. Preflight
+checks, task execution, and cluster-state publication are excluded.
+
+Trial setup verifies that both strategies produce the same mapping. Each invocation restores the original mapping and checks the
+result outside timing; GC profiling includes these allocations.
+
+Run from `benchmarks/`:
+
+```sh
+mkdir -p /tmp/bench
+../gradlew run --args 'org.elasticsearch.benchmark.index.mapper.MappingMergeBenchmark -p existingFields=10000 -p updateCount=100 -p batching=false,true -rf json -rff build/mapping-merge-results.json' | tee /tmp/bench/mapping_merge
+```
+
 
 ## Adding Microbenchmarks
 
